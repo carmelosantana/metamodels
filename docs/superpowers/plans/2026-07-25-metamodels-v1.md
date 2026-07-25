@@ -39,6 +39,13 @@ Each milestone is its own plan that produces working, tested software. **Plan 1 
 | **5** | **Control plane** | Next.js + shadcn admin: operator login; CRUD for Flock / Paddock / Fence / WorkflowTemplate / ApiKey; plain usage view; audit log. Config edits invalidate data-plane cache via Redis pub/sub. | `apps/control-plane` |
 | **6** | **Packaging & integration** | `docker compose up` runs all 5 services; multi-stage images; env config; README + setup docs; end-to-end integration test across the whole stack. | repo root, `docker/`, `docs/` |
 
+### Carry-forward from Plan 1 whole-branch review (must be honored when expanding later plans)
+
+- **Plan 2:** consider typing the Breed's `constraintSchema` as `z.ZodType<C>` (not `ZodTypeAny`) when the Ollama breed first parses a real Fence — preserves the parse→`guard(fence: C)` type linkage the spec's "double duty" relies on.
+- **Plan 3:** validate that the data-plane "collect the full upstream outcome into `UpstreamResult`, then call sync `meter()`" split actually holds for ComfyUI's `/ws`→`/history` reconciliation. If reconciliation must happen inside `meter`, widen it to `MeterEvent[] | Promise<MeterEvent[]>` (symmetry with async `guard`).
+- **Plan 4 (correctness-critical):** add a composite UNIQUE on `usage_rollup (org_id, key_id, paddock_id, period, dim)` and implement the worker aggregation as `INSERT … ON CONFLICT (…) DO UPDATE SET value = value + excluded.value`. Without the constraint the worker is pushed into read-modify-write races or duplicate rows. Drizzle migrations are additive, so introduce it in Plan 4.
+- **Plan 5 / multi-tenant future:** `key_paddock` has no `org_id` (accepted: transitively org-scoped via parents). When org count > 1, app-layer validation must prevent linking a key in org A to a paddock in org B (no composite FK enforces org consistency), and consider a UNIQUE on `(key_id, paddock_id)` to prevent duplicate scope rows.
+
 **Acceptance for v1 (end of Plan 6):** an operator can, from the UI, connect a Flock to a local Ollama and a local ComfyUI, publish a small-models-only Ollama Paddock and a template-based ComfyUI Paddock (wrapping `v0.3.2`), mint a key, and a consumer can call both with rate-limiting, constraint enforcement, and accurate metered usage visible in the UI — all via `docker compose up`.
 
 ---
