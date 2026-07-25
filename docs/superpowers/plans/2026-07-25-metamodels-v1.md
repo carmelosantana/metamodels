@@ -337,18 +337,23 @@ Add to `packages/schema/package.json` scripts:
 ```ts
 import { PGlite } from '@electric-sql/pglite'
 import { drizzle } from 'drizzle-orm/pglite'
+import { migrate } from 'drizzle-orm/pglite/migrator'
 import { eq } from 'drizzle-orm'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { apiKey, fence, flock, org, paddock } from '../src/schema.js'
+import * as schema from '../src/schema.js'
 
-let db: ReturnType<typeof drizzle>
+const { apiKey, fence, flock, org, paddock } = schema
+
+let db: ReturnType<typeof drizzle<typeof schema>>
 
 beforeAll(async () => {
   const client = new PGlite()
-  db = drizzle(client, { schema: { org, flock, paddock, fence, apiKey } })
-  // Push schema directly for the test DB (no migration files needed here).
-  const { pushSchema } = await import('./helpers/push.js')
-  await pushSchema(client)
+  db = drizzle(client, { schema })
+  // Apply the real generated Drizzle migrations to the in-memory DB.
+  const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../drizzle')
+  await migrate(db, { migrationsFolder })
 })
 
 describe('schema', () => {
@@ -386,68 +391,12 @@ describe('schema', () => {
 })
 ```
 
-Also create the test helper `packages/schema/test/helpers/push.ts` that creates tables from the Drizzle schema using raw SQL derived from the schema (simplest reliable approach for pglite):
-```ts
-import type { PGlite } from '@electric-sql/pglite'
-
-// Minimal DDL mirroring src/schema.ts, used only for in-memory tests.
-export async function pushSchema(client: PGlite): Promise<void> {
-  await client.exec(`
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-    CREATE TABLE org (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      name text NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE flock (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id uuid NOT NULL REFERENCES org(id) ON DELETE CASCADE,
-      breed text NOT NULL,
-      name text NOT NULL,
-      base_url text NOT NULL,
-      upstream_auth text,
-      tls_trust boolean NOT NULL DEFAULT false,
-      health_ok boolean,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE paddock (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id uuid NOT NULL REFERENCES org(id) ON DELETE CASCADE,
-      flock_id uuid NOT NULL REFERENCES flock(id) ON DELETE CASCADE,
-      slug text NOT NULL UNIQUE,
-      name text NOT NULL,
-      status text NOT NULL DEFAULT 'active',
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE fence (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id uuid NOT NULL REFERENCES org(id) ON DELETE CASCADE,
-      paddock_id uuid NOT NULL REFERENCES paddock(id) ON DELETE CASCADE,
-      constraint_json jsonb NOT NULL,
-      rate_limit jsonb,
-      quota jsonb,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE api_key (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id uuid NOT NULL REFERENCES org(id) ON DELETE CASCADE,
-      name text NOT NULL,
-      prefix text NOT NULL,
-      hash text NOT NULL UNIQUE,
-      status text NOT NULL DEFAULT 'active',
-      expires_at timestamptz,
-      overrides jsonb,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-  `)
-}
-```
-_(Note for implementer: `gen_random_uuid()` is built into pglite/pgcrypto; the `uuid-ossp` line is a harmless safety net. Keep this DDL in sync with `src/schema.ts` — Task 3 Step 5 verifies parity by generating real migrations.)_
+_(No hand-written DDL: the test applies the real migrations generated from `schema.ts` in Step 5, so there is a single source of truth for the schema.)_
 
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `pnpm test schema`
-Expected: FAIL — cannot resolve `../src/schema.js`.
+Expected: FAIL — cannot resolve `../src/schema.js` (and no `./drizzle` migrations exist yet).
 
 - [ ] **Step 4: Write the Drizzle schema**
 
@@ -614,13 +563,13 @@ export * from './schema.js'
 export * from './types.js'
 ```
 
-- [ ] **Step 5: Run tests + generate real migrations**
-
-Run: `pnpm test schema`
-Expected: PASS — both schema tests pass against pglite.
+- [ ] **Step 5: Generate migrations, then run the test**
 
 Run: `pnpm --filter @metamodels/schema db:generate`
-Expected: a migration SQL file appears under `packages/schema/drizzle/`. Open it and confirm every table in `schema.ts` is present (parity check with the test DDL).
+Expected: a migration SQL file appears under `packages/schema/drizzle/` containing every table in `schema.ts`.
+
+Run: `pnpm test schema`
+Expected: PASS — the migrator applies `./drizzle` to the in-memory pglite DB, then both schema tests pass.
 
 - [ ] **Step 6: Commit**
 
