@@ -1,4 +1,5 @@
 import type { RewrittenRequest, UpstreamResult } from '@metamodels/connectors'
+import { extractTextFrames } from '../meter/extract.js'
 
 export type FetchImpl = (url: string, init: RequestInit) => Promise<Response>
 
@@ -63,23 +64,8 @@ async function readOutcome(
   }
   buffer += decoder.decode()
 
-  const lines = buffer.split('\n').map((l) => l.trim()).filter(Boolean)
-  let finalFrame: unknown
-  for (let i = lines.length - 1; i >= 0; i--) {
-    // Strip an optional SSE `data:` prefix (with optional following space) so
-    // /v1 Server-Sent Events frames parse; plain NDJSON lines have no prefix.
-    let line = lines[i]
-    if (line.startsWith('data:')) line = line.slice(5).replace(/^ /, '')
-    // Skip the SSE terminal sentinel.
-    if (line === '[DONE]') continue
-    const parsed = tryParse(line)
-    if (parsed !== undefined) {
-      finalFrame = parsed
-      break
-    }
-  }
-  const whole = tryParse(buffer)
-  return { status, headers, body: whole ?? finalFrame, finalFrame }
+  const { body, finalFrame } = extractTextFrames(buffer)
+  return { status, headers, body, finalFrame }
 }
 
 export async function proxyToUpstream(
