@@ -45,11 +45,34 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
     return { ok: true, request: { method: ctx.method, path: ctx.path, headers: ctx.headers, body } }
   },
 
-  // Filled in Task 2.
-  meter(_ctx: RequestCtx, _upstream: UpstreamResult): MeterEvent[] {
-    return []
+  meter(_ctx: RequestCtx, upstream: UpstreamResult): MeterEvent[] {
+    const frame = (upstream.finalFrame ?? upstream.body) as Record<string, unknown> | null
+    if (!frame || typeof frame !== 'object') return []
+
+    let tokensIn = 0
+    let tokensOut = 0
+    if (typeof frame.prompt_eval_count === 'number') tokensIn = frame.prompt_eval_count
+    if (typeof frame.eval_count === 'number') tokensOut = frame.eval_count
+
+    const usage = frame.usage as Record<string, unknown> | undefined
+    if (usage && typeof usage === 'object') {
+      if (typeof usage.prompt_tokens === 'number') tokensIn = usage.prompt_tokens
+      if (typeof usage.completion_tokens === 'number') tokensOut = usage.completion_tokens
+    }
+
+    const at = Date.now()
+    const events: MeterEvent[] = []
+    if (tokensIn > 0) events.push({ dim: 'tokens_in', value: tokensIn, at })
+    if (tokensOut > 0) events.push({ dim: 'tokens_out', value: tokensOut, at })
+    return events
   },
-  async health() {
-    return { ok: true }
+
+  async health(flock) {
+    try {
+      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/version`)
+      return { ok: res.ok }
+    } catch (err) {
+      return { ok: false, detail: String(err) }
+    }
   },
 })
