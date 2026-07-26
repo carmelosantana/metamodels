@@ -51,6 +51,37 @@ export interface FlockRef {
   tlsTrust?: boolean
 }
 
+export interface JobRecord {
+  jobId: string
+  keyId: string
+  paddockId: string
+  orgId: string
+  templateId: string
+  cost: number
+  metered: boolean
+  submittedAt: number
+}
+
+export interface JobStore {
+  create(job: Omit<JobRecord, 'metered'>): Promise<JobRecord>
+  get(jobId: string): Promise<JobRecord | null>
+  markMetered(jobId: string): Promise<void>
+}
+
+export interface BreedIO {
+  ids: { orgId: string; keyId: string; paddockId: string }
+  flock: FlockRef
+  upstream(req: RewrittenRequest): Promise<UpstreamResult>
+  upstreamRaw(path: string, init: RequestInit): Promise<Response>
+  emitMeter(events: MeterEvent[]): Promise<void>
+  jobs: JobStore
+}
+
+export interface BreedHandleResult {
+  status: number
+  body: unknown
+}
+
 export interface Breed<C = unknown> {
   id: string
   displayName: string
@@ -61,6 +92,7 @@ export interface Breed<C = unknown> {
   meter(ctx: RequestCtx, upstream: UpstreamResult): MeterEvent[]
   billingDimensions: MeterDim[]
   toMcp?(fence: C): unknown[]
+  handle?(ctx: RequestCtx, fence: C, io: BreedIO): Promise<BreedHandleResult>
 }
 
 export function defineBreed<C>(breed: Breed<C>): Breed<C> {
