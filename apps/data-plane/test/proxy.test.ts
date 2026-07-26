@@ -37,4 +37,41 @@ describe('proxyToUpstream', () => {
     const up = await metering
     expect((up.body as { usage: { prompt_tokens: number } }).usage.prompt_tokens).toBe(7)
   })
+
+  test('strips content-encoding/content-length from the client response', async () => {
+    const fetchStub = () =>
+      Promise.resolve(
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'content-encoding': 'gzip',
+            'content-length': '999',
+          },
+        }),
+      )
+    const { response } = await proxyToUpstream(flock, {
+      method: 'POST', path: '/api/chat', headers: { 'content-type': 'application/json' },
+      body: { model: 'llama3.2:1b', messages: [] },
+    }, { fetchImpl: fetchStub })
+    expect(response.headers.get('content-encoding')).toBe(null)
+    expect(response.headers.get('content-length')).toBe(null)
+    expect(response.headers.get('content-type')).toBe('application/json')
+    expect(await response.text()).toBe('{"ok":true}')
+  })
+
+  test('meters usage from a /v1 SSE stream', async () => {
+    const sse =
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n' +
+      'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}\n\n' +
+      'data: [DONE]\n\n'
+    const fetchStub = () =>
+      Promise.resolve(new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+    const { metering } = await proxyToUpstream(flock, {
+      method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json' },
+      body: { model: 'llama3.2:1b', stream: true },
+    }, { fetchImpl: fetchStub })
+    const up = await metering
+    expect((up.finalFrame as { usage: { prompt_tokens: number } }).usage.prompt_tokens).toBe(7)
+  })
 })

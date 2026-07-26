@@ -23,6 +23,31 @@ function headersToObject(h: Headers): Record<string, string> {
   return out
 }
 
+// Header names that must NOT be forwarded onto the re-emitted client response.
+// Node's fetch auto-decompresses the body, so content-encoding/content-length/
+// transfer-encoding would mislabel or mis-size the teed stream; the rest are
+// hop-by-hop headers that should never be proxied.
+const UNSAFE_CLIENT_HEADERS = new Set([
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'upgrade',
+])
+
+function clientHeadersToObject(h: Headers): Record<string, string> {
+  const out: Record<string, string> = {}
+  h.forEach((value, key) => {
+    if (!UNSAFE_CLIENT_HEADERS.has(key.toLowerCase())) out[key] = value
+  })
+  return out
+}
+
 async function readOutcome(
   stream: ReadableStream<Uint8Array>,
   status: number,
@@ -41,7 +66,13 @@ async function readOutcome(
   const lines = buffer.split('\n').map((l) => l.trim()).filter(Boolean)
   let finalFrame: unknown
   for (let i = lines.length - 1; i >= 0; i--) {
-    const parsed = tryParse(lines[i])
+    // Strip an optional SSE `data:` prefix (with optional following space) so
+    // /v1 Server-Sent Events frames parse; plain NDJSON lines have no prefix.
+    let line = lines[i]
+    if (line.startsWith('data:')) line = line.slice(5).replace(/^ /, '')
+    // Skip the SSE terminal sentinel.
+    if (line === '[DONE]') continue
+    const parsed = tryParse(line)
     if (parsed !== undefined) {
       finalFrame = parsed
       break
@@ -70,19 +101,20 @@ export async function proxyToUpstream(
 
   const upstream = await doFetch(url, init)
   const outHeaders = headersToObject(upstream.headers)
+  const clientHeaders = clientHeadersToObject(upstream.headers)
 
   if (!upstream.body) {
     const text = await upstream.text()
     const whole = tryParse(text)
     return {
-      response: new Response(text, { status: upstream.status, headers: outHeaders }),
+      response: new Response(text, { status: upstream.status, headers: clientHeaders }),
       metering: Promise.resolve({ status: upstream.status, headers: outHeaders, body: whole, finalFrame: whole }),
     }
   }
 
   const [toClient, toMeter] = upstream.body.tee()
   return {
-    response: new Response(toClient, { status: upstream.status, headers: outHeaders }),
+    response: new Response(toClient, { status: upstream.status, headers: clientHeaders }),
     metering: readOutcome(toMeter, upstream.status, outHeaders),
   }
 }
