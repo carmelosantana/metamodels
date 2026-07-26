@@ -13,7 +13,8 @@
 _Every task's requirements implicitly include this section._
 
 - **Branch:** `feat/metamodels-plan-3`; never commit to `main`. **Identity:** `Carmelo Santana <me@carmelosantana.com>`. **License:** AGPL-3.0.
-- **Language:** TypeScript, Node 22+, ESM (`"type":"module"`), `.js` import extensions, `verbatimModuleSyntax`. **pnpm** workspaces only.
+- **Language:** TypeScript, **Node 24+** (LTS floor; `engines.node: ">=24"`, `.nvmrc` = 24), ESM (`"type":"module"`), `.js` import extensions, `verbatimModuleSyntax`. **pnpm** workspaces only.
+- **Supply chain:** the repo `.npmrc` enforces `minimumReleaseAge=1440` (24h quarantine on newly-published packages) and `blockExoticSubdeps=true`. Plan 3 expects **no new dependencies**; if a task genuinely needs one, use a mature (>24h-old) version and flag it to the controller — a brand-new version will be quarantined by design. Never delete/regenerate the lockfile to "fix" an install; explain any lockfile diff.
 - **ComfyUI security (non-negotiable):** the consumer NEVER submits raw node structure. Ingress is `{ template_id, params }` only. The breed reconstructs the full graph from the operator's stored template. Params are validated against the template's `param_schema`; any param not declared is rejected. `/view` and `/history` are NEVER exposed directly — the only result path is the scoped `result` route keyed to the caller's own job.
 - **Job ownership:** every submitted job records `{ jobId(=prompt_id), keyId, paddockId, orgId, templateId, cost }`. A `result` request must verify the job belongs to the requesting key (else 404, not 403 — don't leak existence).
 - **Metering:** meter `jobs` (+ template `cost` weight) once per job; meter `images` and `gpu_ms` from `/history` at completion; never double-count (guard with a `metered` flag on the job record). Meter records are `org_id`-scoped, keyed by key×paddock, dims from `breed.billingDimensions` = `['jobs','gpu_ms','images']`.

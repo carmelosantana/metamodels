@@ -54,6 +54,10 @@ Each milestone is its own plan that produces working, tested software. **Plan 1 
 - **Plan 4:** swap the Redis-backed `RateLimiter`/`MeterSink` at the two `server.ts` constructor args (README documents the point). Note: the in-memory sliding-window-log semantics won't map 1:1 onto a Redis token bucket — keep the interface, expect a behavioral diff; Redis TTL also solves the in-memory limiter's lack of idle-bucket eviction.
 - **Hygiene (any time):** add an `app.onError` boundary returning clean JSON for unexpected errors; validate `Number(PORT)` (throw on `NaN`); match the `Bearer` scheme case-insensitively.
 
+### Supply-chain / CI hardening (Plan 6 — required, per the supply-chain-risk-mitigation skill)
+
+Applied already (repo-wide, 2026-07-26): hardened `.npmrc` (`minimumReleaseAge=1440`, `blockExoticSubdeps=true`), Node floor bumped to `>=24` + `.nvmrc`. **Plan 6's GitHub Actions must** additionally: never use `pull_request_target` to check out/run fork code; pin every third-party action to a full commit SHA (not a tag); use `actions/cache/restore` (no auto-save); scope `id-token: write` to only a publish job; install with `pnpm install --frozen-lockfile` in CI; add `zizmor` as a required workflow check; add CODEOWNERS on `.github/`. Keep any Next.js control-plane app (Plan 5) on `next@latest` (≥16.2, avoids CVE-2025-66478) with security headers.
+
 **Acceptance for v1 (end of Plan 6):** an operator can, from the UI, connect a Flock to a local Ollama and a local ComfyUI, publish a small-models-only Ollama Paddock and a template-based ComfyUI Paddock (wrapping `v0.3.2`), mint a key, and a consumer can call both with rate-limiting, constraint enforcement, and accurate metered usage visible in the UI — all via `docker compose up`.
 
 ---
