@@ -46,7 +46,9 @@ function makeJobStore(): JobStore {
     async get(jobId) { return store.get(jobId) ?? null },
     async markMetered(jobId) {
       const rec = store.get(jobId)
-      if (rec) rec.metered = true
+      if (!rec || rec.metered) return false
+      rec.metered = true
+      return true
     },
   }
 }
@@ -82,7 +84,9 @@ describe('Breed.handle hook + BreedIO/JobStore types', () => {
       templateId: 't1', cost: 5, submittedAt: 123,
     })
     expect(created.metered).toBe(false)
-    await jobs.markMetered('j1')
+    // markMetered is a compare-and-set: true on the winning transition, false after.
+    expect(await jobs.markMetered('j1')).toBe(true)
     expect((await jobs.get('j1'))?.metered).toBe(true)
+    expect(await jobs.markMetered('j1')).toBe(false)
   })
 })

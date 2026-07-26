@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { defineBreed } from '../breed.js'
 import type {
@@ -65,6 +66,11 @@ function err(status: number, message: string): BreedHandleResult {
  * bytes, wrapped in a Blob, and sent as the `image` FormData field — the exact
  * shape ComfyUI expects from its own web UI.
  *
+ * The `name` passed here is a UNIQUE per-upload filename (see the call site) so
+ * concurrent jobs on a shared ComfyUI can never overwrite each other's bytes —
+ * `overwrite` is deliberately not sent. The graph must reference the RETURNED
+ * name from the response, not the sent name, which this function returns.
+ *
  * Returns the filename, or `null` on any upstream failure / missing name so the
  * caller can map it to a 502.
  */
@@ -86,8 +92,6 @@ async function uploadImage(
 
   const form = new FormData()
   form.append('image', new Blob([bytes]), name)
-  // ComfyUI overwrites by filename when told to; keep uploads idempotent.
-  form.append('overwrite', 'true')
 
   let res: Response
   try {
@@ -164,7 +168,9 @@ export const comfyuiBreed: Breed<ComfyConstraint> = defineBreed<ComfyConstraint>
       if (typeof raw !== 'string') {
         return err(422, `param '${spec.name}' must be a base64 image string`)
       }
-      const filename = await uploadImage(io, `${spec.name}.png`, raw)
+      // Unique per-upload filename → no cross-job overwrite on a shared ComfyUI.
+      // The graph uses the RETURNED name below, never this sent name.
+      const filename = await uploadImage(io, `${io.ids.keyId}-${randomUUID()}.png`, raw)
       if (filename === null) return err(502, `image upload failed for param '${spec.name}'`)
       uploads[spec.name] = filename
     }

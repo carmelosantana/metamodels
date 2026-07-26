@@ -100,6 +100,22 @@ describe('reconstructGraph', () => {
     expect(res.reason).toMatch(/steps/)
   })
 
+  test('an unbounded number param rejects Infinity (must be finite)', () => {
+    const tpl = makeTemplate()
+    // Drop the min/max so only the finiteness check can reject it.
+    const stepsSpec = tpl.params.find((p) => p.name === 'steps')
+    if (stepsSpec && stepsSpec.type === 'number') {
+      delete stepsSpec.min
+      delete stepsSpec.max
+    }
+    for (const bad of [Infinity, -Infinity]) {
+      const res = reconstructGraph(tpl, { steps: bad }, {})
+      expect(res.ok).toBe(false)
+      if (res.ok) return
+      expect(res.reason).toMatch(/steps/)
+    }
+  })
+
   test('image param is rejected when the upload filename is absent', () => {
     const tpl = makeTemplate()
     const res = reconstructGraph(tpl, { photo: 'ignored' }, {})

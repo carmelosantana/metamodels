@@ -77,7 +77,9 @@ function makeIO(opts?: {
     },
     async markMetered(jobId) {
       const rec = store.get(jobId)
-      if (rec) rec.metered = true
+      if (!rec || rec.metered) return false
+      rec.metered = true
+      return true
     },
   }
 

@@ -88,7 +88,7 @@ export function reconstructGraph(
     }
 
     if (spec.type === 'number') {
-      if (typeof raw !== 'number' || Number.isNaN(raw)) {
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) {
         return { ok: false, reason: `param '${spec.name}' must be a number` }
       }
       if (spec.min !== undefined && raw < spec.min) {

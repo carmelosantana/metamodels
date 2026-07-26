@@ -52,6 +52,9 @@ interface CfFixture {
   ownerKey: string
   otherKey: string
   slug: string
+  // A second paddock on the same flock, also in the owner key's scope, used to
+  // prove a job submitted under `slug` cannot be polled via `slug2`.
+  slug2: string
 }
 
 async function seedComfyui(db: TestDb): Promise<CfFixture> {
@@ -72,12 +75,29 @@ async function seedComfyui(db: TestDb): Promise<CfFixture> {
     quota: null,
   })
 
+  // Second paddock on the same flock, so a job in `cf` and a poll via `cf2`
+  // differ only by paddock — isolating the paddock-ownership guard.
+  const [paddock2] = await db
+    .insert(schema.paddock)
+    .values({ orgId: org.id, flockId: flock.id, slug: 'cf2', name: 'ComfyUI paddock 2' })
+    .returning()
+  await db.insert(schema.fence).values({
+    orgId: org.id,
+    paddockId: paddock2.id,
+    constraintJson: { templates: [txt2img, img2img] },
+    rateLimit: { windowSec: 60, max: 100 },
+    quota: null,
+  })
+
   const ownerKey = 'mm_live_ownerkey'
   const [owner] = await db
     .insert(schema.apiKey)
     .values({ orgId: org.id, name: 'owner', prefix: ownerKey.slice(0, 12), hash: hashApiKey(ownerKey), status: 'active' })
     .returning()
   await db.insert(schema.keyPaddock).values({ keyId: owner.id, paddockId: paddock.id })
+  // Owner key is scoped to both paddocks so the scope check passes and only the
+  // job's paddock ownership differs.
+  await db.insert(schema.keyPaddock).values({ keyId: owner.id, paddockId: paddock2.id })
 
   const otherKey = 'mm_live_otherkey'
   const [other] = await db
@@ -87,7 +107,7 @@ async function seedComfyui(db: TestDb): Promise<CfFixture> {
   // Same paddock scope, so scope-check passes and only job ownership differs.
   await db.insert(schema.keyPaddock).values({ keyId: other.id, paddockId: paddock.id })
 
-  return { orgId: org.id, paddockId: paddock.id, ownerKeyId: owner.id, ownerKey, otherKey, slug: 'cf' }
+  return { orgId: org.id, paddockId: paddock.id, ownerKeyId: owner.id, ownerKey, otherKey, slug: 'cf', slug2: 'cf2' }
 }
 
 let fx: CfFixture
@@ -185,6 +205,26 @@ describe('data-plane comfyui integration', () => {
     expect(dims('gpu_ms')).toHaveLength(1)
   })
 
+  test('two concurrent result polls after completion → images/gpu_ms metered exactly once (CAS)', async () => {
+    await (await submit()).json()
+    await drainMeters()
+    fake.complete('cf-1')
+
+    // Fire both polls concurrently; the compare-and-set markMetered guarantees
+    // only one wins the transition and emits the completion meters.
+    const [a, b] = await Promise.all([call('/p/cf/result/cf-1'), call('/p/cf/result/cf-1')])
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+    expect(((await a.json()) as { done: boolean }).done).toBe(true)
+    expect(((await b.json()) as { done: boolean }).done).toBe(true)
+
+    await drainMeters()
+    expect(dims('images')).toHaveLength(1)
+    expect(dims('images')[0].value).toBe(2)
+    expect(dims('gpu_ms')).toHaveLength(1)
+    expect(dims('gpu_ms')[0].value).toBe(500)
+  })
+
   test('result never leaks the raw /history or a /view url — only {done, images}', async () => {
     await (await submit()).json()
     fake.complete('cf-1')
@@ -207,6 +247,14 @@ describe('data-plane comfyui integration', () => {
 
   test('result for a job that does not exist → 404', async () => {
     const res = await call('/p/cf/result/nope')
+    expect(res.status).toBe(404)
+  })
+
+  test("result for own job polled via the wrong paddock → 404 (paddock-ownership guard)", async () => {
+    // Submit under cf; the same owner key is scoped to cf2 too, so the scope
+    // check passes — only the job's paddock differs, which must still 404.
+    await (await submit(fx.ownerKey)).json()
+    const res = await call(`/p/${fx.slug2}/result/cf-1`, {}, fx.ownerKey)
     expect(res.status).toBe(404)
   })
 

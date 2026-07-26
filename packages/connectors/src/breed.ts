@@ -65,7 +65,13 @@ export interface JobRecord {
 export interface JobStore {
   create(job: Omit<JobRecord, 'metered'>): Promise<JobRecord>
   get(jobId: string): Promise<JobRecord | null>
-  markMetered(jobId: string): Promise<void>
+  /**
+   * Compare-and-set the `metered` flag. Returns `true` IFF this call
+   * transitioned the job from not-metered → metered; `false` if the job was
+   * already metered or is unknown. Callers meter side effects only on `true`,
+   * which makes concurrent result polls safe (exactly one wins).
+   */
+  markMetered(jobId: string): Promise<boolean>
 }
 
 export interface BreedIO {

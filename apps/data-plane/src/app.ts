@@ -141,7 +141,9 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     const { resolvedKey, paddock } = gate.scope
 
     const job = await deps.jobStore.get(jobId)
-    if (!job || job.keyId !== resolvedKey.keyId) return c.json({ error: 'not found' }, 404)
+    if (!job || job.keyId !== resolvedKey.keyId || job.paddockId !== paddock.paddockId) {
+      return c.json({ error: 'not found' }, 404)
+    }
 
     // Fetch the upstream history for this job (server-side only; never exposed).
     let historyBody: unknown
@@ -158,18 +160,21 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
 
     const outcome = parseHistory(historyBody, jobId)
 
-    // Meter images + gpu_ms exactly once, at completion. The `!job.metered`
-    // guard plus markMetered makes a second poll a no-op.
-    if (outcome.done && !job.metered) {
-      const at = Date.now()
-      await emitScoped(
-        { orgId: paddock.orgId, keyId: resolvedKey.keyId, paddockId: paddock.paddockId, breedId: paddock.breedId },
-        [
-          { dim: 'images', value: outcome.images.length, at },
-          { dim: 'gpu_ms', value: outcome.gpuMs, at },
-        ],
-      )
-      await deps.jobStore.markMetered(jobId)
+    // Meter images + gpu_ms exactly once, at completion. markMetered is a
+    // compare-and-set: mark BEFORE emitting and emit only when this poll won the
+    // transition, so concurrent polls can never double-meter (only one wins).
+    if (outcome.done) {
+      const won = await deps.jobStore.markMetered(jobId)
+      if (won) {
+        const at = Date.now()
+        await emitScoped(
+          { orgId: paddock.orgId, keyId: resolvedKey.keyId, paddockId: paddock.paddockId, breedId: paddock.breedId },
+          [
+            { dim: 'images', value: outcome.images.length, at },
+            { dim: 'gpu_ms', value: outcome.gpuMs, at },
+          ],
+        )
+      }
     }
 
     return c.json({ done: outcome.done, images: outcome.images })

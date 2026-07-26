@@ -37,9 +37,27 @@ describe('InMemoryJobStore', () => {
     expect(await store.get('job-1')).toEqual({ ...sample, metered: true })
   })
 
-  test('markMetered on an unknown id is a no-op', async () => {
+  test('markMetered is a compare-and-set: true on first call, false thereafter', async () => {
     const store = new InMemoryJobStore()
-    await expect(store.markMetered('nope')).resolves.toBeUndefined()
+    await store.create(sample)
+    expect(await store.markMetered('job-1')).toBe(true)
+    expect(await store.markMetered('job-1')).toBe(false)
+  })
+
+  test('markMetered on an unknown id returns false (no-op)', async () => {
+    const store = new InMemoryJobStore()
+    await expect(store.markMetered('nope')).resolves.toBe(false)
     expect(await store.get('nope')).toBeNull()
+  })
+
+  test('get returns a copy: mutating the returned record does not change the store', async () => {
+    const store = new InMemoryJobStore()
+    await store.create(sample)
+    const first = await store.get('job-1')
+    expect(first).not.toBeNull()
+    first!.metered = true
+    first!.cost = 999
+    const second = await store.get('job-1')
+    expect(second).toEqual({ ...sample, metered: false })
   })
 })
