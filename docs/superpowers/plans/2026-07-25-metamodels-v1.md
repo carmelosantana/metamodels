@@ -46,6 +46,14 @@ Each milestone is its own plan that produces working, tested software. **Plan 1 
 - **Plan 4 (correctness-critical):** add a composite UNIQUE on `usage_rollup (org_id, key_id, paddock_id, period, dim)` and implement the worker aggregation as `INSERT … ON CONFLICT (…) DO UPDATE SET value = value + excluded.value`. Without the constraint the worker is pushed into read-modify-write races or duplicate rows. Drizzle migrations are additive, so introduce it in Plan 4.
 - **Plan 5 / multi-tenant future:** `key_paddock` has no `org_id` (accepted: transitively org-scoped via parents). When org count > 1, app-layer validation must prevent linking a key in org A to a paddock in org B (no composite FK enforces org consistency), and consider a UNIQUE on `(key_id, paddock_id)` to prevent duplicate scope rows.
 
+### Carry-forward from Plan 2 whole-branch review (honor when expanding later plans)
+
+- **Plan 3 (ComfyUI) — foundation, IMPORTANT:** the data-plane request path is currently JSON-only (`app.ts` hardcodes `content-type: application/json`; the proxy `JSON.stringify`s the body) and metering extraction lives in `readOutcome` assuming UTF-8/JSON text. ComfyUI needs multipart image uploads and **binary image responses**. Before Plan 3: (a) make the app/proxy content-type-agnostic (pass non-JSON bodies through untouched), and (b) move the metering-extraction seam **into `breed.meter`** over a raw buffer/stream rather than parsing in the proxy. Also revisit the teed client branch buffering unbounded image bytes in memory (cap or stream-to-disk).
+- **General proxy:** preserve the query string in the upstream path (currently dropped in `app.ts` — harmless for Ollama's body-driven API, matters generally).
+- **Plan 5 (control plane):** validate a Fence's `constraint_json` on write (removes the only bare-500 path — malformed stored config); enforce key↔paddock **org consistency** at write time (meter attribution uses `paddock.orgId` while the scope check is slug-only, so a cross-org `keyPaddock` link would misattribute usage).
+- **Plan 4:** swap the Redis-backed `RateLimiter`/`MeterSink` at the two `server.ts` constructor args (README documents the point). Note: the in-memory sliding-window-log semantics won't map 1:1 onto a Redis token bucket — keep the interface, expect a behavioral diff; Redis TTL also solves the in-memory limiter's lack of idle-bucket eviction.
+- **Hygiene (any time):** add an `app.onError` boundary returning clean JSON for unexpected errors; validate `Number(PORT)` (throw on `NaN`); match the `Bearer` scheme case-insensitively.
+
 **Acceptance for v1 (end of Plan 6):** an operator can, from the UI, connect a Flock to a local Ollama and a local ComfyUI, publish a small-models-only Ollama Paddock and a template-based ComfyUI Paddock (wrapping `v0.3.2`), mint a key, and a consumer can call both with rate-limiting, constraint enforcement, and accurate metered usage visible in the UI — all via `docker compose up`.
 
 ---
