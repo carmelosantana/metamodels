@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/schema" },
-    { "path": "packages/connectors" }
+    { "path": "packages/connectors" },
+    { "path": "apps/data-plane" }
   ]
 }
