@@ -58,14 +58,17 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     }
 
     // 4. Parse body + build context
+    const contentType = c.req.header('content-type') ?? ''
     let body: unknown
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
-      body = await c.req.json().catch(() => undefined)
+      body = contentType.includes('application/json')
+        ? await c.req.json().catch(() => undefined)
+        : await c.req.text().catch(() => undefined)
     }
     const ctx: RequestCtx = {
       method: c.req.method,
       path: upstreamPath,
-      headers: { 'content-type': 'application/json' },
+      headers: contentType ? { 'content-type': contentType } : {},
       body,
       paddockSlug: slug,
     }

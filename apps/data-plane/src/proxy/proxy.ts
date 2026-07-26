@@ -95,8 +95,12 @@ export async function proxyToUpstream(
 
   const init: RequestInit = { method: req.method, headers }
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
-    init.body = JSON.stringify(req.body)
-    headers['content-type'] = headers['content-type'] ?? 'application/json'
+    if (typeof req.body === 'string' || req.body instanceof Uint8Array || req.body instanceof ReadableStream) {
+      init.body = req.body as BodyInit
+    } else {
+      init.body = JSON.stringify(req.body)
+      if (!headers['content-type']) headers['content-type'] = 'application/json'
+    }
   }
 
   const upstream = await doFetch(url, init)

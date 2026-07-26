@@ -60,6 +60,34 @@ describe('proxyToUpstream', () => {
     expect(await response.text()).toBe('{"ok":true}')
   })
 
+  test('sends a string body verbatim without JSON re-encoding', async () => {
+    let seen: unknown
+    const fetchImpl = async (_url: string, init: RequestInit) => {
+      seen = init.body
+      return new Response('ok')
+    }
+    await proxyToUpstream(
+      { baseUrl: 'http://u', upstreamAuth: null },
+      { method: 'POST', path: '/x', headers: { 'content-type': 'text/plain' }, body: 'raw-body' },
+      { fetchImpl },
+    )
+    expect(seen).toBe('raw-body')
+  })
+
+  test('does not overwrite a non-JSON content-type with application/json', async () => {
+    let seenHeaders: Record<string, string> | undefined
+    const fetchImpl = async (_url: string, init: RequestInit) => {
+      seenHeaders = init.headers as Record<string, string>
+      return new Response('ok')
+    }
+    await proxyToUpstream(
+      { baseUrl: 'http://u', upstreamAuth: null },
+      { method: 'POST', path: '/x', headers: { 'content-type': 'text/plain' }, body: 'raw-body' },
+      { fetchImpl },
+    )
+    expect(seenHeaders?.['content-type']).toBe('text/plain')
+  })
+
   test('meters usage from a /v1 SSE stream', async () => {
     const sse =
       'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n' +
