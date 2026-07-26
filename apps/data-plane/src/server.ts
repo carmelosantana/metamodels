@@ -7,6 +7,7 @@ import { buildRegistry } from './breeds.js'
 import { DrizzleConfigStore } from './config/config-store.js'
 import { InMemoryRateLimiter } from './ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from './meter/meter-sink.js'
+import { InMemoryJobStore } from './jobs/job-store.js'
 
 export interface ServerConfig {
   databaseUrl: string
@@ -28,6 +29,7 @@ export function startServer(cfg: ServerConfig): void {
     rateLimiter: new InMemoryRateLimiter(),
     meterSink: new InMemoryMeterSink(),
     registry: buildRegistry(),
+    jobStore: new InMemoryJobStore(),
   })
   serve({ fetch: app.fetch, port: cfg.port })
   // eslint-disable-next-line no-console
