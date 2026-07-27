@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 const id = () => uuid('id').primaryKey().defaultRandom()
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
@@ -87,6 +87,19 @@ export const usageRollup = pgTable('usage_rollup', {
   period: text('period').notNull(), // e.g. '2026-07-25T14' (hour bucket)
   dim: text('dim').notNull(),
   value: integer('value').notNull().default(0),
+}, (t) => [
+  uniqueIndex('usage_rollup_key').on(t.orgId, t.keyId, t.paddockId, t.period, t.dim),
+])
+
+export const job = pgTable('job', {
+  id: text('id').primaryKey(), // upstream job/prompt id (e.g. ComfyUI prompt_id)
+  orgId: uuid('org_id').notNull().references(() => org.id, { onDelete: 'cascade' }),
+  keyId: uuid('key_id').notNull().references(() => apiKey.id, { onDelete: 'cascade' }),
+  paddockId: uuid('paddock_id').notNull().references(() => paddock.id, { onDelete: 'cascade' }),
+  templateId: text('template_id').notNull(), // fence-declared template id (NOT a DB FK)
+  cost: integer('cost').notNull().default(1),
+  metered: boolean('metered').notNull().default(false),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull(),
 })
 
 export const auditLog = pgTable('audit_log', {

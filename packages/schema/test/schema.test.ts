@@ -11,11 +11,20 @@ const { apiKey, fence, flock, org, paddock } = schema
 
 let db: ReturnType<typeof drizzle<typeof schema>>
 
+const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../drizzle')
+
+async function freshMigratedDb() {
+  const client = new PGlite()
+  const fresh = drizzle(client, { schema })
+  // Apply the real generated Drizzle migrations to a fresh in-memory DB.
+  await migrate(fresh, { migrationsFolder })
+  return fresh
+}
+
 beforeAll(async () => {
   const client = new PGlite()
   db = drizzle(client, { schema })
   // Apply the real generated Drizzle migrations to the in-memory DB.
-  const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../drizzle')
   await migrate(db, { migrationsFolder })
 })
 
@@ -50,5 +59,30 @@ describe('schema', () => {
     }).returning()
     expect(k.hash).toHaveLength(64)
     expect((k as Record<string, unknown>).plaintext).toBeUndefined()
+  })
+
+  test('usage_rollup rejects a duplicate (org,key,paddock,period,dim) row', async () => {
+    const db = await freshMigratedDb()
+    const [org] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [flock] = await db.insert(schema.flock).values({ orgId: org.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
+    const [pad] = await db.insert(schema.paddock).values({ orgId: org.id, flockId: flock.id, slug: 's1', name: 'p' }).returning()
+    const [key] = await db.insert(schema.apiKey).values({ orgId: org.id, name: 'k', prefix: 'mm_live_x', hash: 'h1' }).returning()
+    const row = { orgId: org.id, keyId: key.id, paddockId: pad.id, period: '2026-07-27T14', dim: 'tokens_out', value: 1 }
+    await db.insert(schema.usageRollup).values(row)
+    await expect(db.insert(schema.usageRollup).values(row)).rejects.toThrow()
+  })
+
+  test('job table stores and reads a record', async () => {
+    const db = await freshMigratedDb()
+    const [org] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [flock] = await db.insert(schema.flock).values({ orgId: org.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
+    const [pad] = await db.insert(schema.paddock).values({ orgId: org.id, flockId: flock.id, slug: 's2', name: 'p' }).returning()
+    const [key] = await db.insert(schema.apiKey).values({ orgId: org.id, name: 'k', prefix: 'mm_live_y', hash: 'h2' }).returning()
+    await db.insert(schema.job).values({
+      id: 'prompt-1', orgId: org.id, keyId: key.id, paddockId: pad.id,
+      templateId: 'tpl-a', cost: 3, submittedAt: new Date(1000),
+    })
+    const rows = await db.select().from(schema.job).where(eq(schema.job.id, 'prompt-1'))
+    expect(rows[0]).toMatchObject({ id: 'prompt-1', templateId: 'tpl-a', cost: 3, metered: false })
   })
 })
