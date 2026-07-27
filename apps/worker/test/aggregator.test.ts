@@ -34,7 +34,7 @@ describe('applyEvents', () => {
     expect(rows[0]).toMatchObject({ period: '2026-07-27T14', dim: 'tokens_out', value: 7 })
   })
 
-  test('accumulates value into the same bucket (idempotent upsert)', async () => {
+  test('accumulates value into the same bucket', async () => {
     const db = await freshDb(); const s = await scope(db)
     const e: RollupEvent = { ...s, dim: 'tokens_out', value: 4, at: AT }
     await applyEvents(db, [e])

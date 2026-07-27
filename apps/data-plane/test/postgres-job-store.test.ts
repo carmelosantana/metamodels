@@ -21,6 +21,15 @@ describe('PostgresJobStore', () => {
     expect(await store.get('job-1')).toEqual({ ...sample(fx), metered: false })
   })
 
+  test('create of a duplicate jobId is a no-op that preserves the existing metered flag', async () => {
+    const { store, fx } = await storeWithScope()
+    await store.create(sample(fx))
+    expect(await store.markMetered('job-1')).toBe(true) // metered = true on the existing row
+    // Second create with the SAME id must not throw and must NOT reset metered/ownership.
+    await expect(store.create(sample(fx))).resolves.toBeDefined()
+    expect((await store.get('job-1'))!.metered).toBe(true)
+  })
+
   test('get of an unknown id returns null', async () => {
     const { store } = await storeWithScope()
     expect(await store.get('nope')).toBeNull()

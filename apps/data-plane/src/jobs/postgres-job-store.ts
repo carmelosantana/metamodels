@@ -17,16 +17,23 @@ export class PostgresJobStore implements JobStore {
   constructor(private readonly db: Db) {}
 
   async create(rec: Omit<JobRecord, 'metered'>): Promise<JobRecord> {
-    await this.db.insert(job).values({
-      id: rec.jobId,
-      orgId: rec.orgId,
-      keyId: rec.keyId,
-      paddockId: rec.paddockId,
-      templateId: rec.templateId,
-      cost: rec.cost,
-      metered: false,
-      submittedAt: new Date(rec.submittedAt),
-    })
+    await this.db
+      .insert(job)
+      .values({
+        id: rec.jobId,
+        orgId: rec.orgId,
+        keyId: rec.keyId,
+        paddockId: rec.paddockId,
+        templateId: rec.templateId,
+        cost: rec.cost,
+        metered: false,
+        submittedAt: new Date(rec.submittedAt),
+      })
+      // Real ComfyUI prompt_ids are unique uuid4, so this guards against the rare/degenerate
+      // duplicate rather than a normal path: a duplicate id is a no-op (matching the in-memory
+      // store's no-throw contract) that preserves the first submitter's ownership + metered state
+      // — never resetting metered (which would re-open images/gpu_ms double-metering the CAS closes).
+      .onConflictDoNothing({ target: job.id })
     return { ...rec, metered: false }
   }
 

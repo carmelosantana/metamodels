@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import Redis from 'ioredis'
 import { PGlite } from '@electric-sql/pglite'
 import { drizzle } from 'drizzle-orm/pglite'
@@ -32,8 +32,13 @@ async function scope(db: Awaited<ReturnType<typeof freshDb>>) {
 
 describe.skipIf(!REDIS_URL)('processOnce', () => {
   // One shared connection; isolate every test by deleting the stream key (which also
-  // drops its consumer-group state) so entries never leak between tests.
-  const redis = new Redis(REDIS_URL!, { maxRetriesPerRequest: null })
+  // drops its consumer-group state) so entries never leak between tests. The client is
+  // constructed in beforeAll (not the describe body) so that when the suite is skipped no
+  // Redis socket is ever opened — Vitest still evaluates a skipped describe factory.
+  let redis: Redis
+  beforeAll(() => {
+    redis = new Redis(REDIS_URL!, { maxRetriesPerRequest: null })
+  })
   beforeEach(async () => {
     await redis.del(METER_STREAM_KEY)
   })

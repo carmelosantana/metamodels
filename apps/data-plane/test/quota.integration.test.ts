@@ -49,8 +49,23 @@ describe('quota enforcement', () => {
     expect(await res.json()).toMatchObject({ error: 'quota exceeded', dim: 'tokens_out' })
   })
 
-  test('a request under the cap passes the quota gate', async () => {
-    const { app, fx } = await appWithQuota([{ dim: 'tokens_out', max: 1000, period: 'hour' }])
+  test('a request under the cap (with nonzero prior usage) passes the quota gate', async () => {
+    const { app, db, fx } = await appWithQuota([{ dim: 'tokens_out', max: 1000, period: 'hour' }])
+    // Seed a partial rollup so the gate exercises used < max with used > 0 (not the empty-table path).
+    await db.insert(schema.usageRollup).values({
+      orgId: fx.orgId, keyId: fx.keyId, paddockId: fx.paddockId,
+      period: periodBucket(Date.now()), dim: 'tokens_out', value: 5,
+    })
+    const res = await app.request(`/p/${fx.slug}/api/chat`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${fx.keyPlaintext}`, 'content-type': 'application/json' },
+      body: chatBody,
+    })
+    expect(res.status).toBe(200)
+  })
+
+  test('a malformed quota fails open → gate is skipped (200, not 500)', async () => {
+    const { app, fx } = await appWithQuota({ not: 'an array' })
     const res = await app.request(`/p/${fx.slug}/api/chat`, {
       method: 'POST',
       headers: { authorization: `Bearer ${fx.keyPlaintext}`, 'content-type': 'application/json' },

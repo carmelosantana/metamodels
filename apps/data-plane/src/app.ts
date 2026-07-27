@@ -221,6 +221,8 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     //     (bounded by worker lag) — acceptable for v1; see Plan 4 carry-forward.
     if (deps.usageReader && paddock.fence.quota != null) {
       const parsed = quotaSchema.safeParse(paddock.fence.quota)
+      // Fail-open by design: a malformed quota disables the cap for this request rather than
+      // 500ing it — a misconfigured fence must not take the data plane down.
       if (parsed.success) {
         const now = Date.now()
         for (const rule of parsed.data) {

@@ -43,6 +43,8 @@ export function startServer(cfg: ServerConfig): void {
     rateLimiter = new RedisRateLimiter(redis)
     meterSink = new RedisMeterSink(redis)
   } else {
+    // In-memory mode has no worker draining the stream into usage_rollup, so the quota gate
+    // always reads 0 used and is effectively unenforced here (dev-only single-process runs).
     rateLimiter = new InMemoryRateLimiter()
     meterSink = new InMemoryMeterSink()
   }
