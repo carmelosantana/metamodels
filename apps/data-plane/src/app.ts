@@ -28,6 +28,7 @@ export interface AppDeps {
   registry: BreedRegistry
   jobStore: JobStore
   usageReader?: UsageReader
+  readiness?: () => Promise<boolean>
   fetchImpl?: FetchImpl
   defaultRateLimit?: RateLimit
 }
@@ -48,6 +49,20 @@ interface Scope {
 
 export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promise<void> } {
   const app = new Hono()
+
+  // Liveness: the process is up and serving. Cheap, dependency-free.
+  app.get('/healthz', (c) => c.json({ status: 'ok' }))
+
+  // Readiness: dependencies (DB, Redis) are reachable. 503 until they are.
+  app.get('/readyz', async (c) => {
+    if (!deps.readiness) return c.json({ ready: true })
+    try {
+      return (await deps.readiness()) ? c.json({ ready: true }) : c.json({ ready: false }, 503)
+    } catch {
+      return c.json({ ready: false }, 503)
+    }
+  })
+
   const defaultLimit = deps.defaultRateLimit ?? DEFAULT_RATE_LIMIT
   const pending = new Set<Promise<void>>()
   const doFetch: FetchImpl = deps.fetchImpl ?? ((url, init) => fetch(url, init))

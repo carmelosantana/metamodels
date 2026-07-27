@@ -14,4 +14,13 @@ describe('loadServerConfig', () => {
   test('throws a clear error when DATABASE_URL is missing', () => {
     expect(() => loadServerConfig({})).toThrow(/DATABASE_URL/)
   })
+
+  test('reads REDIS_URL when present', () => {
+    const cfg = loadServerConfig({ DATABASE_URL: 'postgres://x/y', REDIS_URL: 'redis://localhost:6379' })
+    expect(cfg.redisUrl).toBe('redis://localhost:6379')
+  })
+
+  test('redisUrl is undefined when REDIS_URL is absent (in-memory dev mode)', () => {
+    expect(loadServerConfig({ DATABASE_URL: 'postgres://x/y' }).redisUrl).toBeUndefined()
+  })
 })
