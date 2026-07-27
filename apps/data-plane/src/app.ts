@@ -17,6 +17,8 @@ import type { ConfigStore } from './config/config-store.js'
 import type { RateLimit, ResolvedKey, ResolvedPaddock } from './config/types.js'
 import type { RateLimiter } from './ratelimit/rate-limiter.js'
 import type { MeterSink, MeterEventRecord } from './meter/meter-sink.js'
+import { quotaSchema } from './config/quota.js'
+import type { UsageReader } from './meter/usage-reader.js'
 import { proxyToUpstream, type FetchImpl } from './proxy/proxy.js'
 
 export interface AppDeps {
@@ -25,6 +27,7 @@ export interface AppDeps {
   meterSink: MeterSink
   registry: BreedRegistry
   jobStore: JobStore
+  usageReader?: UsageReader
   fetchImpl?: FetchImpl
   defaultRateLimit?: RateLimit
 }
@@ -195,6 +198,23 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     if (!rl.allowed) {
       c.header('retry-after', String(rl.retryAfterSec))
       return c.json({ error: 'rate limit exceeded' }, 429)
+    }
+
+    // 3b. Quota caps (hard). Read the current period's rollup total per rule and
+    //     reject at/over the cap. Enforced against already-aggregated usage, so a
+    //     single in-flight request may cross the cap before it is counted
+    //     (bounded by worker lag) — acceptable for v1; see Plan 4 carry-forward.
+    if (deps.usageReader && paddock.fence.quota != null) {
+      const parsed = quotaSchema.safeParse(paddock.fence.quota)
+      if (parsed.success) {
+        const now = Date.now()
+        for (const rule of parsed.data) {
+          const used = await deps.usageReader.periodUsage(resolvedKey.keyId, paddock.paddockId, rule.dim, rule.period, now)
+          if (used >= rule.max) {
+            return c.json({ error: 'quota exceeded', dim: rule.dim }, 429)
+          }
+        }
+      }
     }
 
     // 4. Parse body + build context
