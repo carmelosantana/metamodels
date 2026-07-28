@@ -13,6 +13,7 @@ Multi-user seats + licensing land in Plan 5.7.
 - **Flocks** (`/flocks`) — connect local AI servers (Ollama/ComfyUI) + Test-connection.
 - **Paddocks** (`/paddocks`) — publish a fenced endpoint on a Flock: unique `/p/:slug`, status toggle, plain↔MetaBoy consumer theme.
 - **Fence editor** (`/paddocks/[id]/fence`) — breed-aware policy: route classes (`mutate` permanently locked), model allowlist, rate limit, quota, and a Blast-Radius summary.
+- **Templates** (`/paddocks/[id]/templates`) — ComfyUI only: paste a workflow-API graph, bind typed params (text/seed/number/image) to node inputs, set cost, and dry-run `reconstructGraph` before saving into the Fence's `constraint_json.templates`.
 
 ## Architecture
 - Business logic lives in Next-free modules (`src/auth`, `src/server`, `src/lib`) tested with vitest + pglite.

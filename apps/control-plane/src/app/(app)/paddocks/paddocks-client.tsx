@@ -46,6 +46,9 @@ export function PaddocksClient({ paddocks, flocks, canWrite }: { paddocks: Row[]
             <td className="px-3 py-2"><StatusPill ok={p.status === 'active'} labels={['Active', 'Disabled']} /></td>
             <td className="px-3 py-2 text-right">
               <Link href={`/paddocks/${p.id}/fence`} className="mr-3 text-sm text-[var(--color-primary)] hover:underline">Fence</Link>
+              {p.breed === 'comfyui' && (
+                <Link href={`/paddocks/${p.id}/templates`} className="mr-3 text-sm text-[var(--color-primary)] hover:underline">Templates</Link>
+              )}
               {canWrite && (
                 <>
                   <form action={togglePaddockStatusAction} className="inline">
