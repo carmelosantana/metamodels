@@ -113,7 +113,14 @@ describe('validateDraft — security invariants hold end-to-end', () => {
     if (!v.ok) throw new Error('draft should be valid')
     const out = reconstructGraph(v.value, { prompt: 'hi' }, { uploads: { source: 'up.png' }, rng: () => 0.5 })
     expect(out.ok).toBe(true)
-    if (out.ok) expect(typeof out.graph['3'].inputs.seed).toBe('number')
+    if (out.ok) {
+      // rng: () => 0.5 => Math.floor(0.5 * 1e12) = 500000000000. Asserting the exact
+      // rng-derived value proves the seed came from server-side generation, not the
+      // fixture's pre-existing `0`. A `typeof === 'number'` check would pass trivially
+      // (and even if seed auto-generation were deleted) because the fixture stores `0`.
+      expect(out.graph['3'].inputs.seed).toBe(500000000000)
+      expect(out.graph['3'].inputs.seed).not.toBe(0)
+    }
   })
   test('IMAGE resolves from the upload slot, not the consumer value', () => {
     const v = validateDraft(goodDraft)
