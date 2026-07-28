@@ -4,6 +4,7 @@
     { "path": "packages/schema" },
     { "path": "packages/connectors" },
     { "path": "apps/data-plane" },
-    { "path": "apps/worker" }
+    { "path": "apps/worker" },
+    { "path": "apps/control-plane" }
   ]
 }

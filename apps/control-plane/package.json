@@ -1,0 +1,30 @@
+{
+  "name": "@metamodels/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed": "tsx bin/seed.ts"
+  },
+  "dependencies": {
+    "@metamodels/connectors": "workspace:*",
+    "@metamodels/schema": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "next": "16.2.0",
+    "postgres": "^3.4.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@tailwindcss/postcss": "4.1.0",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "tailwindcss": "4.1.0",
+    "tsx": "^4.19.0"
+  }
+}
