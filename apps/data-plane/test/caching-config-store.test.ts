@@ -77,4 +77,55 @@ describe('CachingConfigStore', () => {
     expect(inner.keyCalls).toBe(2)
     expect(inner.paddockCalls).toBe(2)
   })
+
+  // Tracks inner hits per distinct hash so eviction (a re-fetch of a previously cached hash)
+  // is observable, and exposes the live cache Map to assert the size bound holds.
+  class PerHashInner implements ConfigStore {
+    hashCalls = new Map<string, number>()
+    async resolveKeyByHash(hash: string): Promise<ResolvedKey | null> {
+      this.hashCalls.set(hash, (this.hashCalls.get(hash) ?? 0) + 1)
+      return fakeKey(hash)
+    }
+    async getPaddockBySlug(slug: string): Promise<ResolvedPaddock | null> {
+      return fakePaddock(slug)
+    }
+  }
+  const keyCacheOf = (c: CachingConfigStore): Map<string, unknown> =>
+    (c as unknown as { keyCache: Map<string, unknown> }).keyCache
+
+  test('bounds the cache with FIFO eviction — oldest evicted, newest retained', async () => {
+    const inner = new PerHashInner()
+    const c = new CachingConfigStore(inner, { maxEntries: 2 })
+    await c.resolveKeyByHash('a')
+    await c.resolveKeyByHash('b')
+    await c.resolveKeyByHash('c') // evicts 'a' (oldest)
+    expect(keyCacheOf(c).size).toBe(2) // bound never exceeded
+
+    await c.resolveKeyByHash('c') // still cached → no new inner hit
+    expect(inner.hashCalls.get('c')).toBe(1)
+    await c.resolveKeyByHash('a') // evicted → inner hit again
+    expect(inner.hashCalls.get('a')).toBe(2)
+    expect(keyCacheOf(c).size).toBe(2)
+  })
+
+  test('re-setting an already-present key does not evict a different entry', async () => {
+    const inner = new PerHashInner()
+    let t = 1000
+    const c = new CachingConfigStore(inner, { maxEntries: 2, ttlMs: 100, now: () => t })
+    await c.resolveKeyByHash('a') // cached at t=1000, expires 1100
+    t = 1050
+    await c.resolveKeyByHash('b') // cached at t=1050, expires 1150 — cap now full (2)
+
+    // At t=1120 'a' is stale but 'b' is still fresh. Reloading 'a' re-sets an ALREADY-present
+    // key, so the `!cache.has(key)` guard must skip eviction and leave 'b' untouched.
+    t = 1120
+    await c.resolveKeyByHash('a')
+    expect(inner.hashCalls.get('a')).toBe(2) // 'a' was reloaded
+    expect(keyCacheOf(c).size).toBe(2) // bound respected, no growth
+
+    // 'b' survived the same-key reload: still a cache hit (inner not hit a second time for 'b').
+    await c.resolveKeyByHash('b')
+    expect(inner.hashCalls.get('b')).toBe(1)
+    expect(keyCacheOf(c).size).toBe(2)
+  })
 })

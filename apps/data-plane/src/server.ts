@@ -58,7 +58,12 @@ export function startServer(cfg: ServerConfig): void {
   let configStore: ConfigStore = baseStore
   if (redis) {
     const caching = new CachingConfigStore(baseStore)
-    subscribeConfigInvalidation(redis.duplicate(), caching)
+    const sub = redis.duplicate()
+    sub.on('error', (e) => {
+      // eslint-disable-next-line no-console
+      console.error('[config-invalidation] subscriber redis error:', e)
+    })
+    subscribeConfigInvalidation(sub, caching)
     configStore = caching
   }
 

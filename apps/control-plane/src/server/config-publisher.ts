@@ -17,7 +17,12 @@ async function defaultPublisher(): Promise<ConfigPublisher | null> {
     return null
   }
   const { default: Redis } = await import('ioredis')
-  singleton = new Redis(url)
+  const client = new Redis(url)
+  client.on('error', (e) => {
+    // eslint-disable-next-line no-console
+    console.error('[config-publisher] redis connection error:', e)
+  })
+  singleton = client
   return singleton
 }
 
