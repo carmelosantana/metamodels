@@ -1,13 +1,5 @@
-import { z } from 'zod'
-import { METER_DIMS } from '@metamodels/schema'
-
-export const quotaRuleSchema = z.object({
-  dim: z.enum(METER_DIMS),
-  max: z.number().int().nonnegative(),
-  period: z.enum(['hour', 'day', 'month']),
-})
-
-/** A fence's `quota` column: a list of hard caps, each on one dimension per period. */
-export const quotaSchema = z.array(quotaRuleSchema)
-
-export type QuotaRule = z.infer<typeof quotaRuleSchema>
+// The rate-limit + quota config shapes live in @metamodels/schema/config (the single
+// source of truth shared with the control-plane). Re-exported here so existing importers
+// (app.ts) keep their import path.
+export { quotaRuleSchema, quotaSchema } from '@metamodels/schema/config'
+export type { QuotaRule } from '@metamodels/schema/config'

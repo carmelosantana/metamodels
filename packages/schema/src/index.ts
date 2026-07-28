@@ -1,6 +1,7 @@
 export * from './keys.js'
 export * from './period.js'
 export * from './enums.js'
+export * from './config.js'
 export * from './schema.js'
 export * from './types.js'
 export * from './stream.js'
