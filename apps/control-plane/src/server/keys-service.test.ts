@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
-import { listKeys, createKey, NotFoundError } from './keys-service'
+import { listKeys, createKey, revokeKey, NotFoundError } from './keys-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
@@ -111,5 +111,44 @@ describe('keys-service createKey', () => {
     expect(rows[0].name).toBe('a')
     expect(rows[0].paddockSlugs).toEqual(['p1'])
     expect(rows[0]).not.toHaveProperty('hash')
+  })
+})
+
+describe('keys-service revokeKey', () => {
+  test('flips status to revoked and audits it', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const pid = await paddockIn(db, actor.orgId, 'p1')
+    const created = await createKey(db, actor, { name: 'k', paddockIds: [pid] })
+
+    await revokeKey(db, actor, created.id)
+
+    const [row] = await db.select().from(schema.apiKey).where(eq(schema.apiKey.id, created.id))
+    expect(row.status).toBe('revoked')
+    const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.revoke'))
+    expect(audits).toHaveLength(1)
+    expect(audits[0].target).toBe(`key:${created.id}`)
+  })
+
+  test('cannot revoke a key in another org', async () => {
+    const db = await freshDb()
+    const mine = await actorFor(db, 'admin')
+    const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
+    const [foreign] = await db.insert(schema.apiKey).values({
+      orgId: otherOrg.id, name: 'foreign', prefix: 'mm_live_zzzz', hash: 'dead', status: 'active',
+    }).returning()
+
+    await expect(revokeKey(db, mine, foreign.id)).rejects.toThrow(NotFoundError)
+    const [still] = await db.select().from(schema.apiKey).where(eq(schema.apiKey.id, foreign.id))
+    expect(still.status).toBe('active')
+  })
+
+  test('viewer cannot revoke', async () => {
+    const db = await freshDb()
+    const admin = await actorFor(db, 'admin')
+    const pid = await paddockIn(db, admin.orgId, 'p1')
+    const created = await createKey(db, admin, { name: 'k', paddockIds: [pid] })
+    const viewer: Actor = { ...admin, role: 'viewer', email: 'viewer@x.io' }
+    await expect(revokeKey(db, viewer, created.id)).rejects.toThrow(ForbiddenError)
   })
 })

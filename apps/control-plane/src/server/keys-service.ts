@@ -93,3 +93,18 @@ export async function createKey(db: Db, actor: Actor, input: unknown): Promise<C
     return { id: created.id, name: created.name, prefix: created.prefix, plaintext: secret.plaintext }
   })
 }
+
+export async function revokeKey(db: Db, actor: Actor, id: string): Promise<void> {
+  requireCapability(actor, 'resource.write')
+  await db.transaction(async (tx) => {
+    const [revoked] = await tx
+      .update(apiKey)
+      .set({ status: 'revoked' })
+      .where(and(eq(apiKey.id, id), eq(apiKey.orgId, actor.orgId)))
+      .returning()
+    if (!revoked) throw new NotFoundError(`key ${id}`)
+    await writeAudit(tx, {
+      orgId: actor.orgId, actor: actor.email, action: 'key.revoke', target: `key:${id}`,
+    })
+  })
+}
