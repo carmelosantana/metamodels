@@ -60,7 +60,7 @@ export function KeysClient(
             <td className="px-3 py-2 text-xs text-[var(--color-muted)]">{k.expiresAt ? k.expiresAt.slice(0, 10) : '—'}</td>
             <td className="px-3 py-2 text-right">
               {canWrite && k.status === 'active' && (
-                <form action={revokeKeyAction} className="inline">
+                <form action={async (fd) => { await revokeKeyAction(fd) }} className="inline">
                   <input type="hidden" name="id" value={k.id} />
                   <Button variant="danger" type="submit">Revoke</Button>
                 </form>

@@ -31,9 +31,14 @@ export async function createKeyAction(
   }
 }
 
-export async function revokeKeyAction(fd: FormData): Promise<void> {
+export async function revokeKeyAction(fd: FormData): Promise<{ error?: string }> {
   const actor = await requireUser()
-  requireCapability(actor, 'resource.write')
-  await revokeKey(getDb(), actor, String(fd.get('id')))
-  revalidatePath('/keys')
+  try {
+    requireCapability(actor, 'resource.write')
+    await revokeKey(getDb(), actor, String(fd.get('id')))
+    revalidatePath('/keys')
+    return {}
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Failed to revoke key' }
+  }
 }
