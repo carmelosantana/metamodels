@@ -5,6 +5,7 @@ import { requireUser } from '../../../server/guard'
 import { requireCapability } from '../../../auth/authorize'
 import { saveFlock, deleteFlock } from '../../../server/flocks-service'
 import { testFlockConnection, buildBreedRegistry } from '../../../server/flock-health'
+import { publishConfigInvalidation } from '../../../server/config-publisher'
 
 const registry = buildBreedRegistry()
 
@@ -27,6 +28,7 @@ export async function saveFlockAction(_prev: unknown, fd: FormData): Promise<{ e
     requireCapability(actor, 'resource.write')
     await saveFlock(getDb(), actor, formToInput(fd))
     revalidatePath('/flocks')
+    await publishConfigInvalidation('flock.save')
     return { ok: true }
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Failed to save flock' }
@@ -38,6 +40,7 @@ export async function deleteFlockAction(fd: FormData): Promise<void> {
   requireCapability(actor, 'resource.write')
   await deleteFlock(getDb(), actor, String(fd.get('id')))
   revalidatePath('/flocks')
+  await publishConfigInvalidation('flock.delete')
 }
 
 export async function testConnectionAction(fd: FormData): Promise<{ ok: boolean; detail?: string }> {

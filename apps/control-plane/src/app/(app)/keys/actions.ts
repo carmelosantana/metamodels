@@ -4,6 +4,7 @@ import { getDb } from '../../../server/db'
 import { requireUser } from '../../../server/guard'
 import { requireCapability } from '../../../auth/authorize'
 import { createKey, revokeKey } from '../../../server/keys-service'
+import { publishConfigInvalidation } from '../../../server/config-publisher'
 
 export async function createKeyAction(
   _prev: unknown, fd: FormData,
@@ -25,6 +26,7 @@ export async function createKeyAction(
       overrides,
     })
     revalidatePath('/keys')
+    await publishConfigInvalidation('key.create')
     return { plaintext: created.plaintext, prefix: created.prefix }
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Failed to create key' }
@@ -37,6 +39,7 @@ export async function revokeKeyAction(fd: FormData): Promise<{ error?: string }>
     requireCapability(actor, 'resource.write')
     await revokeKey(getDb(), actor, String(fd.get('id')))
     revalidatePath('/keys')
+    await publishConfigInvalidation('key.revoke')
     return {}
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Failed to revoke key' }

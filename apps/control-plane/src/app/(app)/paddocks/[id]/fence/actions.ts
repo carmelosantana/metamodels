@@ -5,6 +5,7 @@ import { requireUser } from '../../../../../server/guard'
 import { requireCapability } from '../../../../../auth/authorize'
 import { saveFence } from '../../../../../server/fences-service'
 import { buildBreedRegistry } from '../../../../../server/flock-health'
+import { publishConfigInvalidation } from '../../../../../server/config-publisher'
 
 const registry = buildBreedRegistry()
 
@@ -37,6 +38,7 @@ export async function saveFenceAction(_prev: unknown, fd: FormData): Promise<{ e
 
     await saveFence(getDb(), actor, registry, { paddockId, constraintJson, rateLimit, quota })
     revalidatePath(`/paddocks/${paddockId}/fence`)
+    await publishConfigInvalidation('fence.save')
     return { ok: true }
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Failed to save fence' }

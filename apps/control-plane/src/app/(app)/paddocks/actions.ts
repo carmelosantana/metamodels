@@ -5,6 +5,7 @@ import { requireUser } from '../../../server/guard'
 import { requireCapability } from '../../../auth/authorize'
 import { savePaddock, deletePaddock, setPaddockStatus, SlugTakenError } from '../../../server/paddocks-service'
 import { NotFoundError } from '../../../server/flocks-service'
+import { publishConfigInvalidation } from '../../../server/config-publisher'
 
 export async function savePaddockAction(_prev: unknown, fd: FormData): Promise<{ error?: string; ok?: boolean }> {
   const actor = await requireUser()
@@ -19,6 +20,7 @@ export async function savePaddockAction(_prev: unknown, fd: FormData): Promise<{
       theme: (String(fd.get('theme') ?? 'plain') as 'plain' | 'metaboy'),
     })
     revalidatePath('/paddocks')
+    await publishConfigInvalidation('paddock.save')
     return { ok: true }
   } catch (e) {
     if (e instanceof SlugTakenError) return { error: e.message }
@@ -33,6 +35,7 @@ export async function togglePaddockStatusAction(fd: FormData): Promise<void> {
   const next = String(fd.get('status')) === 'active' ? 'disabled' : 'active'
   await setPaddockStatus(getDb(), actor, String(fd.get('id')), next)
   revalidatePath('/paddocks')
+  await publishConfigInvalidation('paddock.status')
 }
 
 export async function deletePaddockAction(fd: FormData): Promise<void> {
@@ -40,4 +43,5 @@ export async function deletePaddockAction(fd: FormData): Promise<void> {
   requireCapability(actor, 'resource.write')
   await deletePaddock(getDb(), actor, String(fd.get('id')))
   revalidatePath('/paddocks')
+  await publishConfigInvalidation('paddock.delete')
 }
