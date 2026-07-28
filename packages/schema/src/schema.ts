@@ -19,6 +19,17 @@ export const user = pgTable('user', {
   createdAt: createdAt(),
 })
 
+export const invite = pgTable('invite', {
+  id: id(),
+  orgId: uuid('org_id').notNull().references(() => org.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  createdAt: createdAt(),
+})
+
 export const flock = pgTable('flock', {
   id: id(),
   orgId: uuid('org_id').notNull().references(() => org.id, { onDelete: 'cascade' }),
