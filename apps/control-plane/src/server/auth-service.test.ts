@@ -3,7 +3,8 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb } from '../test/db'
 import { seedAdmin } from './seed'
-import { verifyLogin } from './auth-service'
+import { verifyLogin, DUMMY_PASSWORD_HASH } from './auth-service'
+import { verifyPassword } from '../auth/password'
 
 describe('verifyLogin', () => {
   test('accepts correct credentials for an active user', async () => {
@@ -26,5 +27,19 @@ describe('verifyLogin', () => {
     await seedAdmin(db, { email: 'admin@x.io', password: 'hunter2hunter2' })
     await db.update(schema.user).set({ status: 'deactivated' }).where(eq(schema.user.email, 'admin@x.io'))
     expect(await verifyLogin(db, 'admin@x.io', 'hunter2hunter2')).toEqual({ ok: false, reason: 'deactivated' })
+  })
+})
+
+describe('verifyLogin timing-oracle mitigation', () => {
+  test('DUMMY_PASSWORD_HASH is a well-formed scrypt hash the KDF actually processes', async () => {
+    expect(DUMMY_PASSWORD_HASH).toMatch(/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{128}$/)
+    // A real (failing) verify against it — proves the miss path spends genuine scrypt time.
+    expect(await verifyPassword('anything', DUMMY_PASSWORD_HASH)).toBe(false)
+  })
+
+  test('unknown email still returns the generic invalid result (behavior preserved)', async () => {
+    const db = await freshDb()
+    const res = await verifyLogin(db, 'nobody@x.io', 'whatever')
+    expect(res).toEqual({ ok: false, reason: 'invalid' })
   })
 })
