@@ -81,4 +81,32 @@ describe('fences-service', () => {
     await expect(getFence(db, actor, foreign.id)).rejects.toThrow(NotFoundError)
     expect(await db.select().from(schema.fence)).toHaveLength(0)
   })
+
+  test('omitting constraintJson preserves the stored constraint (comfyui rate/quota edit)', async () => {
+    const db = await freshDb()
+    const o = await seedOrg(db)
+    const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
+    const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
+    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin' }
+    // Seed a fence that already has a template.
+    await db.insert(schema.fence).values({
+      orgId: o.id, paddockId: p.id,
+      constraintJson: { templates: [{ id: 'txt2img', graph: {}, params: [], cost: 1 }] } as never,
+    })
+    // Save rate/quota only — no constraintJson.
+    await saveFence(db, actor, registry, { paddockId: p.id, rateLimit: { windowSec: 60, max: 3 } })
+    const got = await getFence(db, actor, p.id)
+    expect((got!.constraintJson as { templates: unknown[] }).templates).toHaveLength(1) // preserved
+    expect(got!.rateLimit).toEqual({ windowSec: 60, max: 3 })
+  })
+
+  test('omitting constraintJson on a fresh comfyui fence applies the empty-templates default', async () => {
+    const db = await freshDb()
+    const o = await seedOrg(db)
+    const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
+    const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
+    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin' }
+    const saved = await saveFence(db, actor, registry, { paddockId: p.id, rateLimit: { windowSec: 60, max: 3 } })
+    expect((saved.constraintJson as { templates: unknown[] }).templates).toEqual([])
+  })
 })

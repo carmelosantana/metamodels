@@ -18,7 +18,9 @@ export type QuotaRuleInput = z.infer<typeof quotaRuleSchema>
 
 export const saveFenceInput = z.object({
   paddockId: z.string().uuid(),
-  constraintJson: z.unknown(), // validated per-breed by validateConstraintForBreed
+  // Optional: when omitted, saveFence preserves the fence's stored constraint
+  // (or applies the breed default on a fresh row). Validated per-breed on write.
+  constraintJson: z.unknown().optional(),
   rateLimit: rateLimitSchema.nullish(),
   quota: quotaSchema.nullish(),
 })

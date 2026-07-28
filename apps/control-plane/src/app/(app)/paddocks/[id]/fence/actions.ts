@@ -16,11 +16,10 @@ export async function saveFenceAction(_prev: unknown, fd: FormData): Promise<{ e
     requireCapability(actor, 'resource.write')
 
     // Build constraint_json per breed from the form.
+    // ComfyUI: templates are managed on the Templates screen (8b); omit constraintJson
+    // entirely so saveFence preserves whatever templates already exist.
     let constraintJson: unknown
-    if (breed === 'comfyui') {
-      // Templates are authored in the paramSchema editor (Plan 5.3); preserve whatever exists.
-      constraintJson = JSON.parse(String(fd.get('constraintJson') ?? '{"templates":[]}'))
-    } else {
+    if (breed !== 'comfyui') {
       const routes = fd.getAll('route').map(String)
       const modelsRaw = String(fd.get('models') ?? '').trim()
       const allowedModels = modelsRaw ? modelsRaw.split(',').map((m) => m.trim()).filter(Boolean) : null

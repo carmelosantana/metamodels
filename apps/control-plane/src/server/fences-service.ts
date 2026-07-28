@@ -37,25 +37,37 @@ export async function saveFence(
 
   return db.transaction(async (tx) => {
     const breedId = await paddockBreedInOrg(tx, actor, data.paddockId)
-    const constraint = validateConstraintForBreed(registry, breedId, data.constraintJson)
+    const provided = data.constraintJson !== undefined
+
+    // Resolve the constraint to store on INSERT: provided → validate it;
+    // omitted → existing row's constraint, else the breed default.
+    let insertConstraint: unknown
+    if (provided) {
+      insertConstraint = validateConstraintForBreed(registry, breedId, data.constraintJson)
+    } else {
+      const [existing] = await tx.select().from(fence).where(eq(fence.paddockId, data.paddockId)).limit(1)
+      insertConstraint = existing
+        ? existing.constraintJson
+        : registry.get(breedId).constraintSchema.parse({}) // breed default (comfyui → {templates:[]})
+    }
+
+    // On CONFLICT, only overwrite constraint_json when the caller actually sent one.
+    const conflictSet: Record<string, unknown> = {
+      rateLimit: (data.rateLimit ?? null) as never,
+      quota: (data.quota ?? null) as never,
+    }
+    if (provided) conflictSet.constraintJson = insertConstraint as never
 
     const [saved] = await tx
       .insert(fence)
       .values({
         orgId: actor.orgId,
         paddockId: data.paddockId,
-        constraintJson: constraint as never,
+        constraintJson: insertConstraint as never,
         rateLimit: (data.rateLimit ?? null) as never,
         quota: (data.quota ?? null) as never,
       })
-      .onConflictDoUpdate({
-        target: fence.paddockId,
-        set: {
-          constraintJson: constraint as never,
-          rateLimit: (data.rateLimit ?? null) as never,
-          quota: (data.quota ?? null) as never,
-        },
-      })
+      .onConflictDoUpdate({ target: fence.paddockId, set: conflictSet })
       .returning()
 
     await writeAudit(tx, {

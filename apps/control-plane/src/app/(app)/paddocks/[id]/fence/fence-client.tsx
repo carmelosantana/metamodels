@@ -52,8 +52,11 @@ export function FenceClient({
 
           {paddock.breed === 'comfyui' ? (
             <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 text-sm text-[var(--color-muted)]">
-              Workflow templates for this ComfyUI paddock are authored in the Template editor (coming in Plan 5.3). Rate limit and quota still apply below.
-              <input type="hidden" name="constraintJson" value={JSON.stringify(constraintJson ?? { templates: [] })} />
+              Workflow templates for this ComfyUI paddock are authored in the{' '}
+              <Link href={`/paddocks/${paddock.id}/templates`} className="text-[var(--color-primary)] hover:underline">
+                Template editor →
+              </Link>
+              . Rate limit and quota still apply below.
             </div>
           ) : (
             <fieldset className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-4">
