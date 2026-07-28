@@ -85,4 +85,17 @@ describe('schema', () => {
     const rows = await db.select().from(schema.job).where(eq(schema.job.id, 'prompt-1'))
     expect(rows[0]).toMatchObject({ id: 'prompt-1', templateId: 'tpl-a', cost: 3, metered: false })
   })
+
+  test('user.status defaults to active and accepts deactivated', async () => {
+    const db = await freshMigratedDb()
+    const [o] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [u1] = await db.insert(schema.user).values({
+      orgId: o.id, email: 'a@x.io', passwordHash: 'scrypt$aa$bb', role: 'admin',
+    }).returning()
+    expect(u1.status).toBe('active')
+    const [u2] = await db.insert(schema.user).values({
+      orgId: o.id, email: 'b@x.io', passwordHash: 'scrypt$aa$bb', role: 'viewer', status: 'deactivated',
+    }).returning()
+    expect(u2.status).toBe('deactivated')
+  })
 })
