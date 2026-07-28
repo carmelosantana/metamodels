@@ -1,3 +1,11 @@
-export default function DashboardPage() {
-  return <div className="p-8 text-[var(--color-muted)]">Dashboard — coming in Plan 5.5.</div>
+import { requireUser } from '../../server/guard'
+
+export default async function DashboardPage() {
+  const actor = await requireUser()
+  return (
+    <div>
+      <h1 className="text-xl font-semibold">Welcome, {actor.email}</h1>
+      <p className="mt-2 text-sm text-[var(--color-muted)]">Dashboard metrics arrive in Plan 5.5. Manage your Flocks from the sidebar.</p>
+    </div>
+  )
 }
