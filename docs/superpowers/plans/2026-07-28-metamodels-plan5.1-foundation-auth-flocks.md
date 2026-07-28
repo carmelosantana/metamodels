@@ -956,7 +956,7 @@ export async function requireUser(): Promise<Actor> {
 
 export async function requireCapabilityOr403(action: Capability): Promise<Actor> {
   const actor = await requireUser()
-  if (!authorize(actor, action)) redirect('/(app)?forbidden=1')
+  if (!authorize(actor, action)) redirect('/?forbidden=1') // (app) route group is stripped from the URL
   return actor
 }
 ```
