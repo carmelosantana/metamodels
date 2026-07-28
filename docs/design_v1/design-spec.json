@@ -1,0 +1,224 @@
+{
+  "$schema": "https://metamodels.dev/handoff/design-spec.v1.json",
+  "project": "MetaModels Operator Console",
+  "feature": "MetaBoy paramSchema editor (Game Boy / Earth GB skin)",
+  "fidelity": "hifi",
+  "date": "2026-07-27",
+  "sourceOfTruth": {
+    "schema": "packages/schema/src/schema.ts",
+    "paramSpec": "packages/connectors/src/comfyui/template.ts (reconstructGraph)"
+  },
+  "targetStack": ["Next.js 15", "shadcn/ui", "Tailwind CSS"],
+  "note": "HTML files are design references. Buttons are intentionally unwired; implement against interactions[].action ids. The device chrome is brand styling; the LCD content is the product UI.",
+
+  "tokens": {
+    "palette_earth_gb": {
+      "source": "https://lospec.com/palette-list/earth-gb",
+      "plum": "#774346",
+      "warmBrown": "#b87652",
+      "sage": "#acb965",
+      "cream": "#f5f29e"
+    },
+    "lcd": {
+      "surface": "radial-gradient(120% 130% at 30% 10%, #e4e58f 0%, #cdd07e 46%, #b7bd6d 100%)",
+      "surfaceError": "radial-gradient(120% 130% at 30% 10%, #e9c58f, #d9a56f 48%, #c98a5c)",
+      "ink": "#5f3336",
+      "inkMid": "#8a4f3c",
+      "gridLine": "#b0a95e",
+      "light": "#e4e58f",
+      "green": "#7c8b3a",
+      "red": "#a8402f",
+      "errorInk": "#4a1f1a",
+      "errorAccent": "#8a2f24",
+      "glow": "0 0 0 3px #0d0a0b, 0 0 34px 4px rgba(172,185,101,.55), inset 0 0 40px rgba(95,51,54,.22)"
+    },
+    "device": {
+      "shell": "linear-gradient(150deg,#4a363b,#392a2e 42%,#2f2226)",
+      "shellRadiusLarge": "22px 22px 84px 22px",
+      "shellRadiusSmall": "18px 18px 60px 18px",
+      "bezel": "linear-gradient(160deg,#241a1d,#1b1315)",
+      "control": "#221619",
+      "buttonAB": "radial-gradient(circle at 35% 30%,#b87652,#8a4f3c)",
+      "chromeText": "#8a6f6a"
+    },
+    "typography": {
+      "display": { "family": "Press Start 2P", "usage": "headers, stat numbers, badges", "sizePx": [7, 8, 9, 10, 11, 15, 17] },
+      "mono": { "family": "IBM Plex Mono", "usage": "body, data rows", "sizePx": [10, 11, 12, 12.5], "weights": [400, 500, 600] },
+      "sans": { "family": "IBM Plex Sans", "usage": "app-level sans (non-LCD)" },
+      "labelLetterSpacing": "0.1em–0.28em, uppercase"
+    },
+    "effects": {
+      "scanlines": "repeating-linear-gradient(0deg, rgba(60,32,34,.16) 0 1px, transparent 1px 3px)",
+      "vignette": "inset 0 0 46px rgba(95,51,54,.4)",
+      "keyframes": {
+        "gbflicker": "opacity .10↔.16 over 3.5s (scanline shimmer)",
+        "gbblink": "1.1s steps(1) — blinking cursor / exposed hint",
+        "mmpulse": "1.6s — status dot pulse (down/alarm)"
+      },
+      "panelBorder": "2–3px solid ink, 0 radius inside LCD (pixel aesthetic)"
+    }
+  },
+
+  "statusSemantics": {
+    "healthy": { "color": "#7c8b3a", "shape": "filled dot + glow" },
+    "down": { "color": "#a8402f", "shape": "filled dot + mmpulse" },
+    "exposed": { "glyph": "✳", "color": "#7c8b3a", "shape": "filled sage dot + glow" },
+    "locked": { "glyph": "🔒", "color": "#a8402f", "shape": "hollow terracotta square" }
+  },
+
+  "paramSpec": {
+    "description": "Array produced by the editor; validated by reconstructGraph() server-side.",
+    "union": [
+      { "type": "text", "fields": { "name": "string", "target": { "node": "string", "input": "string" } } },
+      { "type": "seed", "fields": { "name": "string", "targets": "{node,input}[]" }, "note": "auto-generated per run, never a caller value; UI shows AUTO" },
+      { "type": "number", "fields": { "name": "string", "target": { "node": "string", "input": "string" }, "min?": "number", "max?": "number" } },
+      { "type": "image", "fields": { "name": "string", "target": { "node": "string", "input": "string" } }, "note": "value from trusted /upload/image keyed by name; raw field ignored; UI shows upload slot" }
+    ],
+    "securityInvariants": [
+      "Only promoted inputs are caller-editable; all others locked and unreachable.",
+      "Unknown caller key -> reject with 'unknown param: <key>' (HTTP 400).",
+      "Raw node graphs from callers are structurally impossible."
+    ]
+  },
+
+  "screens": [
+    {
+      "id": "5a",
+      "name": "Dashboard (MetaBoy)",
+      "canvas": { "w": 1180, "h": 788 },
+      "current": true,
+      "lcd": {
+        "titleStrip": ["DASHBOARD", "♥2/3", "09:41"],
+        "statTiles": [
+          { "label": "HEALTH", "value": "2/3", "bars": ["green", "green", "red"] },
+          { "label": "PADDOCKS", "value": "3", "sub": "1 disabled" },
+          { "label": "REQ 24H", "value": "18204", "sparkline": true },
+          { "label": "ERRORS", "value": "0.4%", "sub": "73 / 18.2k" }
+        ],
+        "flocks": [
+          { "name": "STUDIO OLLAMA", "breed": "ollama", "status": "healthy", "meta": "192.168.1.40 · 40ms" },
+          { "name": "RENDER BOX", "breed": "comfyui", "status": "healthy", "meta": "gpu-01.local · 61ms" },
+          { "name": "EDGE LLAMA", "breed": "ollama", "status": "down", "meta": "ECONNREFUSED" }
+        ]
+      }
+    },
+    {
+      "id": "4a",
+      "name": "Dashboard (flat Earth GB, superseded)",
+      "canvas": { "w": 1200, "h": 760 },
+      "current": false,
+      "note": "Non-device flat recolor kept for reference; superseded by 5a MetaBoy direction."
+    },
+    {
+      "id": "6a",
+      "name": "★ paramSchema editor — loaded",
+      "canvas": { "w": 1180, "h": 840 },
+      "hero": true,
+      "titleStrip": ["WORKFLOW TEMPLATE", "sdxl_txt2img.json", "comfyui", "◈3 EXPOSED"],
+      "graph": {
+        "nodeCount": 6,
+        "totalInputs": 14,
+        "exposedCount": 3,
+        "nodes": [
+          { "id": "4", "class_type": "CheckpointLoaderSimple", "inputs": [{ "name": "ckpt_name", "state": "locked" }] },
+          { "id": "6", "class_type": "CLIPTextEncode", "selected": true, "inputs": [{ "name": "text", "state": "exposed", "paramName": "Prompt", "type": "text" }] },
+          { "id": "7", "class_type": "CLIPTextEncode", "label": "negative", "inputs": [{ "name": "text", "state": "locked" }] },
+          { "id": "5", "class_type": "EmptyLatentImage", "inputs": [{ "name": "width|height", "state": "locked", "note": "CAP 1024" }] },
+          { "id": "3", "class_type": "KSampler", "inputs": [
+            { "name": "seed", "state": "exposed", "paramName": "Seed", "type": "seed", "note": "AUTO" },
+            { "name": "steps", "state": "exposed", "paramName": "Steps", "type": "number", "min": 10, "max": 40, "default": 25 },
+            { "name": "cfg|sampler", "state": "locked" }
+          ] },
+          { "id": "9", "class_type": "SaveImage", "inputs": [{ "name": "*", "state": "locked" }] }
+        ]
+      },
+      "inspector": { "for": "#6.text", "type": "text", "fields": { "name": "Prompt", "required": true, "maxLen": 400 } },
+      "consumerForm": {
+        "fields": [
+          { "label": "PROMPT", "control": "textarea", "required": true, "counter": "62 / 400" },
+          { "label": "STEPS", "control": "slider", "min": 10, "max": 40, "value": 25 },
+          { "label": "SEED", "control": "auto", "note": "AUTO / RUN" }
+        ],
+        "actions": ["▶ RUN · 1cr", "JSON"]
+      },
+      "footerHint": "A:EXPOSE  B:LOCK  ▲▼:NODE  START:SAVE  |  3 of 14 inputs exposed — rest locked"
+    },
+    {
+      "id": "7a",
+      "name": "paramSchema editor — empty",
+      "canvas": { "w": 720, "h": 560 },
+      "state": "empty",
+      "titleStrip": ["WORKFLOW TEMPLATE", "(unsaved)", "◈0 EXPOSED"],
+      "graphPanel": { "dropzone": true, "copy": "NO GRAPH LOADED", "actions": ["▶ PASTE", "⇪ UPLOAD"] },
+      "consumerForm": { "placeholder": "Promote inputs from the graph and the caller's form builds here." },
+      "footerHint": "START:PASTE  ⇪:UPLOAD  |  nothing exposed until you promote"
+    },
+    {
+      "id": "7b",
+      "name": "paramSchema editor — error (undeclared param)",
+      "canvas": { "w": 720, "h": 560 },
+      "state": "error",
+      "treatment": "editor dimmed behind scrim + rejection toast (transient)",
+      "toast": {
+        "title": "PARAM REJECTED",
+        "status": "HTTP 400 · fence held the line",
+        "paddock": "/p/art-gen",
+        "payload": [
+          { "key": "prompt", "value": "a fox in snow", "ok": true },
+          { "key": "steps", "value": "25", "ok": true },
+          { "key": "ckpt_name", "value": "juggernaut-xl-v9", "ok": false, "flag": "UNDECLARED" }
+        ],
+        "reason": "unknown param: ckpt_name",
+        "actions": ["▶ VIEW IN AUDIT", "DISMISS"]
+      }
+    },
+    {
+      "id": "7c",
+      "name": "paramSchema editor — image param",
+      "canvas": { "w": 720, "h": 560 },
+      "state": "image-param",
+      "titleStrip": ["WORKFLOW TEMPLATE", "sdxl_img2img.json", "◈2 EXPOSED"],
+      "graph": {
+        "nodes": [
+          { "id": "10", "class_type": "LoadImage", "selected": true, "inputs": [{ "name": "image", "state": "exposed", "paramName": "Init image", "type": "image" }] },
+          { "id": "14", "class_type": "VAEEncode", "inputs": [{ "name": "*", "state": "locked" }] },
+          { "id": "3", "class_type": "KSampler", "inputs": [
+            { "name": "seed", "state": "exposed", "type": "seed", "note": "AUTO" },
+            { "name": "denoise|cfg", "state": "locked" }
+          ] },
+          { "id": "9", "class_type": "SaveImage", "inputs": [{ "name": "*", "state": "locked" }] }
+        ]
+      },
+      "inspector": { "for": "#10.image", "type": "image", "fields": { "name": "Init image", "accept": "png · jpg · webp", "maxDim": "2048²", "maxSize": "8MB", "note": "value comes from /upload/image, keyed by name — raw field ignored" } },
+      "consumerForm": { "control": "upload-slot", "uploaded": "collie.png" }
+    }
+  ],
+
+  "state": {
+    "graph": "Record<nodeId, {class_type: string, inputs: Record<string, unknown>}> — parsed from graphJson",
+    "paramSchema": "ParamSpec[] — promoted params, drives EXPOSED flags + consumer form",
+    "selection": "{ nodeId: string, input: string } | null — drives inspector",
+    "uploads": "Record<paramName, filename> — image params (preview only)",
+    "derived": ["exposedCount", "totalInputs", "per-input status(locked|exposed)"],
+    "errorToast": "{ paddock, payload, unknownKey } | null — from a rejected consumer request"
+  },
+
+  "interactions": [
+    { "action": "ingest.paste", "control": "▶ PASTE JSON (7a)", "intent": "Open paste box; accept raw ComfyUI API-format graphJson; parse to nodes. Nothing exposed until promoted." },
+    { "action": "ingest.upload", "control": "⇪ UPLOAD (7a)", "intent": "File picker for exported .json; same parse path as paste." },
+    { "action": "graph.selectNode", "control": "node row (6a/7c)", "intent": "Select a node; ▲▼ navigates; drives inspector." },
+    { "action": "graph.selectInput", "control": "input row under a node", "intent": "Select a specific input to inspect/promote." },
+    { "action": "param.expose", "control": "A button", "intent": "Promote selected input to a ParamSpec. Type inferred from value: string→text, number→number, seed-like→seed, image→image." },
+    { "action": "param.lock", "control": "B button", "intent": "Remove the ParamSpec for the selected input; it reverts to locked." },
+    { "action": "param.setName", "control": "inspector name field", "intent": "Set the caller-facing friendly name; reflects live in consumer form." },
+    { "action": "param.setRequired", "control": "inspector required toggle", "intent": "Toggle required/optional (text/number/image)." },
+    { "action": "param.setMax", "control": "inspector max-len field (text)", "intent": "Set max length constraint." },
+    { "action": "param.setRange", "control": "inspector min/max (number)", "intent": "Set min/max; renders as a slider in the consumer form." },
+    { "action": "template.save", "control": "START button", "intent": "Persist paramSchema for this WorkflowTemplate." },
+    { "action": "preview.run", "control": "▶ RUN · 1cr (6a)", "intent": "Preview-only demonstration of the caller contract. Must NOT hit production." },
+    { "action": "preview.viewJson", "control": "JSON (6a)", "intent": "Show the resolved consumer request JSON / the ParamSpec array." },
+    { "action": "consumer.upload", "control": "DROP IMAGE slot (7c)", "intent": "Preview of the caller's /upload/image; stores filename in uploads[paramName]." },
+    { "action": "error.viewAudit", "control": "▶ VIEW IN AUDIT (7b)", "intent": "Navigate to the audit log entry for the rejected request." },
+    { "action": "error.dismiss", "control": "DISMISS (7b)", "intent": "Dismiss the rejection toast." }
+  ]
+}

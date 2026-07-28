@@ -1,0 +1,207 @@
+{
+  "$schema": "https://metamodels.dev/handoff/design-spec.v2.json",
+  "project": "MetaModels Operator Console",
+  "feature": "Operator control plane — full screen set",
+  "fidelity": "hifi",
+  "date": "2026-07-27",
+  "revision": "v2 — dual-theme architecture (operator mode default; MetaBoy scoped to consumer playground)",
+  "sourceOfTruth": {
+    "schema": "packages/schema/src/schema.ts",
+    "paramSpec": "packages/connectors/src/comfyui/template.ts (reconstructGraph)"
+  },
+  "targetStack": ["Next.js 15", "shadcn/ui", "Tailwind CSS"],
+
+  "themeArchitecture": {
+    "decision": "Two themes, NOT a per-session operator toggle.",
+    "operatorMode": {
+      "default": true,
+      "usage": "The entire admin console — dashboard, all CRUD, usage, audit. Legible dark shadcn surface with Earth GB accent hues. AA contrast, real Plex sizes, full tables.",
+      "rationale": "A security + billing tool must be calm, legible, accessible. One default."
+    },
+    "metaBoy": {
+      "default": false,
+      "usage": "Consumer-facing surfaces only: the hosted per-Paddock playground (primary), and optionally a dashboard-only vanity flourish. Operator-selectable PER PADDOCK (plain <-> MetaBoy).",
+      "rationale": "Game Boy skin is delightful but fights data density. It lives where density is low and the product faces outward.",
+      "constraint": "True multi-tenant theming is out of scope for v1; per-Paddock skin is in scope."
+    }
+  },
+
+  "tokens": {
+    "palette_earth_gb": {
+      "source": "https://lospec.com/palette-list/earth-gb",
+      "plum": "#774346", "warmBrown": "#b87652", "sage": "#acb965", "cream": "#f5f29e"
+    },
+    "operatorMode": {
+      "comment": "Earth GB hues on a warm-neutral dark surface. This is the admin theme.",
+      "pageBg": "#141110",
+      "panel": "#1a1614",
+      "panelAlt": "#1c1714",
+      "panelRaised": "#181513",
+      "border": "#2e2620",
+      "rowDivider": "#241d19",
+      "inputBorder": "#3a2f28",
+      "text": "#ece4d6",
+      "textMuted": "#9a8b7c",
+      "textFaint": "#7d6f62",
+      "primary": "#acb965",
+      "primaryText": "#23260f",
+      "primaryTintBg": "rgba(172,185,101,.12-.18)",
+      "healthy": "#acb965",
+      "comfyui": "#c08457",
+      "comfyuiTintBg": "rgba(192,132,87,.2)",
+      "danger": "#cf5f4b",
+      "radius": { "card": "9px", "control": "7px", "chip": "5px" }
+    },
+    "metaBoy": {
+      "comment": "Dot-matrix LCD device. Consumer theme only.",
+      "lcdSurface": "radial-gradient(120% 130% at 30% 10%, #e4e58f 0%, #cdd07e 46%, #b7bd6d 100%)",
+      "lcdSurfaceError": "radial-gradient(120% 130% at 30% 10%, #e9c58f, #d9a56f 48%, #c98a5c)",
+      "ink": "#5f3336", "inkMid": "#8a4f3c", "gridLine": "#b0a95e", "light": "#e4e58f",
+      "green": "#7c8b3a", "red": "#a8402f", "errorInk": "#4a1f1a", "errorAccent": "#8a2f24",
+      "glow": "0 0 0 3px #0d0a0b, 0 0 34px 4px rgba(172,185,101,.55), inset 0 0 40px rgba(95,51,54,.22)",
+      "shell": "linear-gradient(150deg,#4a363b,#392a2e 42%,#2f2226)",
+      "shellRadius": "22px 22px 84px 22px",
+      "bezel": "linear-gradient(160deg,#241a1d,#1b1315)",
+      "control": "#221619",
+      "buttonAB": "radial-gradient(circle at 35% 30%,#b87652,#8a4f3c)",
+      "scanlines": "repeating-linear-gradient(0deg, rgba(60,32,34,.16) 0 1px, transparent 1px 3px)",
+      "vignette": "inset 0 0 46px rgba(95,51,54,.4)"
+    },
+    "typography": {
+      "sans": { "family": "IBM Plex Sans", "usage": "operator-mode UI", "sizePx": [10.5, 11, 12, 12.5, 13, 14, 15, 26] },
+      "mono": { "family": "IBM Plex Mono", "usage": "IDs, URLs, slugs, keys, numeric data (both themes)", "sizePx": [10, 11, 11.5, 12, 12.5] },
+      "display": { "family": "Press Start 2P", "usage": "MetaBoy pixel headers/badges ONLY", "sizePx": [7, 8, 9, 10, 11, 15, 17] }
+    },
+    "keyframes": {
+      "gbflicker": "opacity .10<->.16, 3.5s (MetaBoy scanline shimmer)",
+      "gbblink": "1.1s steps(1) (blinking cursor)",
+      "mmpulse": "1.6s (status dot pulse for down/alarm — used in both themes)"
+    }
+  },
+
+  "statusSemantics": {
+    "healthy": "sage #acb965 filled dot",
+    "down": "terracotta #cf5f4b filled dot + mmpulse",
+    "comfyuiBreed": "warm-brown #c08457 chip",
+    "ollamaBreed": "sage-tint chip",
+    "exposedInput": "sage — glyph ✳ / label 'Exposed'",
+    "lockedInput": "terracotta/neutral — glyph 🔒 / label 'Locked'"
+  },
+
+  "paramSpec": {
+    "description": "Array produced by the paramSchema editor; validated by reconstructGraph() server-side.",
+    "union": [
+      { "type": "text", "fields": { "name": "string", "target": { "node": "string", "input": "string" } } },
+      { "type": "seed", "fields": { "name": "string", "targets": "{node,input}[]" }, "note": "auto-generated per run; UI shows AUTO, never a field" },
+      { "type": "number", "fields": { "name": "string", "target": { "node": "string", "input": "string" }, "min?": "number", "max?": "number" } },
+      { "type": "image", "fields": { "name": "string", "target": { "node": "string", "input": "string" } }, "note": "value from trusted /upload/image keyed by name; UI shows upload slot" }
+    ],
+    "securityInvariants": [
+      "Only promoted inputs are caller-editable; everything else locked and unreachable.",
+      "Unknown caller key -> reject 'unknown param: <key>' (HTTP 400).",
+      "Raw node graphs from callers are structurally impossible.",
+      "mutate route class on Ollama fences is hard-blocked by the system regardless of UI state."
+    ]
+  },
+
+  "componentInventory": {
+    "operatorMode": [
+      { "name": "AppSidebar", "desc": "Full 228px nav (dashboard 8a) or 54px icon rail (detail screens). MM logo tile (sage gradient), section items, active = sage-tint bg. Footer: health pill + operator identity." },
+      { "name": "PageHeader", "desc": "54–56px bar: title + mono subtitle; right-aligned actions (search ⌘K, time range, primary button). On 8b: breadcrumb + breed chip + exposed count + Discard/Save." },
+      { "name": "StatTile", "desc": "Card (#1c1714, border #2e2620, r9): mono uppercase label, 26px semibold value, trailing accent, footer (bar segments / sparkline / sub text)." },
+      { "name": "DataTable", "desc": "Bordered card; header row #1c1714 mono-uppercase; body rows via display:grid contents, dividers #241d19. Right-aligned numerics. Used by Flocks, Keys, Usage." },
+      { "name": "StatusPill", "desc": "Inline dot + label — Healthy(sage)/Unreachable(terracotta, mmpulse)/active/revoked." },
+      { "name": "BreedChip", "desc": "Mono 10px pill: ollama = sage tint, comfyui = warm-brown tint." },
+      { "name": "Drawer", "desc": "Right sheet 420px over scrim rgba(10,8,7,.55). Header + form + sticky footer (Cancel / primary). Flocks connect (9a)." },
+      { "name": "Modal", "desc": "Centered 520px card over scrim rgba(10,8,7,.62), r12, heavy shadow. Icon header, body, footer. Key shown-once (9d)." },
+      { "name": "FormField", "desc": "Mono 11px label + control (border #3a2f28, bg #141110, r7). Variants: text, url (mono), select (⌄), segmented toggle (Yes/No), switch." },
+      { "name": "Switch", "desc": "30x17 track; on = sage, off = #39302a; 13px knob (#141110)." },
+      { "name": "NodeCard", "desc": "paramSchema editor (8b) graph node: header (mono #id in warm-brown + class_type + count/label), input rows with Locked/Exposed chip + promoted name. Selected node = sage border + 3px sage glow ring." },
+      { "name": "ParamInspector", "desc": "Right panel of 8b: type chip, Display name, Max length / min-max, Required segmented toggle." },
+      { "name": "ConsumerFormPreview", "desc": "Live caller contract card: Prompt textarea + char counter, Steps slider (sage fill + knob), Seed auto note, Run + View JSON." },
+      { "name": "RouteClassRow", "desc": "Fence (9c): label + description + switch. mutate variant = terracotta-tint, 🔒, forced off, explanatory copy." },
+      { "name": "AllowlistChip", "desc": "Model chip (sage tint) with ✕ remove; dashed '+ add' chip." },
+      { "name": "BlastRadiusCard", "desc": "Sage-tint summary card: plain-language recap of what callers can do." },
+      { "name": "BarChart", "desc": "Usage (10a): flex bars, sage default, warm-brown to flag an anomalous bucket, mono weekday labels." },
+      { "name": "AuditRow", "desc": "time (mono) + action dot + action verb (colored) + target + actor + expand ⌄. Expanded = mono detail card (actor/target/reason/ip). Day group headers." },
+      { "name": "SecretReveal", "desc": "Shown-once (9d): warning banner (terracotta), mono key + Copy, scope chips (✓ granted), 'I've saved it' checkbox gating Done." }
+    ],
+    "metaBoy": [
+      { "name": "DeviceShell", "desc": "Plum gradient body, asymmetric radius (22/22/84/22), inset highlights + drop shadow. Top ridge label strip (dashed rule)." },
+      { "name": "Bezel", "desc": "Dark inner frame (r 14/14/40/14) with power LED (sage ok / terracotta alarm) + model text." },
+      { "name": "Lcd", "desc": "Radial pea-green surface + glow ring; children painted in ink #5f3336; scanline + vignette overlays at z-index 2." },
+      { "name": "LcdTitleStrip", "desc": "Solid ink bar, Press Start 2P title, cream text, right-side status glyphs (♥2/3, credits, clock)." },
+      { "name": "LcdPanel", "desc": "2px hard-ink bordered region with ink header bar; body rows divided by grid-line #b0a95e. No radius (pixel look)." },
+      { "name": "PixelButton", "desc": "Ink-filled or outlined block, Press Start 2P label, optional text glow. A/B primary/secondary." },
+      { "name": "LcdSlider", "desc": "Bordered track, sage fill, square ink knob, min/max labels." },
+      { "name": "UploadSlot", "desc": "Dashed ink dropzone (diagonal hatch), ⇪ glyph; uploaded chip with sage ✓." },
+      { "name": "Dpad / ABButtons / Speaker", "desc": "Decorative controls: recessed #221619 cross, warm-brown radial A/B (rotated -25deg), 4 speaker slats." },
+      { "name": "RejectionToast", "desc": "Error state (7b): terracotta-accented card over dimmed+scrimmed editor; payload rows with ✓/✕, reason, actions." }
+    ]
+  },
+
+  "screens": [
+    { "id": "8a", "theme": "operator", "name": "Dashboard", "canvas": {"w":1200,"h":760}, "screenshot": "screenshots/8a-operator-dashboard.png",
+      "components": ["AppSidebar(full)","PageHeader(+MetaBoy toggle pill)","StatTile x4","DataTable(Flocks)","list(Top keys)","AuditRow(compact, Recent activity)"] },
+    { "id": "8b", "theme": "operator", "hero": true, "name": "paramSchema editor", "canvas": {"w":1200,"h":820}, "screenshot": "screenshots/8b-operator-paramschema-editor.png",
+      "components": ["PageHeader(breadcrumb+breed+exposedCount+Save)","NodeCard x6 (graph)","ParamInspector(#6.text)","ConsumerFormPreview"],
+      "graph": "nodes #4 CheckpointLoaderSimple(ckpt 🔒), #6 CLIPTextEncode(text ✳ Prompt, selected), #7 CLIPTextEncode(negative 🔒), #3 KSampler(seed ✳ auto, steps ✳ 10-40, cfg/sampler 🔒), #5 EmptyLatentImage(🔒 cap 1024), #9 SaveImage(🔒)" },
+    { "id": "9a", "theme": "operator", "name": "Flocks", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/9a-flocks.png",
+      "components": ["AppSidebar(rail)","filter","primary '+ Connect flock'","DataTable(name/breed/baseUrl/health/⋯)","Drawer(Connect a flock: name, breed picker, baseUrl, upstreamAuth, TLS switch, Test connection result, footer)"] },
+    { "id": "9b", "theme": "operator", "name": "Paddocks", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/9b-paddocks.png",
+      "components": ["list of paddock cards (name, /p/:slug chip, status switch, flock->fence->req summary; disabled dimmed)","New paddock panel: Flock select, Name, Slug field with live 'Public URL' preview card, Create"] },
+    { "id": "9c", "theme": "operator", "name": "Fence editor (Ollama)", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/9c-fence-editor.png",
+      "components": ["PageHeader(/p/chat + breed)","RouteClassRow read(on)/infer(on)/mutate(LOCKED,terracotta,🔒)","AllowlistChip llama3.2:1b, phi3, +add","FormField rate limit (60/min), quota (100k tokens_out/day)","BlastRadiusCard"] },
+    { "id": "9d", "theme": "operator", "name": "API Keys + shown-once", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/9d-api-keys-shown-once.png",
+      "components": ["DataTable(name/prefix/status/lastUsed/expires; revoked row dimmed)","Modal SecretReveal: warning banner, full key + Copy, scope chips (/p/chat ✓, /p/art-gen ✓, /p/internal —), 'I've saved it' gate, Done"] },
+    { "id": "10a", "theme": "operator", "name": "Usage", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/10a-usage.png",
+      "components": ["filters (key/paddock/range)","BarChart tokens_out 7d","DataTable key x paddock x [tokens_in, tokens_out, jobs, gpu_ms, images]"] },
+    { "id": "10b", "theme": "operator", "name": "Audit log", "canvas": {"w":1180,"h":720}, "screenshot": "screenshots/10b-audit-log.png",
+      "components": ["filters (action/actor)","day group headers","AuditRow (time, action dot+verb, target, actor, expand) with one expanded detail card"] },
+    { "id": "11a", "theme": "metaBoy", "name": "Consumer playground /p/art-gen", "canvas": {"w":1080,"h":760}, "screenshot": "screenshots/11a-metaboy-playground.png",
+      "components": ["DeviceShell","Bezel","Lcd","LcdTitleStrip(ART GEN + credits)","form: Prompt textarea+counter, LcdSlider Steps, Seed random row, PixelButton GENERATE","result LcdPanel (dithered placeholder + ✓ RENDERED + SAVE)","fence footer 'prompt & steps only'","Dpad/AB/Speaker"],
+      "note": "This is the live version of 8b's ConsumerFormPreview. Result tile is a placeholder — swap in a real render." },
+    { "id": "5a", "theme": "metaBoy", "name": "Dashboard (MetaBoy reference)", "canvas": {"w":1180,"h":788}, "screenshot": "screenshots/5a-metaboy-dashboard.png", "status": "exploration/reference — superseded by 8a for the admin default" },
+    { "id": "6a", "theme": "metaBoy", "name": "paramSchema editor (MetaBoy reference)", "canvas": {"w":1180,"h":840}, "screenshot": "screenshots/6a-metaboy-paramschema-editor.png", "status": "exploration/reference — superseded by 8b" },
+    { "id": "7a", "theme": "metaBoy", "name": "Editor empty (reference)", "canvas": {"w":720,"h":560}, "screenshot": "screenshots/7a-editor-empty.png", "status": "reference; operator-mode equivalent is the empty state of 8b" },
+    { "id": "7b", "theme": "metaBoy", "name": "Editor error — undeclared param (reference)", "canvas": {"w":720,"h":560}, "screenshot": "screenshots/7b-editor-error.png", "status": "reference; the rejection is real (unknown param -> 400). In operator mode render as a toast/audit entry." },
+    { "id": "7c", "theme": "metaBoy", "name": "Editor image param (reference)", "canvas": {"w":720,"h":560}, "screenshot": "screenshots/7c-editor-image-param.png", "status": "reference; image ParamSpec + upload slot" }
+  ],
+
+  "state": {
+    "paramSchemaEditor": {
+      "graph": "Record<nodeId, {class_type, inputs}> parsed from graphJson",
+      "paramSchema": "ParamSpec[]",
+      "selection": "{nodeId, input} | null",
+      "derived": ["exposedCount", "totalInputs", "per-input status"]
+    },
+    "flocks": "Flock[] with live healthOk; drawer form {name, breed, baseUrl, upstreamAuth?, tlsTrust}; testConnection() -> {ok, latencyMs, version}",
+    "paddocks": "Paddock[]; create form {flockId, name, slug}; derived publicUrl = origin + '/p/' + slug",
+    "fence": "{ constraintJson: {routeClasses, models}, rateLimit, quota }; mutate always false+disabled",
+    "apiKeys": "ApiKey[]; create returns full key ONCE {plaintext, scope: paddockId[]}; store hash only",
+    "usage": "rows keyed by (keyId, paddockId, dimension) over time buckets",
+    "audit": "AuditEvent[] {ts, action, actor, target, detail}"
+  },
+
+  "interactions": [
+    { "action": "template.ingest", "intent": "Paste/upload raw ComfyUI graphJson; parse to nodes. Nothing exposed until promoted." },
+    { "action": "param.expose", "control": "A / Expose", "intent": "Promote selected input to a ParamSpec (type inferred: string->text, number->number, seed->seed, image->image)." },
+    { "action": "param.lock", "control": "B / Lock", "intent": "Remove ParamSpec; input reverts to locked." },
+    { "action": "param.edit", "control": "inspector", "intent": "Set name / required / max / min-max; reflects live in ConsumerFormPreview." },
+    { "action": "template.save", "control": "Save schema", "intent": "Persist paramSchema for the WorkflowTemplate." },
+    { "action": "flock.testConnection", "control": "Test connection", "intent": "Probe baseUrl+auth; show ok/latency/version or error." },
+    { "action": "flock.create", "control": "Connect flock", "intent": "Persist Flock." },
+    { "action": "paddock.create", "control": "Create", "intent": "Persist Paddock; slug drives live /p/:slug." },
+    { "action": "paddock.toggleStatus", "control": "status switch", "intent": "active <-> disabled." },
+    { "action": "fence.save", "control": "Save fence", "intent": "Persist constraintJson + rateLimit + quota. mutate stays hard-off." },
+    { "action": "key.mint", "control": "+ Mint key", "intent": "Create key; open SecretReveal once with plaintext + scope." },
+    { "action": "key.copy", "control": "Copy", "intent": "Copy plaintext; only opportunity." },
+    { "action": "key.confirmSaved", "control": "I've saved it -> Done", "intent": "Gate closing the reveal." },
+    { "action": "key.revoke", "control": "row ⋯ (destructive-confirm)", "intent": "Revoke; status -> revoked." },
+    { "action": "usage.filter", "intent": "Filter by key / paddock / time range." },
+    { "action": "audit.filter", "intent": "Filter by action / actor; expand row for detail." },
+    { "action": "playground.generate", "control": "GENERATE (11a)", "intent": "Submit promoted params to /p/:slug; render result. Consumer-facing." },
+    { "action": "paddock.setTheme", "intent": "Operator selects plain vs MetaBoy skin PER PADDOCK for its playground." },
+    { "action": "error.dismiss / error.viewAudit", "intent": "Handle the undeclared-param rejection notification." }
+  ]
+}
