@@ -86,6 +86,25 @@ describe('schema', () => {
     expect(rows[0]).toMatchObject({ id: 'prompt-1', templateId: 'tpl-a', cost: 3, metered: false })
   })
 
+  test('paddock.theme defaults to plain and accepts metaboy', async () => {
+    const db = await freshMigratedDb()
+    const [o] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
+    const [p1] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 'th-a', name: 'A' }).returning()
+    expect(p1.theme).toBe('plain')
+    const [p2] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 'th-b', name: 'B', theme: 'metaboy' }).returning()
+    expect(p2.theme).toBe('metaboy')
+  })
+
+  test('fence table allows only one fence per paddock', async () => {
+    const db = await freshMigratedDb()
+    const [o] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
+    const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 'fp', name: 'P' }).returning()
+    await db.insert(schema.fence).values({ orgId: o.id, paddockId: p.id, constraintJson: {} })
+    await expect(db.insert(schema.fence).values({ orgId: o.id, paddockId: p.id, constraintJson: {} })).rejects.toThrow()
+  })
+
   test('user.status defaults to active and accepts deactivated', async () => {
     const db = await freshMigratedDb()
     const [o] = await db.insert(schema.org).values({ name: 'o' }).returning()

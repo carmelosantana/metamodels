@@ -38,6 +38,7 @@ export const paddock = pgTable('paddock', {
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
   status: text('status').notNull().default('active'),
+  theme: text('theme').notNull().default('plain'),
   createdAt: createdAt(),
 })
 
@@ -49,7 +50,9 @@ export const fence = pgTable('fence', {
   rateLimit: jsonb('rate_limit'),
   quota: jsonb('quota'),
   createdAt: createdAt(),
-})
+}, (t) => [
+  uniqueIndex('fence_paddock').on(t.paddockId),
+])
 
 export const workflowTemplate = pgTable('workflow_template', {
   id: id(),
