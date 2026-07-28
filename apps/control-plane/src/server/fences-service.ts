@@ -8,8 +8,10 @@ import { NotFoundError } from './flocks-service'
 import { saveFenceInput } from '../lib/fence-schema'
 import { validateConstraintForBreed } from './fence-validation'
 
+export { NotFoundError }
+
 /** Load a paddock scoped to the actor's org, returning its breed. Throws NotFoundError otherwise. */
-async function paddockBreedInOrg(tx: Db, actor: Actor, paddockId: string): Promise<string> {
+export async function paddockBreedInOrg(tx: Db, actor: Actor, paddockId: string): Promise<string> {
   const rows = await tx
     .select({ breed: flock.breed })
     .from(paddock)
