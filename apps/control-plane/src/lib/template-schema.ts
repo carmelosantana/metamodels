@@ -1,12 +1,11 @@
 import { z } from 'zod'
-import type { ParamSpec, WorkflowTemplate } from '@metamodels/connectors'
+import type { ParamSpec } from '@metamodels/connectors'
+
+// graphSchema now lives in @metamodels/schema/graph (client-safe, shared). Re-exported so
+// existing importers keep their path.
+export { graphSchema } from '@metamodels/schema/graph'
 
 const targetSchema = z.object({ node: z.string().min(1), input: z.string().min(1) })
-
-/** Node graph in ComfyUI workflow-API form. Mirrors the connector's stored graph shape. */
-export const graphSchema: z.ZodType<WorkflowTemplate['graph']> = z.record(
-  z.object({ class_type: z.string().min(1), inputs: z.record(z.unknown()) }),
-) as z.ZodType<WorkflowTemplate['graph']>
 
 /** The operator's declared params. Identical in shape to the connector's ParamSpec union. */
 export const paramSpecSchema: z.ZodType<ParamSpec> = z.discriminatedUnion('type', [

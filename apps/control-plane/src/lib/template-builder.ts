@@ -1,9 +1,9 @@
 import type { WorkflowTemplate } from '@metamodels/connectors'
 import { reconstructGraph, comfyuiConstraint, type ParamSpec } from '@metamodels/connectors'
 import { templateDraftSchema, type TemplateDraft } from './template-schema'
-import { parseGraphText, graphTargets, type BuildResult } from './graph-parse'
+import { parseGraphText, graphTargets, type BuildResult } from '@metamodels/schema/graph'
 
-// The pure, client-safe parse helpers live in ./graph-parse so the editor client
+// The pure, client-safe parse helpers live in @metamodels/schema/graph so the editor client
 // can import them without pulling the connectors runtime barrel (node:crypto).
 // Re-exported here to preserve template-builder's public surface for server callers + tests.
 export { parseGraphText, graphTargets, type BuildResult }
