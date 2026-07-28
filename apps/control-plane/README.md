@@ -15,6 +15,9 @@ Multi-user seats + licensing land in Plan 5.7.
 - **Fence editor** (`/paddocks/[id]/fence`) — breed-aware policy: route classes (`mutate` permanently locked), model allowlist, rate limit, quota, and a Blast-Radius summary.
 - **Templates** (`/paddocks/[id]/templates`) — ComfyUI only: paste a workflow-API graph, bind typed params (text/seed/number/image) to node inputs, set cost, and dry-run `reconstructGraph` before saving into the Fence's `constraint_json.templates`.
 - **API Keys** (`/keys`) — mint a paddock-scoped `mm_live_` key (secret shown once), set an optional expiry and per-key rate override, and revoke keys.
+- **Dashboard** (`/`) — at-a-glance tiles (flock health, active paddocks, API keys, tokens/24h), a Flocks summary with Top keys, and recent audit activity.
+- **Usage** (`/usage`) — a `tokens_out` bar chart over the selected range and a key×paddock×dimension matrix, filterable by key/paddock/range.
+- **Audit log** (`/audit`) — day-grouped, filterable (action/actor) audit events with expandable detail.
 
 ## Architecture
 - Business logic lives in Next-free modules (`src/auth`, `src/server`, `src/lib`) tested with vitest + pglite.
