@@ -29,35 +29,42 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
   }
 
   if (data.id) {
-    const [updated] = await db
-      .update(flock)
-      .set(values)
-      .where(and(eq(flock.id, data.id), eq(flock.orgId, actor.orgId)))
-      .returning()
-    if (!updated) throw new NotFoundError(`flock ${data.id}`)
-    await writeAudit(db, {
-      orgId: actor.orgId, actor: actor.email, action: 'flock.update',
-      target: `flock:${updated.id}`, detail: { name: updated.name },
+    const id = data.id
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(flock)
+        .set(values)
+        .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
+        .returning()
+      if (!updated) throw new NotFoundError(`flock ${id}`)
+      await writeAudit(tx, {
+        orgId: actor.orgId, actor: actor.email, action: 'flock.update',
+        target: `flock:${updated.id}`, detail: { name: updated.name },
+      })
+      return updated
     })
-    return updated
   }
 
-  const [created] = await db.insert(flock).values({ orgId: actor.orgId, ...values }).returning()
-  await writeAudit(db, {
-    orgId: actor.orgId, actor: actor.email, action: 'flock.create',
-    target: `flock:${created.id}`, detail: { name: created.name, breed: created.breed },
+  return db.transaction(async (tx) => {
+    const [created] = await tx.insert(flock).values({ orgId: actor.orgId, ...values }).returning()
+    await writeAudit(tx, {
+      orgId: actor.orgId, actor: actor.email, action: 'flock.create',
+      target: `flock:${created.id}`, detail: { name: created.name, breed: created.breed },
+    })
+    return created
   })
-  return created
 }
 
 export async function deleteFlock(db: Db, actor: Actor, id: string): Promise<void> {
   requireCapability(actor, 'resource.write')
-  const [deleted] = await db
-    .delete(flock)
-    .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
-    .returning()
-  if (!deleted) throw new NotFoundError(`flock ${id}`)
-  await writeAudit(db, {
-    orgId: actor.orgId, actor: actor.email, action: 'flock.delete', target: `flock:${id}`,
+  await db.transaction(async (tx) => {
+    const [deleted] = await tx
+      .delete(flock)
+      .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
+      .returning()
+    if (!deleted) throw new NotFoundError(`flock ${id}`)
+    await writeAudit(tx, {
+      orgId: actor.orgId, actor: actor.email, action: 'flock.delete', target: `flock:${id}`,
+    })
   })
 }
