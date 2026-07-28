@@ -5,6 +5,10 @@ import { METER_DIMS } from './enums.js'
 // The single source of truth for a fence's rate-limit + quota config shapes, consumed by
 // BOTH the control-plane (fence-schema.ts) and the data-plane (config/quota.ts).
 
+// Re-export the pure meter dimensions so client components (e.g. the Usage screen) can reach
+// them without importing the server-only barrel (which pulls node:crypto via keys.ts).
+export { METER_DIMS, type MeterDim } from './enums.js'
+
 /** A fence's `rate_limit` column: a sliding window cap. `max: 0` = deny-all (both planes honor it). */
 export const rateLimitSchema = z.object({
   windowSec: z.number().int().positive(),
