@@ -6,7 +6,9 @@ import Redis from 'ioredis'
 import * as schema from '@metamodels/schema'
 import { createApp } from './app.js'
 import { buildRegistry } from './breeds.js'
-import { DrizzleConfigStore } from './config/config-store.js'
+import { DrizzleConfigStore, type ConfigStore } from './config/config-store.js'
+import { CachingConfigStore } from './config/caching-config-store.js'
+import { subscribeConfigInvalidation } from './config/config-invalidation-subscriber.js'
 import { InMemoryRateLimiter, type RateLimiter } from './ratelimit/rate-limiter.js'
 import { RedisRateLimiter } from './ratelimit/redis-rate-limiter.js'
 import { InMemoryMeterSink, type MeterSink } from './meter/meter-sink.js'
@@ -49,8 +51,19 @@ export function startServer(cfg: ServerConfig): void {
     meterSink = new InMemoryMeterSink()
   }
 
+  // Caching requires the invalidation channel: with Redis, wrap the store and subscribe to
+  // control-plane config writes on a duplicated (subscriber-mode) connection. Without Redis,
+  // there is no invalidation path, so serve config uncached to avoid staleness.
+  const baseStore = new DrizzleConfigStore(db)
+  let configStore: ConfigStore = baseStore
+  if (redis) {
+    const caching = new CachingConfigStore(baseStore)
+    subscribeConfigInvalidation(redis.duplicate(), caching)
+    configStore = caching
+  }
+
   const { app } = createApp({
-    configStore: new DrizzleConfigStore(db),
+    configStore,
     rateLimiter,
     meterSink,
     registry: buildRegistry(),
