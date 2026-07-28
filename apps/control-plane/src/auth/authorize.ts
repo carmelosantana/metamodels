@@ -1,4 +1,6 @@
-export type Role = 'admin' | 'member' | 'viewer'
+import { USER_ROLES, type UserRole } from '@metamodels/schema'
+
+export type Role = UserRole
 export type Capability = 'read' | 'resource.write' | 'user.manage' | 'license.manage'
 
 export interface Actor {
@@ -8,11 +10,11 @@ export interface Actor {
   role: Role
 }
 
-const MATRIX: Record<Role, Record<Capability, boolean>> = {
+const MATRIX = {
   admin: { read: true, 'resource.write': true, 'user.manage': true, 'license.manage': true },
   member: { read: true, 'resource.write': true, 'user.manage': false, 'license.manage': false },
   viewer: { read: true, 'resource.write': false, 'user.manage': false, 'license.manage': false },
-}
+} satisfies Record<Role, Record<Capability, boolean>>
 
 export class ForbiddenError extends Error {
   readonly capability: Capability
@@ -32,5 +34,5 @@ export function requireCapability(user: Actor, action: Capability): void {
 }
 
 export function isRole(v: unknown): v is Role {
-  return v === 'admin' || v === 'member' || v === 'viewer'
+  return typeof v === 'string' && (USER_ROLES as readonly string[]).includes(v)
 }
