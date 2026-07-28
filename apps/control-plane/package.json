@@ -13,6 +13,7 @@
     "@metamodels/connectors": "workspace:*",
     "@metamodels/schema": "workspace:*",
     "drizzle-orm": "^0.45.2",
+    "ioredis": "5.4.2",
     "next": "16.2.0",
     "postgres": "^3.4.0",
     "react": "19.2.0",
