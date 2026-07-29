@@ -23,6 +23,18 @@ export async function login(_prev: unknown, formData: FormData): Promise<{ error
     return { error: result.reason === 'deactivated' ? 'This account is deactivated.' : 'Invalid email or password.' }
   }
   await setSessionCookie(result.actor)
+  // Best-effort license re-validation on login (offline grace covers any failure). Never blocks login.
+  try {
+    if (process.env.LICENSE_KEY_SECRET) {
+      const { revalidateLicense } = await import('../../server/license-service')
+      const { LemonSqueezyClient } = await import('../../server/ls-client')
+      await revalidateLicense(getDb(), result.actor.orgId, {
+        ls: new LemonSqueezyClient(), secret: process.env.LICENSE_KEY_SECRET, nowMs: Date.now(),
+      })
+    }
+  } catch {
+    // ignore — login must never fail on license revalidation
+  }
   redirect('/')
 }
 
