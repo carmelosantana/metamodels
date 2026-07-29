@@ -5,6 +5,7 @@ import { requireCapability, type Actor, type Role } from '../auth/authorize'
 import { writeAudit } from './audit'
 import { NotFoundError } from './flocks-service'
 import { countActiveUsers, countPendingInvites } from './seats'
+import { acquireOrgLock } from './org-lock'
 
 export { NotFoundError }
 
@@ -56,6 +57,7 @@ async function otherActiveAdmins(db: Db, orgId: string, exceptId: string): Promi
 export async function changeUserRole(db: Db, actor: Actor, userId: string, role: Role): Promise<void> {
   requireCapability(actor, 'user.manage')
   await db.transaction(async (tx) => {
+    await acquireOrgLock(tx, actor.orgId)
     const [target] = await tx.select().from(user).where(and(eq(user.id, userId), eq(user.orgId, actor.orgId)))
     if (!target) throw new NotFoundError(`user ${userId}`)
     // Demoting the last active admin away from 'admin' would strand the org with no admin.
@@ -76,6 +78,7 @@ export async function setUserStatus(
   requireCapability(actor, 'user.manage')
   if (status === 'deactivated' && userId === actor.id) throw new SelfActionError()
   await db.transaction(async (tx) => {
+    await acquireOrgLock(tx, actor.orgId)
     // Actor standing: only an ACTIVE member of the org may manage user status. A deactivated
     // acting user has no standing, so the target is not found from their context. (In production
     // getCurrentActor blocks deactivated users at auth; this is defense-in-depth within the tx.)

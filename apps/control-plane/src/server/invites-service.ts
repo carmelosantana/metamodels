@@ -8,6 +8,7 @@ import { hashPassword } from '../auth/password'
 import { writeAudit } from './audit'
 import { NotFoundError, SeatLimitError } from './users-service'
 import { countActiveUsers, countPendingInvites } from './seats'
+import { acquireOrgLock } from './org-lock'
 
 export { NotFoundError, SeatLimitError }
 
@@ -47,6 +48,7 @@ export async function inviteUser(
   const tokenHash = hashInviteToken(token)
 
   return db.transaction(async (tx) => {
+    await acquireOrgLock(tx, actor.orgId)
     const active = await countActiveUsers(tx, actor.orgId)
     const pending = await countPendingInvites(tx, actor.orgId, nowMs)
     if (active + pending >= seatLimit) throw new SeatLimitError()
