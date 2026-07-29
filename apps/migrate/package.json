@@ -1,0 +1,15 @@
+{
+  "name": "@metamodels/migrate",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "start": "tsx src/index.ts" },
+  "dependencies": {
+    "@metamodels/schema": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

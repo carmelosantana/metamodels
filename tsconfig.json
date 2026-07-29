@@ -5,6 +5,7 @@
     { "path": "packages/connectors" },
     { "path": "apps/data-plane" },
     { "path": "apps/worker" },
+    { "path": "apps/migrate" },
     { "path": "apps/control-plane" }
   ]
 }
