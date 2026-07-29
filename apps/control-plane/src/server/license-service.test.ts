@@ -10,11 +10,11 @@ const NOW = 1_800_000_000_000
 const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin' })
 
 /** A fake LS built from a per-endpoint script (throw to simulate a transport error). */
-function fakeLs(script: { activate?: LsResult; validate?: LsResult | (() => never); deactivate?: { deactivated: boolean } }): LemonSqueezyClient {
+function fakeLs(script: { activate?: LsResult; validate?: LsResult | (() => never); deactivate?: { deactivated: boolean } | (() => never) }): LemonSqueezyClient {
   return {
     activate: async () => script.activate!,
     validate: async () => { const v = script.validate; if (typeof v === 'function') return v(); return v! },
-    deactivate: async () => script.deactivate ?? { deactivated: true },
+    deactivate: async () => { const d = script.deactivate; if (typeof d === 'function') return d(); return d ?? { deactivated: true } },
   } as unknown as LemonSqueezyClient
 }
 
@@ -62,12 +62,14 @@ describe('license-service', () => {
       validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
     })
     await activateLicense(db, admin(o.id), 'K', 'box', { ls: okLs, secret: SECRET, nowMs: NOW })
+    const graceAtActivation = (await getEntitlement(db, o.id))?.graceUntil?.getTime()
 
     const expiredLs = fakeLs({ validate: { valid: false, status: 'expired', instanceId: 'i', variantName: 'Team 5' } })
     await revalidateLicense(db, o.id, { ls: expiredLs, secret: SECRET, nowMs: NOW + 1000 })
     const v = await getEntitlement(db, o.id)
     expect(v?.status).toBe('expired')
-    // graceUntil is unchanged from activation, so seats stay licensed until it lapses, then drop.
+    // graceUntil is unchanged from activation (not reset to nowMs), so seats stay licensed until it lapses, then drop.
+    expect(v?.graceUntil?.getTime()).toBe(graceAtActivation)
   })
 
   test('deactivateLicense clears the entitlement even if LS deactivate fails', async () => {
@@ -77,7 +79,7 @@ describe('license-service', () => {
       validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
     })
     await activateLicense(db, admin(o.id), 'K', 'box', { ls: okLs, secret: SECRET, nowMs: NOW })
-    const downLs = fakeLs({ deactivate: { deactivated: false } })
+    const downLs = fakeLs({ deactivate: () => { throw new Error('down') } })
     await deactivateLicense(db, admin(o.id), { ls: downLs, secret: SECRET, nowMs: NOW + 5 })
     expect(await getEntitlement(db, o.id)).toBeNull()
   })
