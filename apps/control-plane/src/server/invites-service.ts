@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { and, asc, eq, gt, isNull } from 'drizzle-orm'
 import { z } from 'zod'
-import { invite, USER_ROLES } from '@metamodels/schema'
+import { invite, user, USER_ROLES } from '@metamodels/schema'
 import type { Db } from './db'
-import { requireCapability, type Actor } from '../auth/authorize'
+import { isRole, requireCapability, type Actor, type Role } from '../auth/authorize'
+import { hashPassword } from '../auth/password'
 import { writeAudit } from './audit'
 import { NotFoundError, SeatLimitError } from './users-service'
 import { countActiveUsers, countPendingInvites } from './seats'
@@ -87,5 +88,48 @@ export async function revokeInvite(db: Db, actor: Actor, id: string): Promise<vo
     await writeAudit(tx, {
       orgId: actor.orgId, actor: actor.email, action: 'invite.revoke', target: `invite:${id}`,
     })
+  })
+}
+
+export class InviteError extends Error {
+  readonly reason: 'invalid' | 'expired' | 'accepted'
+  constructor(reason: 'invalid' | 'expired' | 'accepted') {
+    super(`invite ${reason}`)
+    this.name = 'InviteError'
+    this.reason = reason
+  }
+}
+
+const MIN_PASSWORD_LEN = 8
+
+export async function acceptInvite(db: Db, token: string, password: string, nowMs: number): Promise<Actor> {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LEN) {
+    throw new Error(`password must be at least ${MIN_PASSWORD_LEN} characters`)
+  }
+  const tokenHash = hashInviteToken(token)
+  const [inv] = await db.select().from(invite).where(eq(invite.tokenHash, tokenHash)).limit(1)
+  if (!inv) throw new InviteError('invalid')
+  if (inv.acceptedAt) throw new InviteError('accepted')
+  if (inv.expiresAt.getTime() <= nowMs) throw new InviteError('expired')
+  const role: Role = isRole(inv.role) ? inv.role : 'viewer'
+  const passwordHash = await hashPassword(password)
+
+  return db.transaction(async (tx) => {
+    // Re-check acceptance inside the tx so two concurrent accepts of the same token can't both win.
+    const [locked] = await tx.select().from(invite).where(and(eq(invite.id, inv.id), isNull(invite.acceptedAt)))
+    if (!locked) throw new InviteError('accepted')
+
+    const [u] = await tx.insert(user).values({
+      orgId: inv.orgId, email: inv.email, passwordHash, role, status: 'active',
+    }).returning()
+
+    await tx.update(invite).set({ acceptedAt: new Date(nowMs) }).where(eq(invite.id, inv.id))
+
+    await writeAudit(tx, {
+      orgId: inv.orgId, actor: u.email, action: 'user.accept',
+      target: `user:${u.id}`, detail: { role, invite: inv.id },
+    })
+
+    return { id: u.id, orgId: u.orgId, email: u.email, role }
   })
 }

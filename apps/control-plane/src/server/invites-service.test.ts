@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import { inviteUser, listPendingInvites, revokeInvite, hashInviteToken, SeatLimitError, NotFoundError } from './invites-service'
+import { acceptInvite, InviteError } from './invites-service'
+import { verifyPassword } from '../auth/password'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 const NOW = 1_800_000_000_000
@@ -72,5 +74,58 @@ describe('invites-service', () => {
     expect(audits.length).toBe(1)
 
     await expect(revokeInvite(db, admin, created.id)).rejects.toThrow(NotFoundError) // already gone
+  })
+})
+
+describe('invites-service acceptInvite', () => {
+  test('accepts a valid invite: creates an active user with the invited role + hashed password, marks accepted', async () => {
+    const db = await freshDb()
+    const o = await seedOrg(db)
+    const admin = await seedAdminUser(db, o.id)
+    const created = await inviteUser(db, admin, { email: 'new@x.io', role: 'member' }, 5, NOW)
+
+    const actor = await acceptInvite(db, created.token, 'hunter2pass', NOW + 1000)
+    expect(actor.email).toBe('new@x.io')
+    expect(actor.role).toBe('member')
+    expect(actor.orgId).toBe(o.id)
+
+    const [u] = await db.select().from(schema.user).where(eq(schema.user.email, 'new@x.io'))
+    expect(u.status).toBe('active')
+    expect(u.role).toBe('member')
+    expect(await verifyPassword('hunter2pass', u.passwordHash)).toBe(true)
+    expect(u.passwordHash).not.toContain('hunter2pass')
+
+    const [inv] = await db.select().from(schema.invite).where(eq(schema.invite.id, created.id))
+    expect(inv.acceptedAt).not.toBeNull()
+
+    const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'user.accept'))
+    expect(audits.length).toBe(1)
+  })
+
+  test('rejects invalid, expired, and already-accepted tokens', async () => {
+    const db = await freshDb()
+    const o = await seedOrg(db)
+    const admin = await seedAdminUser(db, o.id)
+
+    await expect(acceptInvite(db, 'not-a-real-token', 'pw12345678', NOW)).rejects.toThrow(InviteError)
+
+    const created = await inviteUser(db, admin, { email: 'e@x.io', role: 'member' }, 5, NOW)
+    // expired: nowMs beyond the 7-day TTL
+    await expect(acceptInvite(db, created.token, 'pw12345678', NOW + 8 * 24 * 60 * 60 * 1000)).rejects.toThrow(InviteError)
+
+    const good = await inviteUser(db, admin, { email: 'g@x.io', role: 'member' }, 5, NOW)
+    await acceptInvite(db, good.token, 'pw12345678', NOW + 1000)
+    // second accept of the same token → already accepted
+    await expect(acceptInvite(db, good.token, 'pw12345678', NOW + 2000)).rejects.toThrow(InviteError)
+  })
+
+  test('rejects a too-short password before creating anything', async () => {
+    const db = await freshDb()
+    const o = await seedOrg(db)
+    const admin = await seedAdminUser(db, o.id)
+    const created = await inviteUser(db, admin, { email: 'p@x.io', role: 'member' }, 5, NOW)
+    await expect(acceptInvite(db, created.token, 'short', NOW + 1000)).rejects.toThrow()
+    const users = await db.select().from(schema.user).where(eq(schema.user.email, 'p@x.io'))
+    expect(users.length).toBe(0) // nothing created
   })
 })
