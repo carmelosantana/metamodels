@@ -30,6 +30,20 @@ export const invite = pgTable('invite', {
   createdAt: createdAt(),
 })
 
+export const entitlement = pgTable('entitlement', {
+  id: id(),
+  orgId: uuid('org_id').notNull().unique().references(() => org.id, { onDelete: 'cascade' }),
+  licenseKeyEnc: text('license_key_enc').notNull(),
+  licenseLast4: text('license_last4').notNull(),
+  instanceId: text('instance_id'),
+  status: text('status').notNull(),
+  seats: integer('seats').notNull().default(1),
+  tier: text('tier'),
+  lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
+  graceUntil: timestamp('grace_until', { withTimezone: true }),
+  createdAt: createdAt(),
+})
+
 export const flock = pgTable('flock', {
   id: id(),
   orgId: uuid('org_id').notNull().references(() => org.id, { onDelete: 'cascade' }),
