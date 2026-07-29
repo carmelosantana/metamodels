@@ -2,12 +2,15 @@ import { and, count, eq, gt, isNull } from 'drizzle-orm'
 import { invite, user } from '@metamodels/schema'
 import type { Db } from './db'
 import { requireCapability, type Actor } from '../auth/authorize'
+import { getEntitlement, resolveEntitlementSeats } from './entitlement-service'
 
 /** Free/AGPL tier: one operator seat. Plan 5.7b rewrites getSeatLimit to read the entitlement. */
 export const BASE_SEATS = 1
 
-export async function getSeatLimit(_db: Db, _orgId: string): Promise<number> {
-  return BASE_SEATS
+export async function getSeatLimit(db: Db, orgId: string, nowMs: number): Promise<number> {
+  const e = await getEntitlement(db, orgId)
+  if (!e) return BASE_SEATS
+  return resolveEntitlementSeats({ status: e.status, seats: e.seats, graceUntil: e.graceUntil }, nowMs)
 }
 
 export async function countActiveUsers(db: Db, orgId: string): Promise<number> {

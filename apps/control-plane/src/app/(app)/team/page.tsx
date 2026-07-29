@@ -9,7 +9,7 @@ export default async function TeamPage() {
   const actor = await requireCapabilityOr403('user.manage')
   const db = getDb()
   const now = Date.now()
-  const seatLimit = await getSeatLimit(db, actor.orgId)
+  const seatLimit = await getSeatLimit(db, actor.orgId, now)
   const [users, invites, usage] = await Promise.all([
     listUsers(db, actor),
     listPendingInvites(db, actor, now),

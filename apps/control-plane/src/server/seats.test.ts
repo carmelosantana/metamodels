@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import { BASE_SEATS, getSeatLimit, countActiveUsers, countPendingInvites, seatUsage } from './seats'
+import { saveEntitlement, GRACE_MS } from './entitlement-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 const NOW = 1_800_000_000_000
@@ -21,7 +22,7 @@ describe('seats', () => {
     const db = await freshDb()
     const o = await seedOrg(db)
     expect(BASE_SEATS).toBe(1)
-    expect(await getSeatLimit(db, o.id)).toBe(1)
+    expect(await getSeatLimit(db, o.id, NOW)).toBe(1)
   })
 
   test('countActiveUsers ignores deactivated and other orgs', async () => {
@@ -57,5 +58,30 @@ describe('seats', () => {
     const o = await seedOrg(db)
     const viewer: Actor = { id: 'v', orgId: o.id, email: 'v@x.io', role: 'viewer' }
     await expect(seatUsage(db, viewer, 1, NOW)).rejects.toThrow(ForbiddenError)
+  })
+})
+
+const SECRET = 'seats-test-secret-at-least-16-chars'
+
+describe('getSeatLimit reads the entitlement', () => {
+  const admin = (orgId: string) => ({ id: 'a', orgId, email: 'a@x.io', role: 'admin' as const })
+
+  test('no entitlement → BASE_SEATS (1)', async () => {
+    const db = await freshDb(); const o = await seedOrg(db)
+    expect(await getSeatLimit(db, o.id, NOW)).toBe(1)
+  })
+
+  test('active entitlement → its seats; expired past grace → base', async () => {
+    const db = await freshDb(); const o = await seedOrg(db)
+    await saveEntitlement(db, admin(o.id), {
+      licenseKey: 'K', instanceId: 'i', status: 'active', seats: 5, tier: 'Team 5',
+      lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS),
+    }, NOW, SECRET)
+    expect(await getSeatLimit(db, o.id, NOW)).toBe(5)
+
+    // Simulate a definitive expiry with grace already lapsed.
+    const { updateValidation } = await import('./entitlement-service')
+    await updateValidation(db, o.id, { status: 'expired', seats: 5, instanceId: 'i', graceUntil: new Date(NOW - 1) }, NOW)
+    expect(await getSeatLimit(db, o.id, NOW)).toBe(1)
   })
 })

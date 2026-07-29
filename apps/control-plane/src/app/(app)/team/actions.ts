@@ -15,7 +15,7 @@ export async function inviteUserAction(
   try {
     requireCapability(actor, 'user.manage')
     const db = getDb()
-    const seatLimit = await getSeatLimit(db, actor.orgId)
+    const seatLimit = await getSeatLimit(db, actor.orgId, Date.now())
     const created = await inviteUser(db, actor, {
       email: String(fd.get('email') ?? '').trim(),
       role: String(fd.get('role') ?? 'member'),
@@ -59,7 +59,7 @@ export async function setStatusAction(fd: FormData): Promise<{ error?: string }>
     requireCapability(actor, 'user.manage')
     const db = getDb()
     const status = String(fd.get('status') ?? '') === 'active' ? 'active' : 'deactivated'
-    const seatLimit = await getSeatLimit(db, actor.orgId)
+    const seatLimit = await getSeatLimit(db, actor.orgId, Date.now())
     await setUserStatus(db, actor, String(fd.get('id')), status, seatLimit, Date.now())
     revalidatePath('/team')
     return {}
