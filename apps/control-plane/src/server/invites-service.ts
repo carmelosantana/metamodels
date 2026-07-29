@@ -12,6 +12,13 @@ import { acquireOrgLock } from './org-lock'
 
 export { NotFoundError, SeatLimitError }
 
+export class DuplicateInviteError extends Error {
+  constructor(email: string) {
+    super(`already invited or a member: ${email}`)
+    this.name = 'DuplicateInviteError'
+  }
+}
+
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const inviteInput = z.object({
@@ -52,6 +59,12 @@ export async function inviteUser(
     const active = await countActiveUsers(tx, actor.orgId)
     const pending = await countPendingInvites(tx, actor.orgId, nowMs)
     if (active + pending >= seatLimit) throw new SeatLimitError()
+
+    const existingUser = await tx.select({ id: user.id }).from(user)
+      .where(and(eq(user.orgId, actor.orgId), eq(user.email, data.email), eq(user.status, 'active'))).limit(1)
+    const existingInvite = await tx.select({ id: invite.id }).from(invite)
+      .where(and(eq(invite.orgId, actor.orgId), eq(invite.email, data.email), isNull(invite.acceptedAt), gt(invite.expiresAt, new Date(nowMs)))).limit(1)
+    if (existingUser.length || existingInvite.length) throw new DuplicateInviteError(data.email)
 
     const [row] = await tx.insert(invite).values({
       orgId: actor.orgId,

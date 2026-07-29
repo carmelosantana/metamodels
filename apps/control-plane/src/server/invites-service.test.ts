@@ -129,3 +129,21 @@ describe('invites-service acceptInvite', () => {
     expect(users.length).toBe(0) // nothing created
   })
 })
+
+import { DuplicateInviteError } from './invites-service'
+
+describe('inviteUser duplicate guard', () => {
+  test('rejects an email that already has a pending invite', async () => {
+    const db = await freshDb(); const o = await seedOrg(db)
+    const adminA = await seedAdminUser(db, o.id)
+    await inviteUser(db, adminA, { email: 'dup@x.io', role: 'member' }, 5, NOW)
+    await expect(inviteUser(db, adminA, { email: 'dup@x.io', role: 'member' }, 5, NOW)).rejects.toThrow(DuplicateInviteError)
+  })
+
+  test('rejects an email that already belongs to an active user', async () => {
+    const db = await freshDb(); const o = await seedOrg(db)
+    const adminA = await seedAdminUser(db, o.id)
+    await db.insert(schema.user).values({ orgId: o.id, email: 'taken@x.io', passwordHash: 'scrypt$x$y', role: 'member', status: 'active' })
+    await expect(inviteUser(db, adminA, { email: 'taken@x.io', role: 'member' }, 5, NOW)).rejects.toThrow(DuplicateInviteError)
+  })
+})
