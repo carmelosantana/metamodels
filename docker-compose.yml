@@ -46,6 +46,9 @@ services:
       REDIS_URL: ${REDIS_URL}
       SESSION_SECRET: ${SESSION_SECRET}
       LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET}
+      # Consumed only by `pnpm seed` (first-run admin); harmlessly unused by `next start`.
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD}
       NODE_ENV: production
     ports:
       - "3000:3000"
@@ -72,6 +75,8 @@ services:
       REDIS_URL: ${REDIS_URL}
       PORT: ${PORT}
     ports:
+      # PORT is effectively pinned to 8787: the container listens on env.PORT, but this
+      # mapping and the healthcheck URL below hardcode 8787 — change all three together.
       - "8787:8787"
     # So the data-plane can reach an Ollama/ComfyUI running on the host (set the Flock URL
     # to http://host.docker.internal:11434 etc. in the control-plane UI).
