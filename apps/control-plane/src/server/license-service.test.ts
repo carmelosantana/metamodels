@@ -40,6 +40,17 @@ describe('license-service', () => {
     expect(await getEntitlement(db, o.id)).toBeNull()
   })
 
+  test('activateLicense gates on the confirming validate: activate ok but validate invalid stores nothing', async () => {
+    const db = await freshDb(); const o = await seedOrg(db)
+    const ls = fakeLs({
+      activate: { valid: true, status: 'active', instanceId: 'inst_1', variantName: 'Team 5' },
+      validate: { valid: false, status: 'inactive', instanceId: 'inst_1', variantName: 'Team 5' },
+    })
+    const r = await activateLicense(db, admin(o.id), 'LICENSE-KEY', 'my-box', { ls, secret: SECRET, nowMs: NOW })
+    expect(r.ok).toBe(false)
+    expect(await getEntitlement(db, o.id)).toBeNull()
+  })
+
   test('revalidate: a transport error keeps the last-good state (offline grace)', async () => {
     const db = await freshDb(); const o = await seedOrg(db)
     const okLs = fakeLs({

@@ -1,5 +1,8 @@
 export type LsFetch = (url: string, init: RequestInit) => Promise<Response>
 
+/** Bounded per-request timeout so a hanging LS endpoint fails fast (on-login revalidation awaits it). */
+const TIMEOUT_MS = 5000
+
 export interface LsResult {
   valid: boolean
   status: string
@@ -31,6 +34,7 @@ export class LemonSqueezyClient {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
       body,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     })
     return (await res.json()) as LsBody
   }

@@ -43,4 +43,12 @@ describe('LemonSqueezyClient', () => {
     const client = new LemonSqueezyClient({ fetchImpl })
     await expect(client.validate('K', 'inst_123')).rejects.toThrow('ECONNREFUSED')
   })
+
+  test('each request carries a bounded AbortSignal timeout', async () => {
+    const fetchImpl = vi.fn<LsFetch>().mockResolvedValue(jsonResponse({ valid: true, license_key: { status: 'active' } }))
+    const client = new LemonSqueezyClient({ fetchImpl })
+    await client.validate('LICENSE-KEY', 'inst_123')
+    const [, init] = fetchImpl.mock.calls[0]
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
 })

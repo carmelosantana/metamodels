@@ -30,6 +30,7 @@ export async function activateLicense(
     // Confirm + read authoritative status/variant.
     res = await deps.ls.validate(licenseKey, activated.instanceId)
     res = { ...res, instanceId: res.instanceId ?? activated.instanceId }
+    if (!res.valid) return { ok: false, error: 'License key is not valid.' }
   } catch {
     return { ok: false, error: 'Could not reach the license server. Try again.' }
   }
