@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { org } from '@metamodels/schema'
-import { PG_TEST_URL, makeRealPgDb, uniqueName } from './real-pg'
-import type { Db } from '../server/db'
+import { PG_TEST_URL, makeRealPgDb, uniqueName } from './test/real-pg'
+import type { Db } from './server/db'
 
 describe.skipIf(!PG_TEST_URL)('real-pg harness', () => {
   let db: Db

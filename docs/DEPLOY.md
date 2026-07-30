@@ -56,13 +56,13 @@ docker run -d --name mm-redis -p 56379:6379 redis:7-bookworm
 export PG_TEST_URL='postgres://test:test@localhost:55432/test'
 export REDIS_TEST_URL='redis://localhost:56379'
 pnpm test                                                   # root lane (worker + pub/sub run)
-pnpm --filter @metamodels/control-plane exec vitest run     # control-plane lane (concurrency runs)
+pnpm --filter @metamodels/control-plane exec vitest run --testTimeout=30000     # control-plane lane (concurrency runs)
 docker rm -f mm-pg mm-redis
 ```
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push/PR: frozen-lockfile install → control-plane build (needed before `tsc -b`, which reads `.next/types`) → typecheck → both test lanes with `postgres:16`+`redis:7` **service containers** (so all three integration suites above execute in CI) → a `build-smoke` job that runs `scripts/smoke.sh` on the full Docker stack. `.github/workflows/zizmor.yml` statically analyzes the workflows (fails on unpinned actions / misconfig). All third-party actions are pinned to full commit SHAs.
+`.github/workflows/ci.yml` runs on every push/PR: frozen-lockfile install → apply migrations to the CI Postgres → control-plane build (needed before `tsc -b`, which reads `.next/types`) → typecheck → both test lanes with `postgres:16`+`redis:7` **service containers** (so all three integration suites above execute in CI) → a `build-smoke` job that runs `scripts/smoke.sh` on the full Docker stack. `.github/workflows/zizmor.yml` statically analyzes the workflows (fails on unpinned actions / misconfig). All third-party actions are pinned to full commit SHAs.
 
 **Operator setup:** enable branch protection on `main` requiring the `test`, `build-smoke`, and `zizmor` checks and "review from Code Owners" (so `.github/CODEOWNERS` is enforced).
 
