@@ -1,0 +1,5 @@
+# Workflow + CI changes require the operator's review — a supply-chain control-point.
+/.github/           @carmelosantana
+# The lockfile and root build config gate every dependency and CI entrypoint.
+/pnpm-lock.yaml     @carmelosantana
+/package.json       @carmelosantana

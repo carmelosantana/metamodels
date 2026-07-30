@@ -1,0 +1,18 @@
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # zizmor is a Rust CLI distributed on PyPI; pin the exact version. `pipx run` needs no cache.
+      - name: Run zizmor (workflow static analysis)
+        run: pipx run zizmor==1.28.0 --pedantic .github/workflows/
