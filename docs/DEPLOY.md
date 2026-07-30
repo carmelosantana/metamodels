@@ -39,6 +39,33 @@ Lemon Squeezy licensing (the paid seat unlock) ships with placeholders to edit f
 
 Re-validation is best-effort on login + on-demand from *Settings → Upgrade*; a 7-day offline-grace window covers transient license-server outages. (A background re-validation scheduler is Plan 6c.)
 
+## Running the integration tests
+
+Most tests run with zero setup (pglite + ioredis-mock, Docker-free). Three suites need **real** servers and are **skipped unless** their env var is set — they never run against your production data:
+
+| Suite | Env var | What it proves |
+|-------|---------|----------------|
+| `apps/worker/test/worker.test.ts` | `REDIS_TEST_URL` | worker consumer-group read→apply→ack wiring |
+| `apps/data-plane/test/config-pubsub.integration.test.ts` | `REDIS_TEST_URL` | config-invalidation pub/sub flushes the data-plane cache across connections |
+| `apps/control-plane/src/server/org-lock-concurrency.test.ts` | `PG_TEST_URL` | the per-org `FOR UPDATE` lock serializes concurrent seat/last-admin mutations |
+
+Run them locally against throwaway containers:
+```bash
+docker run -d --name mm-pg -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test -p 55432:5432 postgres:16-bookworm
+docker run -d --name mm-redis -p 56379:6379 redis:7-bookworm
+export PG_TEST_URL='postgres://test:test@localhost:55432/test'
+export REDIS_TEST_URL='redis://localhost:56379'
+pnpm test                                                   # root lane (worker + pub/sub run)
+pnpm --filter @metamodels/control-plane exec vitest run     # control-plane lane (concurrency runs)
+docker rm -f mm-pg mm-redis
+```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push/PR: frozen-lockfile install → control-plane build (needed before `tsc -b`, which reads `.next/types`) → typecheck → both test lanes with `postgres:16`+`redis:7` **service containers** (so all three integration suites above execute in CI) → a `build-smoke` job that runs `scripts/smoke.sh` on the full Docker stack. `.github/workflows/zizmor.yml` statically analyzes the workflows (fails on unpinned actions / misconfig). All third-party actions are pinned to full commit SHAs.
+
+**Operator setup:** enable branch protection on `main` requiring the `test`, `build-smoke`, and `zizmor` checks and "review from Code Owners" (so `.github/CODEOWNERS` is enforced).
+
 ## Deploy gotchas
 
 - **Trusted reverse proxy for the login throttle.** The control-plane login throttle keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
