@@ -3,7 +3,7 @@ import { requireCapability, type Actor } from '../auth/authorize'
 import { LemonSqueezyClient } from './ls-client'
 import {
   saveEntitlement, updateValidation, clearEntitlement, getEntitlement, getDecryptedKey,
-  resolveSeatsForVariant, GRACE_MS,
+  resolveSeatsForVariant, GRACE_MS, listEntitledOrgIds,
 } from './entitlement-service'
 
 export interface LicenseDeps {
@@ -75,4 +75,30 @@ export async function revalidateLicense(db: Db, orgId: string, deps: LicenseDeps
     // On a fresh valid confirmation, extend grace; on valid:false keep the existing grace clock.
     graceUntil: res.valid ? new Date(deps.nowMs + GRACE_MS) : (view.graceUntil ?? new Date(deps.nowMs)),
   }, deps.nowMs)
+}
+
+/**
+ * One scheduler pass: revalidate every entitled org's license, isolated per org so a single failure
+ * never aborts the rest. `revalidate` is injectable for testing; production uses `revalidateLicense`,
+ * whose own try/catch already turns a transport error into a no-op (grace preserves last-good state).
+ */
+export async function revalidateAllEntitlements(
+  db: Db,
+  deps: LicenseDeps,
+  revalidate: (db: Db, orgId: string, deps: LicenseDeps) => Promise<void> = revalidateLicense,
+): Promise<{ total: number; ok: number; failed: number }> {
+  const orgIds = await listEntitledOrgIds(db)
+  let ok = 0
+  let failed = 0
+  for (const orgId of orgIds) {
+    try {
+      await revalidate(db, orgId, deps)
+      ok++
+    } catch (err) {
+      failed++
+      // eslint-disable-next-line no-console
+      console.error(`revalidate failed for org ${orgId}`, err)
+    }
+  }
+  return { total: orgIds.length, ok, failed }
 }

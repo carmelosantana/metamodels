@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
-import { activateLicense, deactivateLicense, revalidateLicense } from './license-service'
+import type { Db } from './db'
+import { activateLicense, deactivateLicense, revalidateLicense, revalidateAllEntitlements } from './license-service'
 import { getEntitlement, GRACE_MS } from './entitlement-service'
 import { LemonSqueezyClient, type LsResult } from './ls-client'
 import type { Actor } from '../auth/authorize'
@@ -93,5 +94,51 @@ describe('license-service', () => {
     const downLs = fakeLs({ deactivate: () => { throw new Error('down') } })
     await deactivateLicense(db, admin(o.id), { ls: downLs, secret: SECRET, nowMs: NOW + 5 })
     expect(await getEntitlement(db, o.id)).toBeNull()
+  })
+})
+
+describe('revalidateAllEntitlements', () => {
+  const okLs = () => fakeLs({
+    activate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
+    validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
+  })
+
+  test('revalidates every entitled org and reports counts', async () => {
+    const db = await freshDb()
+    const o1 = await seedOrg(db, 'a@x.io')
+    const o2 = await seedOrg(db, 'b@x.io')
+    await activateLicense(db, admin(o1.id), 'K1', 'box1', { ls: okLs(), secret: SECRET, nowMs: NOW })
+    await activateLicense(db, admin(o2.id), 'K2', 'box2', { ls: okLs(), secret: SECRET, nowMs: NOW })
+
+    // A later pass: valid:true again → grace extends to LATER+GRACE_MS for both.
+    const LATER = NOW + 60_000
+    const res = await revalidateAllEntitlements(db, { ls: okLs(), secret: SECRET, nowMs: LATER })
+    expect(res).toEqual({ total: 2, ok: 2, failed: 0 })
+    expect((await getEntitlement(db, o1.id))?.graceUntil?.getTime()).toBe(LATER + GRACE_MS)
+    expect((await getEntitlement(db, o2.id))?.graceUntil?.getTime()).toBe(LATER + GRACE_MS)
+  })
+
+  test('one org failing does not abort the pass (per-org isolation)', async () => {
+    const db = await freshDb()
+    const o1 = await seedOrg(db, 'a@x.io')
+    const o2 = await seedOrg(db, 'b@x.io')
+    await activateLicense(db, admin(o1.id), 'K1', 'box1', { ls: okLs(), secret: SECRET, nowMs: NOW })
+    await activateLicense(db, admin(o2.id), 'K2', 'box2', { ls: okLs(), secret: SECRET, nowMs: NOW })
+
+    // Inject a revalidate stub that throws for exactly one org id.
+    const failFor = o1.id
+    const revalidate = async (_db: Db, orgId: string) => {
+      if (orgId === failFor) throw new Error('boom')
+    }
+    const res = await revalidateAllEntitlements(db, { ls: okLs(), secret: SECRET, nowMs: NOW }, revalidate)
+    expect(res.total).toBe(2)
+    expect(res.ok).toBe(1)
+    expect(res.failed).toBe(1)
+  })
+
+  test('an empty instance revalidates nothing', async () => {
+    const db = await freshDb()
+    const res = await revalidateAllEntitlements(db, { ls: okLs(), secret: SECRET, nowMs: NOW })
+    expect(res).toEqual({ total: 0, ok: 0, failed: 0 })
   })
 })
