@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: read-only by default. No id-token, no write scopes (nothing publishes here).
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: metamodels
+          POSTGRES_PASSWORD: metamodels
+          POSTGRES_DB: metamodels
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U metamodels -d metamodels"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-bookworm
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # App URL used by the migrator + any DATABASE_URL-reading code path.
+      DATABASE_URL: postgres://metamodels:metamodels@localhost:5432/metamodels
+      # Opt-in integration-test URLs — these switch the skipIf suites ON.
+      PG_TEST_URL: postgres://metamodels:metamodels@localhost:5432/metamodels
+      REDIS_TEST_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Enable corepack + pin pnpm
+        run: corepack enable && corepack prepare pnpm@11.9.0 --activate
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Apply migrations to the CI Postgres
+        # The concurrency/harness tests migrate their own handle, but the worker test and any
+        # DATABASE_URL path expect the schema present; run the same one-shot migrator the stack uses.
+        run: pnpm --filter @metamodels/migrate start
+      - name: Build control-plane (produces .next/types for typecheck)
+        run: pnpm --filter @metamodels/control-plane build
+      - name: Typecheck
+        run: pnpm -w exec tsc -b
+      - name: Root test lane (worker + data-plane integration run here)
+        run: pnpm test
+      - name: Control-plane test lane (concurrency test runs here)
+        run: pnpm --filter @metamodels/control-plane exec vitest run --testTimeout=30000
