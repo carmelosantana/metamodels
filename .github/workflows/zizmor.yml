@@ -8,11 +8,19 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on the same ref so duplicate pushes don't pile up (zizmor: concurrency-limits).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   zizmor:
+    name: zizmor
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # zizmor is a Rust CLI distributed on PyPI; pin the exact version. `pipx run` needs no cache.
       - name: Run zizmor (workflow static analysis)
         run: pipx run zizmor==1.28.0 --pedantic .github/workflows/

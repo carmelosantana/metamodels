@@ -9,13 +9,19 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on the same ref so duplicate pushes don't pile up (zizmor: concurrency-limits).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
         env:
           POSTGRES_USER: metamodels
           POSTGRES_PASSWORD: metamodels
@@ -26,7 +32,7 @@ jobs:
           --health-cmd "pg_isready -U metamodels -d metamodels"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
-        image: redis:7-bookworm
+        image: redis:7-bookworm@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
         ports:
           - 6379:6379
         options: >-
@@ -40,6 +46,8 @@ jobs:
       REDIS_TEST_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -61,10 +69,13 @@ jobs:
         run: pnpm --filter @metamodels/control-plane exec vitest run --testTimeout=30000
 
   build-smoke:
+    name: build-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # docker + docker compose are preinstalled on ubuntu-latest runners.
       - name: Provide .env for compose interpolation + container secrets
         run: cp .env.example .env
