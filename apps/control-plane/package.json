@@ -7,7 +7,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "seed": "tsx bin/seed.ts"
+    "seed": "tsx bin/seed.ts",
+    "scheduler": "tsx bin/scheduler.ts"
   },
   "dependencies": {
     "@metamodels/connectors": "workspace:*",
