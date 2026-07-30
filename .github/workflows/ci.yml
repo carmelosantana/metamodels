@@ -58,3 +58,13 @@ jobs:
         run: pnpm test
       - name: Control-plane test lane (concurrency test runs here)
         run: pnpm --filter @metamodels/control-plane exec vitest run --testTimeout=30000
+
+  build-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # docker + docker compose are preinstalled on ubuntu-latest runners.
+      - name: Provide .env for compose interpolation + container secrets
+        run: cp .env.example .env
+      - name: Smoke the full stack (build → migrate → health → teardown)
+        run: ./scripts/smoke.sh
