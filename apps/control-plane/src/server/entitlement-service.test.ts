@@ -4,7 +4,7 @@ import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import {
   getEntitlement, getDecryptedKey, saveEntitlement, updateValidation, clearEntitlement,
-  resolveSeatsForVariant, resolveEntitlementSeats, GRACE_MS,
+  resolveSeatsForVariant, resolveEntitlementSeats, GRACE_MS, listEntitledOrgIds,
 } from './entitlement-service'
 import { decryptLicenseKey } from './license-crypto'
 import type { Actor } from '../auth/authorize'
@@ -70,5 +70,19 @@ describe('entitlement-service', () => {
     expect(resolveEntitlementSeats({ status: 'expired', seats: 5, graceUntil: new Date(NOW + 1000) }, NOW)).toBe(5)
     expect(resolveEntitlementSeats({ status: 'expired', seats: 5, graceUntil: new Date(NOW - 1000) }, NOW)).toBe(1)
     expect(resolveEntitlementSeats({ status: 'expired', seats: 5, graceUntil: null }, NOW)).toBe(1)
+  })
+
+  test('listEntitledOrgIds returns every org that has an entitlement, and excludes orgs without one', async () => {
+    const db = await freshDb()
+    const o1 = await seedOrg(db, 'org-one@x.io')
+    const o2 = await seedOrg(db, 'org-two@x.io')
+    const o3 = await seedOrg(db, 'org-three@x.io') // no entitlement — must be excluded
+    const ent = { instanceId: 'i', status: 'active', seats: 5, tier: 'Team 5', lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS) }
+    await saveEntitlement(db, admin(o1.id), { ...ent, licenseKey: 'K1' }, NOW, SECRET)
+    await saveEntitlement(db, admin(o2.id), { ...ent, licenseKey: 'K2' }, NOW, SECRET)
+
+    const ids = await listEntitledOrgIds(db)
+    expect([...ids].sort()).toEqual([o1.id, o2.id].sort())
+    expect(ids).not.toContain(o3.id)
   })
 })

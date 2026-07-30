@@ -48,6 +48,14 @@ export async function getEntitlement(db: Db, orgId: string): Promise<Entitlement
   return row ?? null
 }
 
+/** Background enumerator: every org that has an entitlement row (i.e. a license key to revalidate).
+ *  Deliberately NOT org-scoped / capability-gated — it takes no actor and is only reachable from the
+ *  server-internal revalidation scheduler, never a request handler. */
+export async function listEntitledOrgIds(db: Db): Promise<string[]> {
+  const rows = await db.select({ orgId: entitlement.orgId }).from(entitlement)
+  return rows.map((r) => r.orgId)
+}
+
 /** Server-internal: decrypt the stored key for a re-validate call. Never exposed to a client. */
 export async function getDecryptedKey(db: Db, orgId: string, secret: string): Promise<string | null> {
   const [row] = await db.select({ enc: entitlement.licenseKeyEnc }).from(entitlement).where(eq(entitlement.orgId, orgId)).limit(1)
