@@ -16,6 +16,14 @@ const ibmPlexMono = IBM_Plex_Mono({
 
 export const metadata = { title: 'MetaModels', description: 'Operator console' }
 
+/**
+ * Every page renders per-request so middleware's CSP nonce can be stamped onto the script
+ * tags Next emits. A prerendered page is baked at build time with no nonce, and the
+ * `'strict-dynamic'` policy would then block its own bootstrap. Costs nothing here: every
+ * route in this console is session-scoped and already dynamic.
+ */
+export const dynamic = 'force-dynamic'
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${ibmPlexSans.variable} ${ibmPlexMono.variable}`}>

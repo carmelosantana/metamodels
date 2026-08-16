@@ -16,8 +16,14 @@ incident-response). Work through the "Open" items at your pace.
   commit SHA** (`actions/checkout@11d5960a…`, `actions/setup-node@49933ea5…`); `zizmor` runs as a
   workflow; `CODEOWNERS` on `/.github/` + lockfile + root config.
 - **Framework CVE:** control-plane pinned to `next@16.2.0` (≥16.2 avoids CVE-2025-66478 RCE).
-- **Some security headers:** `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: strict-origin-when-cross-origin`.
+- **Security headers, both planes:** control-plane sends a **nonce-based CSP** (no
+  `'unsafe-inline'` for script; `object-src`/`frame-src`/`frame-ancestors` `'none'`;
+  `base-uri`/`form-action` `'self'`) plus HSTS, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`. Data-plane
+  sends nosniff/HSTS/DENY/`no-referrer` on every response including errors and 404s. Verified
+  in a real browser against the running stack: zero CSP violations across login, dashboard,
+  paddocks + client-side modal, usage charts, fence editor, and the 404 page. See
+  docs/DEPLOY.md § Security headers.
 - **No persistence backdoors present:** no `.vscode/tasks.json`, `.vscode/setup.mjs`,
   `.claude/setup.mjs`, or committed `.claude/settings*.json`; no `execution.js`/`router_init.js`
   worm-blob signatures anywhere in the tree.
@@ -26,7 +32,14 @@ incident-response). Work through the "Open" items at your pace.
 
 ## Open — prioritized
 
-### P1 — Make the security linter green, then enforce it (sequencing matters) — ✅ FIXED in this change
+### P0 — Rotate the GitHub PAT(s) found in `~/.bash_history` — ⏳ OPERATOR ACTION, STILL OPEN
+The single highest-value item on this page, and the only one Claude cannot do. Plaintext
+GitHub tokens are sitting in shell history on this machine. **Rotate them** (GitHub →
+Settings → Developer settings → Personal access tokens → revoke + reissue; `gh auth login`
+to re-authenticate) and scrub the matching history lines. Unrelated to this repo's code, but
+a live credential exposure that outranks every hardening item below.
+
+### P1 — Make the security linter green, then enforce it (sequencing matters) — ✅ DONE
 zizmor's first real run (private repo, 2026-07-30) failed with 10 `--pedantic` findings. None were the
 dangerous class; they were hygiene, all now fixed on branch `chore/ci-security-hardening` (verified
 locally: "No findings to report"):
@@ -44,17 +57,26 @@ locally: "No findings to report"):
 **Decision to make:** keep `--pedantic` (strictest — fix all 10, most future friction but highest bar)
 vs. run zizmor's default persona (drops the info/cosmetic noise, still catches the real classes).
 
-### P2 — Enable branch protection on `main` (the standing "operator MUST" item)
-Once the checks are green, require on `main`: status checks `test`, `build-smoke`, `zizmor` +
-"require a PR before merging" + "require review from Code Owners" (CODEOWNERS already covers
-`/.github/`). Until this is on, the supply-chain posture is authored but **unenforced** — anyone with
-push access can bypass it.
+### P2 — Enable branch protection on `main` — ✅ DONE
+`main` requires status checks `test`, `build-smoke`, `zizmor` (strict/up-to-date), a PR before
+merging, linear history, and blocks force-pushes. Two deliberate relaxations: **0 required
+approvals** and **Code-Owners review off** — on a solo-owned repo both would deadlock every
+merge. Turn both on the moment a second maintainer joins. `enforce_admins` is off as an
+escape hatch.
 
-### P3 — Complete the security headers (CSP + HSTS)
-Currently missing **Content-Security-Policy** and **Strict-Transport-Security**. Add a `default-src
-'self'` CSP with an explicit `script-src` allowlist and HSTS. Caveat: CSP `script-src` is an
-allowlist — any future third-party script (analytics, widget) must be added or CSP will (correctly)
-block it. Worth doing before any public exposure.
+### P3 — Complete the security headers (CSP + HSTS) — ✅ DONE
+Nonce-based CSP + HSTS on the control-plane, and nosniff/HSTS/DENY/no-referrer on the
+data-plane. Details and the operator knobs are in docs/DEPLOY.md § Security headers.
+
+Two things worth knowing about the shape chosen:
+- `script-src` uses a **per-request nonce with `'strict-dynamic'`**, not a host allowlist.
+  Consequence: every page is rendered per-request, because a prerendered page is baked at
+  build time with no nonce and would block its own bootstrap. This was caught by inspecting
+  the built `login.html` — it had six un-nonced inline scripts — not by assumption.
+- `style-src` still allows `'unsafe-inline'`. Next inlines the `<style>` for next/font and
+  critical CSS without nonce-stamping it. A far weaker sink than script (an injected
+  `<style>` cannot execute), and `default-src 'self'` still bounds every load, but it is the
+  one directive left to tighten if Next later nonces its style tags.
 
 ### P4 — Dependency-vetting discipline (ongoing, not a one-off)
 Before every `pnpm add` / upgrade: check the publish date (a <48h-old version is the top red flag),
@@ -78,9 +100,9 @@ so the shell ran command-substitution on them; the fragment `` `import type {Db}
 `/usr/bin/import` (the TS keyword `import` collided with the ImageMagick binary on `PATH`), which
 grabbed the X display and wrote it to the literal filename `{Db}`. No network, no persistence
 (cron/unit/hook), no touched dependencies, no secret visible in the image, never committed. **Verdict:
-benign tooling mishap, not an indicator of compromise.** Evidence + full write-up:
-`~/Projects/metamodels-triage/` (`INVESTIGATION.md`, `FORENSICS.md`, rendered PNG). The evidence can be
-deleted once reviewed.
+benign tooling mishap, not an indicator of compromise.** The triage evidence
+(`~/Projects/metamodels-triage/`) was reviewed and deleted on 2026-08-16; this paragraph is
+the surviving record.
 
 ### Two real findings the investigation surfaced (worth acting on)
 - **Shell-injection-from-untrusted-text primitive.** The mechanism that made `{Db}` is the same one an
@@ -88,10 +110,7 @@ deleted once reviewed.
   `$(…)`. **Discipline:** write files from untrusted/rich text with a **single-quoted heredoc** or
   `printf '%s'`, never an unquoted/double-quoted `echo`. (Relevant anywhere we interpolate model
   output, issue bodies, PR text, or ledger prose into a shell.)
-- **Plaintext GitHub PAT(s) in `~/.bash_history`.** Unrelated to this repo but a live exposure.
-  **Recommend rotating** those tokens (`gh auth token` / GitHub → Settings → Developer settings →
-  revoke + reissue) and scrubbing the history lines. This is an operator action — not done
-  automatically.
+- **Plaintext GitHub PAT(s) in `~/.bash_history`.** Tracked as **P0** above — still open.
 
 ## Maintenance note: pinned image digests
 The CI service images (`postgres`/`redis`) are now pinned to `@sha256:` digests (immutable — a mutable

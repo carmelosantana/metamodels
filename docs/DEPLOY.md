@@ -13,6 +13,8 @@ docker compose run --rm control-plane pnpm seed   # create the first admin (uses
 - Control-plane UI: http://localhost:3000
 - Data-plane proxy: http://localhost:8787 (`/healthz`, `/readyz`)
 
+If either host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected.
+
 Migrations run automatically via the `migrate` service before the apps start; it exits 0 when the database is up to date.
 
 ## Environment
@@ -26,6 +28,18 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. |
 | `WORKER_NAME` | worker | Optional consumer name; defaults to `worker-<pid>`. |
+| `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
+| `DATA_PLANE_PORT` | compose | Host port for the proxy. Default `8787`. |
+
+## Security headers
+
+Both planes ship hardened response headers by default; there is nothing to switch on.
+
+- **Control-plane** sends a nonce-based `Content-Security-Policy` (`src/middleware.ts` mints a fresh nonce per request; `src/lib/csp.ts` defines the policy). It has no `'unsafe-inline'` for scripts, and `object-src`/`frame-src`/`frame-ancestors` are `'none'`. Because the nonce must be stamped into each response, every page renders per-request (`export const dynamic = 'force-dynamic'` in the root layout) — expected for a session-scoped console.
+- **Data-plane** sends `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and HSTS on every response including errors and 404s. `nosniff` is the load-bearing one: the proxy relays bodies from upstream servers you control but MetaModels does not.
+- **HSTS** is `max-age=63072000` with no `includeSubDomains` and no `preload`. That is deliberate for a self-hosted product: the console may share an apex domain with services you serve over plain HTTP, and `preload` is effectively irreversible. If you terminate TLS for an entire domain you own, add both in `apps/control-plane/next.config.ts` and `apps/data-plane/src/app.ts`. HSTS is ignored by browsers over plain HTTP, so a LAN deployment is unaffected either way.
+
+**Adding a third-party script** (analytics, a widget) requires adding its origin to `script-src` in `src/lib/csp.ts` — under CSP it will otherwise be blocked, correctly. `src/lib/csp.test.ts` covers the policy.
 
 ## Connecting a local Ollama / ComfyUI
 
