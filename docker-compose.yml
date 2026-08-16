@@ -51,7 +51,9 @@ services:
       OPERATOR_PASSWORD: ${OPERATOR_PASSWORD}
       NODE_ENV: production
     ports:
-      - "3000:3000"
+      # Host port only — the container always listens on 3000, so the healthcheck below is
+      # unaffected. Override CONTROL_PLANE_PORT in .env when 3000 is already taken.
+      - "${CONTROL_PLANE_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,9 +77,9 @@ services:
       REDIS_URL: ${REDIS_URL}
       PORT: ${PORT}
     ports:
-      # PORT is effectively pinned to 8787: the container listens on env.PORT, but this
-      # mapping and the healthcheck URL below hardcode 8787 — change all three together.
-      - "8787:8787"
+      # The container side is pinned to 8787: it listens on env.PORT and the healthcheck URL
+      # below hardcodes 8787 — change those two together. The host side is free to move.
+      - "${DATA_PLANE_PORT:-8787}:8787"
     # So the data-plane can reach an Ollama/ComfyUI running on the host (set the Flock URL
     # to http://host.docker.internal:11434 etc. in the control-plane UI).
     extra_hosts:

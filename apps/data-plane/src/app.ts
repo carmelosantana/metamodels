@@ -47,8 +47,30 @@ interface Scope {
   breed: Breed<unknown>
 }
 
+/**
+ * Applied to every response, including errors and 404s.
+ *
+ * This process relays bodies from upstream servers we do not control, so `nosniff` is the
+ * one that earns its place: it stops a browser from re-interpreting a relayed body as
+ * markup or script. HSTS is inert over plain HTTP (so LAN deployments are unaffected) and
+ * takes effect the moment an operator puts the proxy behind TLS. There is no HTML surface
+ * here, so no CSP — the control plane sets a nonce policy for that.
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'Strict-Transport-Security': 'max-age=63072000',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+}
+
 export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promise<void> } {
   const app = new Hono()
+
+  // Registered first so it wraps every route below, plus the framework's own 404 handler.
+  app.use('*', async (c, next) => {
+    await next()
+    for (const [key, value] of Object.entries(SECURITY_HEADERS)) c.header(key, value)
+  })
 
   // Liveness: the process is up and serving. Cheap, dependency-free.
   app.get('/healthz', (c) => c.json({ status: 'ok' }))
