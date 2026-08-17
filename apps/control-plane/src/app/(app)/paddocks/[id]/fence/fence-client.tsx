@@ -67,11 +67,13 @@ export function FenceClient({
                   <span className="font-mono">{r}</span>
                 </label>
               ))}
-              <div className="mt-2 flex items-center gap-2 py-1 text-sm text-[var(--color-comfyui)]">
+              {/* A <label>, not a <div>: an unlabelled checkbox has no accessible name,
+                  so assistive tech announces only "checkbox, disabled". */}
+              <label className="mt-2 flex items-center gap-2 py-1 text-sm text-[var(--color-comfyui)]">
                 <input type="checkbox" disabled />
                 <span className="font-mono">mutate</span>
                 <span className="ml-auto">🔒 permanently locked — model management is never exposable</span>
-              </div>
+              </label>
               <div className="mt-4">
                 <Label htmlFor="models">Model allowlist (comma-separated; blank = any)</Label>
                 <Input id="models" name="models" defaultValue={(c.allowedModels ?? []).join(', ')} placeholder="llama3, mistral" />
