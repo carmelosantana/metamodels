@@ -8,3 +8,7 @@ dist/
 *.log
 .DS_Store
 .superpowers/
+# Playwright run output. The screenshots under docs/screenshots/ ARE committed — they are
+# documentation — but reports, traces and failure artifacts are not.
+playwright-report/
+test-results/

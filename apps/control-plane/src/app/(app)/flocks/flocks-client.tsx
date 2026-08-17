@@ -19,12 +19,27 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
   const [tls, setTls] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; detail?: string } | null>(null)
   const [error, setError] = useState<string | undefined>()
+  // Controlled, because React resets a form once its action resolves. "Test connection"
+  // is an action, so uncontrolled fields would be wiped the moment the test came back —
+  // leaving the operator staring at "Connection OK" above an empty form.
+  const [name, setName] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [upstreamAuth, setUpstreamAuth] = useState('')
+
+  function resetForm() {
+    setName('')
+    setBaseUrl('')
+    setUpstreamAuth('')
+    setTls(false)
+    setTest(null)
+    setError(undefined)
+  }
 
   async function onSave(fd: FormData) {
     fd.set('tlsTrust', String(tls))
     const r = await saveFlockAction(null, fd)
     if (r.error) setError(r.error)
-    else { setOpen(false); setError(undefined); setTest(null); setTls(false) }
+    else { setOpen(false); resetForm() }
   }
 
   async function onTest(fd: FormData) {
@@ -37,7 +52,7 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
       <PageHeader
         title="Flocks"
         subtitle="Connected local AI servers behind your fence."
-        actions={canWrite && <Button onClick={() => setOpen(true)}>Connect a flock</Button>}
+        actions={canWrite && <Button onClick={() => { resetForm(); setOpen(true) }}>Connect a flock</Button>}
       />
       <DataTable headers={['Name', 'Breed', 'Base URL', 'Health', '']}>
         {flocks.map((f) => (
@@ -70,9 +85,9 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
               <option value="comfyui">comfyui</option>
             </Select>
           </div>
-          <div><Label htmlFor="name">Name</Label><Input id="name" name="name" required /></div>
-          <div><Label htmlFor="baseUrl">Base URL</Label><Input id="baseUrl" name="baseUrl" placeholder="http://localhost:11434" required /></div>
-          <div><Label htmlFor="upstreamAuth">Upstream auth (optional)</Label><Input id="upstreamAuth" name="upstreamAuth" /></div>
+          <div><Label htmlFor="name">Name</Label><Input id="name" name="name" value={name} onChange={(e) => setName(e.target.value)} required /></div>
+          <div><Label htmlFor="baseUrl">Base URL</Label><Input id="baseUrl" name="baseUrl" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434" required /></div>
+          <div><Label htmlFor="upstreamAuth">Upstream auth (optional)</Label><Input id="upstreamAuth" name="upstreamAuth" value={upstreamAuth} onChange={(e) => setUpstreamAuth(e.target.value)} /></div>
           <div className="flex items-center gap-2">
             <Switch checked={tls} onChange={setTls} name="tlsTrust" />
             <span className="text-sm text-[var(--color-muted)]">Trust self-signed TLS</span>

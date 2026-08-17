@@ -7,7 +7,19 @@ import { join, sep } from 'node:path'
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 
 // Env keys that are intentionally NOT in .env.example: test-only or framework-provided.
-const EXCLUDED = new Set(['REDIS_TEST_URL', 'PG_TEST_URL', 'NODE_ENV'])
+// .env.example documents how to *deploy* MetaModels; knobs that only a test harness reads
+// would be noise there. The e2e walkthrough documents its own in apps/e2e/README.md.
+const EXCLUDED = new Set([
+  'REDIS_TEST_URL',
+  'PG_TEST_URL',
+  'NODE_ENV',
+  'CI',
+  'OLLAMA_TEST_URL',
+  'OLLAMA_TEST_MODEL',
+  'E2E_BASE_URL',
+  'E2E_PROXY_URL',
+  'E2E_SCREENSHOT_DIR',
+])
 
 // Dependency and build-output dirs are not "the code": skip them. This also
 // matters because Node >=26's recursive readdirSync follows symlinks, so a
