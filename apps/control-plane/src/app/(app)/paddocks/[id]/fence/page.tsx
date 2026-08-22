@@ -23,7 +23,7 @@ export default async function FencePage({ params }: { params: Promise<{ id: stri
   return (
     <FenceClient
       canWrite={authorize(actor, 'resource.write')}
-      paddock={{ id: paddock.id, name: paddock.name, slug: paddock.slug, breed }}
+      paddock={{ id: paddock.id, name: paddock.name, slug: paddock.slug, breed, flockId: paddock.flockId }}
       constraintJson={(fence?.constraintJson ?? null) as unknown}
       rateLimit={(fence?.rateLimit ?? null) as { windowSec: number; max: number } | null}
       quota={(fence?.quota ?? null) as Array<{ dim: string; max: number; period: string }> | null}
