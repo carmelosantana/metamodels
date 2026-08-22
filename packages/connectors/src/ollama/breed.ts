@@ -1,5 +1,5 @@
 import { defineBreed } from '../breed.js'
-import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent } from '../breed.js'
+import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent, ModelListResult } from '../breed.js'
 import { ollamaConstraint, routeGroup } from './constraint.js'
 import type { OllamaConstraint } from './constraint.js'
 
@@ -73,6 +73,22 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
       return { ok: res.ok }
     } catch (err) {
       return { ok: false, detail: String(err) }
+    }
+  },
+
+  async listModels(flock): Promise<ModelListResult> {
+    try {
+      const headers: Record<string, string> = {}
+      if (flock.upstreamAuth) headers['Authorization'] = flock.upstreamAuth
+      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/tags`, { headers })
+      if (!res.ok) return { ok: false, models: [], detail: `upstream returned HTTP ${res.status}` }
+      const data = (await res.json()) as { models?: Array<{ name?: unknown }> }
+      const names = Array.isArray(data.models)
+        ? data.models.map((m) => m?.name).filter((n): n is string => typeof n === 'string')
+        : []
+      return { ok: true, models: [...new Set(names)].sort() }
+    } catch (err) {
+      return { ok: false, models: [], detail: String(err) }
     }
   },
 })
