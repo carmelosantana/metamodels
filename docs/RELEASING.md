@@ -14,6 +14,6 @@ Images publish automatically from `.github/workflows/release.yml`.
    git push origin v0.1.0
    ```
 3. Watch the `release` workflow publish both images to GHCR.
-4. In Portainer, set the stack's `TAG=v0.1.0` and redeploy to pull it.
+4. In Portainer, set the stack's `TAG=0.1.0` (the image tag drops the `v`) and redeploy to pull it.
 
 The first release is **v0.1.0** — pre-1.0 while the API and schema may still move.
