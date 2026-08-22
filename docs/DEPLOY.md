@@ -89,3 +89,23 @@ docker rm -f mm-pg mm-redis
 - **Trusted reverse proxy for the login throttle.** The control-plane login throttle keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
 - **Typecheck needs a build first.** Control-plane `tsc -b` depends on `.next/types` produced by `next build`/`next typegen`; a cold clone must build the app before typechecking it. (Enforced in Plan 6b CI.)
 - **Pin base images by digest in production.** The Dockerfile/compose use `node:24-bookworm-slim`, `postgres:16-bookworm`, `redis:7-bookworm` tags for readability; pin each by `@sha256:` for reproducible, tamper-evident builds.
+
+## Deploy on Portainer (pre-built images)
+
+MetaModels publishes two public images to GHCR:
+`ghcr.io/carmelosantana/metamodels-control-plane` and `…-runtime`. A Portainer stack pulls
+them — no source checkout, no local build.
+
+1. **Stacks → Add stack → Web editor**, paste `docker-compose.deploy.yml` from the repo.
+2. Set the stack **environment variables**: `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`,
+   `LICENSE_KEY_SECRET`, `OPERATOR_EMAIL`, `OPERATOR_PASSWORD`, and `TAG` (pin `v0.1.0`;
+   `latest` tracks the newest release, `edge` the latest `main`). Portainer injects these for
+   both compose interpolation and the containers.
+3. **Deploy the stack.** The one-shot `migrate` service runs first; the apps start after.
+4. **Seed the first operator once** — in Portainer, open the `control-plane` container console
+   (or `docker exec`) and run `pnpm seed`. Uses `OPERATOR_EMAIL` / `OPERATOR_PASSWORD`.
+5. Open the UI on `CONTROL_PLANE_PORT` (default 3000). Point Flock upstream URLs at your
+   Ollama/ComfyUI via `http://host.docker.internal:11434` etc.
+
+Images are single-arch `linux/amd64` and carry build-provenance attestations
+(`gh attestation verify`).
