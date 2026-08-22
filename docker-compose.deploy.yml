@@ -3,6 +3,7 @@
 services:
   postgres:
     image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    restart: unless-stopped
     environment:
       POSTGRES_USER: metamodels
       POSTGRES_PASSWORD: metamodels
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7-bookworm@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,6 +37,7 @@ services:
 
   control-plane:
     image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-latest}
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -58,6 +61,7 @@ services:
 
   data-plane:
     image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-latest}
+    restart: unless-stopped
     working_dir: /app/apps/data-plane
     command: ["pnpm", "start"]
     environment:
@@ -83,6 +87,7 @@ services:
 
   worker:
     image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-latest}
+    restart: unless-stopped
     working_dir: /app/apps/worker
     command: ["pnpm", "start"]
     environment:
@@ -99,6 +104,7 @@ services:
 
   scheduler:
     image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-latest}
+    restart: unless-stopped
     command: ["pnpm", "scheduler"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
