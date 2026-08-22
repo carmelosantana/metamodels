@@ -62,7 +62,10 @@ export function FenceClient({
   function addManual() {
     const name = draft.trim()
     if (!name) return
-    setManual((m) => [...new Set([...m, name])])
+    // If the name is already a live model, just select it — adding it to `manual`
+    // too would render it twice (live checkbox + "(not on server)" chip) and emit a
+    // duplicate React key.
+    if (!(live ?? []).includes(name)) setManual((m) => [...new Set([...m, name])])
     setSelected((s) => [...new Set([...s, name])])
     setDraft('')
   }
