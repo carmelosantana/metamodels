@@ -27,3 +27,9 @@ FROM deps AS tsx-app
 ARG APP
 WORKDIR /app/apps/${APP}
 CMD ["pnpm", "start"]
+
+# --- runtime: all workspace TS source + tsx in one image. The deploy compose runs
+#     data-plane / worker / migrate from it via per-service working_dir + command. ---
+FROM deps AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
