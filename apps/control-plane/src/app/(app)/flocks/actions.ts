@@ -4,7 +4,8 @@ import { getDb } from '../../../server/db'
 import { requireUser } from '../../../server/guard'
 import { requireCapability } from '../../../auth/authorize'
 import { saveFlock, deleteFlock } from '../../../server/flocks-service'
-import { testFlockConnection, buildBreedRegistry } from '../../../server/flock-health'
+import { testFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
+import type { ModelListResult } from '@metamodels/connectors'
 import { publishConfigInvalidation } from '../../../server/config-publisher'
 
 const registry = buildBreedRegistry()
@@ -52,4 +53,10 @@ export async function testConnectionAction(fd: FormData): Promise<{ ok: boolean;
     upstreamAuth: (String(fd.get('upstreamAuth') ?? '').trim() || null),
     tlsTrust: String(fd.get('tlsTrust') ?? 'false') === 'true',
   })
+}
+
+export async function listFlockModelsAction(flockId: string): Promise<ModelListResult> {
+  const actor = await requireUser()
+  requireCapability(actor, 'read')
+  return listFlockModels(registry, getDb(), actor, flockId)
 }
