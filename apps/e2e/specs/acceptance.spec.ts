@@ -136,7 +136,10 @@ test.describe('v1 acceptance walkthrough', () => {
     await page.getByRole('checkbox', { name: 'chat' }).check()
     await expect(page.getByRole('checkbox', { name: 'mutate' })).toBeDisabled()
 
-    await page.getByLabel('Model allowlist (comma-separated; blank = any)').fill(OLLAMA_MODEL)
+    // The model list is fetched live from the flock; wait for our model's checkbox, then tick it.
+    const modelBox = page.getByRole('checkbox', { name: OLLAMA_MODEL })
+    await expect(modelBox).toBeVisible({ timeout: 20_000 })
+    await modelBox.check()
     await page.getByLabel('Max requests').fill(String(RATE_MAX))
     await page.getByLabel('Per window (sec)').fill(String(RATE_WINDOW_SEC))
     await page.getByRole('button', { name: 'Save fence' }).click()
