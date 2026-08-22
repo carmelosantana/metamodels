@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Pin by @sha256: digest in production. Tags used here for readability.
-FROM node:24-bookworm-slim AS base
+# Pinned by @sha256: digest (base for BOTH published GHCR images). Refresh with:
+#   docker buildx imagetools inspect node:24-bookworm-slim --format '{{.Manifest.Digest}}'
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate

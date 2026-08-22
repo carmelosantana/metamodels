@@ -108,5 +108,12 @@ them — no source checkout, no local build.
 5. Open the UI on `CONTROL_PLANE_PORT` (default 3000). Point Flock upstream URLs at your
    Ollama/ComfyUI via `http://host.docker.internal:11434` etc.
 
-Images are single-arch `linux/amd64` and carry build-provenance attestations
-(`gh attestation verify`).
+Images are single-arch `linux/amd64` and carry build-provenance attestations. **Verify them
+before deploying** and pin the resolved digest (see `docs/RELEASING.md` for the exact
+`gh attestation verify` commands).
+
+**Bundled Postgres credentials.** The `postgres` service in `docker-compose.deploy.yml` uses
+default creds `metamodels` / `metamodels` (database `metamodels`). It is **not** port-published —
+only reachable over the compose network — so this is fine for a self-contained stack. If you
+expose the DB port or share the Docker network with other workloads, override `POSTGRES_USER`
+and `POSTGRES_PASSWORD` and update the matching `DATABASE_URL` to keep them in sync.

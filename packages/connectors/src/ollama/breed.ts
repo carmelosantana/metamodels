@@ -3,6 +3,9 @@ import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent, ModelL
 import { ollamaConstraint, routeGroup } from './constraint.js'
 import type { OllamaConstraint } from './constraint.js'
 
+// Bound upstream calls so a hung Ollama never ties up the caller indefinitely.
+const UPSTREAM_TIMEOUT_MS = 10_000
+
 export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint>({
   id: 'ollama',
   displayName: 'Ollama',
@@ -69,7 +72,9 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
 
   async health(flock) {
     try {
-      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/version`)
+      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/version`, {
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      })
       return { ok: res.ok }
     } catch (err) {
       return { ok: false, detail: String(err) }
@@ -80,7 +85,10 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
     try {
       const headers: Record<string, string> = {}
       if (flock.upstreamAuth) headers['Authorization'] = flock.upstreamAuth
-      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/tags`, { headers })
+      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/tags`, {
+        headers,
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      })
       if (!res.ok) return { ok: false, models: [], detail: `upstream returned HTTP ${res.status}` }
       const data = (await res.json()) as { models?: Array<{ name?: unknown }> }
       const names = Array.isArray(data.models)
