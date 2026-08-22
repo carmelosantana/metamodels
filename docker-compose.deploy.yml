@@ -1,0 +1,105 @@
+# Portainer deploy stack: pulls pre-built GHCR images. Set stack env (DATABASE_URL, REDIS_URL,
+# SESSION_SECRET, LICENSE_KEY_SECRET, OPERATOR_EMAIL, OPERATOR_PASSWORD) and TAG in Portainer.
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    environment:
+      POSTGRES_USER: metamodels
+      POSTGRES_PASSWORD: metamodels
+      POSTGRES_DB: metamodels
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "metamodels", "-d", "metamodels"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-bookworm@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-latest}
+    working_dir: /app/apps/migrate
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  control-plane:
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-latest}
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD}
+      NODE_ENV: production
+    ports:
+      - "${CONTROL_PLANE_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  data-plane:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-latest}
+    working_dir: /app/apps/data-plane
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      PORT: ${PORT:-8787}
+    ports:
+      - "${DATA_PLANE_PORT:-8787}:8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-latest}
+    working_dir: /app/apps/worker
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      WORKER_NAME: ${WORKER_NAME:-worker-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-latest}
+    command: ["pnpm", "scheduler"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET}
+      SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-43200000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
