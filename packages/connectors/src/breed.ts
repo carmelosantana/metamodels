@@ -38,6 +38,12 @@ export interface HealthStatus {
   detail?: string
 }
 
+export interface ModelListResult {
+  ok: boolean
+  models: string[]
+  detail?: string
+}
+
 export interface UpstreamResult {
   status: number
   headers: Record<string, string>
@@ -94,6 +100,7 @@ export interface Breed<C = unknown> {
   routes: RouteSpec[]
   constraintSchema: ZodTypeAny
   health(flock: FlockRef): Promise<HealthStatus>
+  listModels?(flock: FlockRef): Promise<ModelListResult>
   guard(ctx: RequestCtx, fence: C): GuardResult | Promise<GuardResult>
   meter(ctx: RequestCtx, upstream: UpstreamResult): MeterEvent[]
   billingDimensions: MeterDim[]
