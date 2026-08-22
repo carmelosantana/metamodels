@@ -98,8 +98,9 @@ them — no source checkout, no local build.
 
 1. **Stacks → Add stack → Web editor**, paste `docker-compose.deploy.yml` from the repo.
 2. Set the stack **environment variables**: `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`,
-   `LICENSE_KEY_SECRET`, `OPERATOR_EMAIL`, `OPERATOR_PASSWORD`, and `TAG` (pin `v0.1.0`;
-   `latest` tracks the newest release, `edge` the latest `main`). Portainer injects these for
+   `LICENSE_KEY_SECRET`, `OPERATOR_EMAIL`, `OPERATOR_PASSWORD`, and `TAG` (pin `0.1.0` — the
+   image tag drops the `v` from the git tag `v0.1.0`; `latest` tracks the newest release, `edge`
+   the latest `main`). Portainer injects these for
    both compose interpolation and the containers.
 3. **Deploy the stack.** The one-shot `migrate` service runs first; the apps start after.
 4. **Seed the first operator once** — in Portainer, open the `control-plane` container console
