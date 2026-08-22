@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { PageHeader } from '../../../../../components/page-header'
 import { Button } from '../../../../../components/ui/button'
@@ -10,11 +10,13 @@ import { cn } from '../../../../../components/ui/cn'
 import { BlastRadiusCard } from '../../../../../components/ui/blast-radius-card'
 import type { BlastRadius } from '../../../../../server/blast-radius'
 import { saveFenceAction } from './actions'
+import { listFlockModelsAction } from '../../../flocks/actions'
+import { partitionAllowlist, serializeAllowlist } from '../../../../../lib/model-allowlist'
 
 const OLLAMA_ROUTES = ['chat', 'generate', 'embed', 'read'] as const
 const METER_DIMS = ['tokens_in', 'tokens_out', 'jobs', 'gpu_ms', 'images'] as const
 
-interface Paddock { id: string; name: string; slug: string; breed: string }
+interface Paddock { id: string; name: string; slug: string; breed: string; flockId: string }
 
 export function FenceClient({
   paddock, constraintJson, rateLimit, quota, blastRadius, canWrite,
@@ -30,6 +32,40 @@ export function FenceClient({
   const q0 = quota?.[0]
   const [error, setError] = useState<string | undefined>()
   const [saved, setSaved] = useState(false)
+
+  const savedModels = (c.allowedModels ?? []) as string[]
+  const [live, setLive] = useState<string[] | null>(null)   // null = still loading
+  const [failed, setFailed] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string[]>(savedModels)
+  const [manual, setManual] = useState<string[]>([])
+  const [draft, setDraft] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    listFlockModelsAction(paddock.flockId).then((r) => {
+      if (!alive) return
+      if (r.ok) {
+        setLive(r.models)
+        const { manual } = partitionAllowlist(savedModels, r.models)
+        setManual(manual)
+      } else {
+        setFailed(r.detail ?? 'unreachable')
+      }
+    })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paddock.flockId])
+
+  function toggle(model: string, on: boolean) {
+    setSelected((s) => (on ? [...new Set([...s, model])] : s.filter((m) => m !== model)))
+  }
+  function addManual() {
+    const name = draft.trim()
+    if (!name) return
+    setManual((m) => [...new Set([...m, name])])
+    setSelected((s) => [...new Set([...s, name])])
+    setDraft('')
+  }
 
   async function onSave(fd: FormData) {
     setError(undefined); setSaved(false)
@@ -75,8 +111,63 @@ export function FenceClient({
                 <span className="ml-auto">🔒 permanently locked — model management is never exposable</span>
               </label>
               <div className="mt-4">
-                <Label htmlFor="models">Model allowlist (comma-separated; blank = any)</Label>
-                <Input id="models" name="models" defaultValue={(c.allowedModels ?? []).join(', ')} placeholder="llama3, mistral" />
+                <Label>Model allowlist</Label>
+                <input type="hidden" name="models" value={serializeAllowlist(selected)} />
+                {failed ? (
+                  // Escape hatch: upstream unreachable — never block editing the fence.
+                  <div>
+                    <Input
+                      name="modelsFallback"
+                      defaultValue={savedModels.join(', ')}
+                      placeholder="llama3, mistral"
+                      onChange={(e) =>
+                        setSelected(e.target.value.split(',').map((m) => m.trim()).filter(Boolean))
+                      }
+                    />
+                    <p className="mt-1 text-xs text-[var(--color-muted)]">
+                      Couldn’t reach {paddock.name}’s server ({failed}). Enter model names manually,
+                      comma-separated. Blank = any model.
+                    </p>
+                  </div>
+                ) : live === null ? (
+                  <p className="text-sm text-[var(--color-muted)]">Loading models…</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {live.length === 0 && (
+                      <p className="text-xs text-[var(--color-muted)]">No models found on the server.</p>
+                    )}
+                    {live.map((m) => (
+                      <label key={m} className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(m)}
+                          onChange={(e) => toggle(m, e.target.checked)}
+                        />
+                        <span className="font-mono">{m}</span>
+                      </label>
+                    ))}
+                    {manual.map((m) => (
+                      <label key={m} className="flex items-center gap-2 text-sm text-[var(--color-comfyui)]">
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(m)}
+                          onChange={(e) => toggle(m, e.target.checked)}
+                        />
+                        <span className="font-mono">{m}</span>
+                        <span className="text-xs">(not on server)</span>
+                      </label>
+                    ))}
+                    <div className="flex gap-2">
+                      <Input
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        placeholder="add another (e.g. mistral:7b)"
+                      />
+                      <Button type="button" variant="ghost" onClick={addManual}>Add</Button>
+                    </div>
+                    <p className="text-xs text-[var(--color-muted)]">Blank selection = any model.</p>
+                  </div>
+                )}
               </div>
             </fieldset>
           )}
