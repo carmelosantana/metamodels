@@ -104,7 +104,7 @@ minimal deploy only needs four secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.1.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.2.0 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with four 64-hex-char secrets. `--out <path>` also
@@ -142,7 +142,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.1.0` | Image tag. The git tag `v0.1.0` publishes images as `0.1.0` — the `v` is stripped |
+| `TAG` | `0.2.0` | Image tag. The git tag `v0.2.0` publishes images as `0.2.0` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
