@@ -1,7 +1,8 @@
+import { eq } from 'drizzle-orm'
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
 import { freshDb } from '../test/db'
-import { seedAdmin } from './seed'
+import { NotAdminError, seedAdmin } from './seed'
 import { verifyPassword } from '../auth/password'
 
 describe('seedAdmin', () => {
@@ -23,5 +24,19 @@ describe('seedAdmin', () => {
     const users = await db.select().from(schema.user)
     expect(users).toHaveLength(1)
     expect(await verifyPassword('hunter2hunter2', users[0].passwordHash)).toBe(true) // unchanged
+  })
+
+  test('refuses when the email belongs to an existing non-admin user', async () => {
+    const db = await freshDb()
+    await seedAdmin(db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const [o] = await db.select().from(schema.org)
+    await db.insert(schema.user).values({
+      orgId: o.id, email: 'member@x.io', passwordHash: 'x', role: 'member', status: 'active',
+    })
+
+    await expect(seedAdmin(db, { email: 'member@x.io', password: 'hunter2hunter2' })).rejects.toThrow(NotAdminError)
+
+    const [m] = await db.select().from(schema.user).where(eq(schema.user.email, 'member@x.io'))
+    expect(m.role).toBe('member') // untouched
   })
 })
