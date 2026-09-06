@@ -1,0 +1,153 @@
+# MetaModels — drop-in Portainer stack.
+#
+# Paste this whole file into Portainer › Stacks › Add stack › Web editor, set the four
+# secrets in the stack's Environment variables, and Deploy. Everything else has an inline
+# default, so a minimal deploy only needs the secrets.
+#
+# Generate the secrets with:  ./scripts/new-stack.sh
+#
+# Designed for the GPU host, where Ollama and ComfyUI already run in Docker. This stack does
+# NOT run them — it points at them over the host gateway (see UPSTREAM notes in docs/DEPLOY.md).
+#
+# SECURITY POSTURE (read before changing):
+#   * The four secrets use ${VAR:?...} deliberately — they FAIL FAST rather than defaulting.
+#     A default password on an internet-reachable admin plane is a vulnerability, not a
+#     convenience. Everything non-secret defaults.
+#   * The control-plane is the ADMIN plane. It binds to 127.0.0.1 by default so it is NOT
+#     internet-reachable. Only the data-plane (the actual API) is meant to be public.
+#   * Postgres and Redis are never port-published — compose-network only.
+
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-metamodels}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD — run scripts/new-stack.sh}
+      POSTGRES_DB: ${POSTGRES_DB:-metamodels}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-metamodels}", "-d", "${POSTGRES_DB:-metamodels}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-bookworm@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.1.0}
+    working_dir: /app/apps/migrate
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  control-plane:
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.1.0}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET — run scripts/new-stack.sh}
+      LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET:?set LICENSE_KEY_SECRET — run scripts/new-stack.sh}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:-admin@metamodels.cc}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?set OPERATOR_PASSWORD — run scripts/new-stack.sh}
+      NODE_ENV: production
+    # Admin plane — loopback by default. Set CONTROL_PLANE_BIND=0.0.0.0 only if you front it
+    # with TLS + auth, or reach it over a tunnel/VPN instead.
+    ports:
+      - "${CONTROL_PLANE_BIND:-127.0.0.1}:${CONTROL_PLANE_PORT:-3200}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  data-plane:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.1.0}
+    restart: unless-stopped
+    working_dir: /app/apps/data-plane
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      PORT: 8787
+    ports:
+      - "${DATA_PLANE_BIND:-0.0.0.0}:${DATA_PLANE_PORT:-8787}:8787"
+    # Lets a flock's base_url reach Ollama/ComfyUI running on this host:
+    #   http://host.docker.internal:11434   (Ollama)
+    #   http://host.docker.internal:8188    (ComfyUI)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    labels:
+      # Optional Traefik ingress for the PUBLIC api domain. Inert unless a Traefik with the
+      # docker provider is watching this host. Set TRAEFIK_ENABLE=true to turn it on.
+      traefik.enable: "${TRAEFIK_ENABLE:-false}"
+      traefik.http.routers.metamodels-api.rule: "Host(`${API_DOMAIN:-api.metamodels.cc}`)"
+      traefik.http.routers.metamodels-api.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.metamodels-api.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      traefik.http.services.metamodels-api.loadbalancer.server.port: "8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.1.0}
+    restart: unless-stopped
+    working_dir: /app/apps/worker
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      WORKER_NAME: ${WORKER_NAME:-worker-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.1.0}
+    restart: unless-stopped
+    command: ["pnpm", "scheduler"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET:?set LICENSE_KEY_SECRET — run scripts/new-stack.sh}
+      SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-43200000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  redisdata:
