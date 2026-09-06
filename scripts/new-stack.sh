@@ -3,14 +3,14 @@
 #
 #   ./scripts/new-stack.sh                      # print the block
 #   ./scripts/new-stack.sh --out .env.portainer # also write it to a file (mode 600)
-#   ./scripts/new-stack.sh --domain api.example.com --tag 0.2.0 --email me@example.com
+#   ./scripts/new-stack.sh --domain api.example.com --tag 0.3.0 --email me@example.com
 #
 # Secrets are URL-safe hex on purpose: POSTGRES_PASSWORD is interpolated into DATABASE_URL,
 # so a password containing :/@?# would produce a malformed connection string.
 set -euo pipefail
 
 DOMAIN='api.metamodels.cc'
-TAG='0.1.0'
+TAG='0.2.0'
 EMAIL='admin@metamodels.cc'
 OUT=''
 
