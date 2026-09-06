@@ -42,7 +42,7 @@ pnpm --filter @metamodels/e2e exec playwright install chromium   # first run onl
 Then, from `apps/e2e`:
 
 ```bash
-OLLAMA_TEST_URL=http://192.168.1.140:11434 pnpm test:e2e
+OLLAMA_TEST_URL=http://ollama:11434 pnpm test:e2e
 ```
 
 Without `OLLAMA_TEST_URL` the suite **skips** rather than fails — the same opt-in
@@ -50,7 +50,7 @@ convention as the `PG_TEST_URL` / `REDIS_TEST_URL` integration suites.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OLLAMA_TEST_URL` | *(unset — suite skips)* | Must be reachable **from inside the data-plane container**, so a LAN address, not `localhost` |
+| `OLLAMA_TEST_URL` | *(unset — suite skips)* | Must be reachable **from inside the data-plane container**, so a LAN address or a resolvable host — not `localhost`, which inside the container is the container itself |
 | `OLLAMA_TEST_MODEL` | `qwen2.5-coder:0.5b` | Must exist upstream. A small model keeps the run fast |
 | `E2E_BASE_URL` | `http://localhost:3000` | Control-plane. Match `CONTROL_PLANE_PORT` if you changed it |
 | `E2E_PROXY_URL` | `http://localhost:8787` | Data-plane |
