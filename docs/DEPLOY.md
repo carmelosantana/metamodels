@@ -90,30 +90,106 @@ docker rm -f mm-pg mm-redis
 - **Typecheck needs a build first.** Control-plane `tsc -b` depends on `.next/types` produced by `next build`/`next typegen`; a cold clone must build the app before typechecking it. (Enforced in Plan 6b CI.)
 - **Base images are digest-pinned; refresh them deliberately.** The Node base (`docker/Dockerfile`) and the `postgres:16-bookworm` / `redis:7-bookworm` services (compose files) are pinned by `@sha256:` for reproducible, tamper-evident builds. Pinned digests don't receive upstream security patches automatically — re-bump each on a CVE or on a quarterly cadence via `docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'`.
 
-## Deploy on Portainer (pre-built images)
+## Deploy on Portainer (drop-in stack)
 
-MetaModels publishes two public images to GHCR:
-`ghcr.io/carmelosantana/metamodels-control-plane` and `…-runtime`. A Portainer stack pulls
-them — no source checkout, no local build.
+MetaModels publishes two public images to GHCR — `ghcr.io/carmelosantana/metamodels-control-plane`
+and `…-runtime`. **`docker-compose.portainer.yml`** is a self-contained stack that pulls them:
+no source checkout, no local build, and every non-secret value has an inline default, so a
+minimal deploy only needs four secrets.
 
-1. **Stacks → Add stack → Web editor**, paste `docker-compose.deploy.yml` from the repo.
-2. Set the stack **environment variables**: `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`,
-   `LICENSE_KEY_SECRET`, `OPERATOR_EMAIL`, `OPERATOR_PASSWORD`, and `TAG` (pin `0.1.0` — the
-   image tag drops the `v` from the git tag `v0.1.0`; `latest` tracks the newest release, `edge`
-   the latest `main`). Portainer injects these for
-   both compose interpolation and the containers.
-3. **Deploy the stack.** The one-shot `migrate` service runs first; the apps start after.
-4. **Seed the first operator once** — in Portainer, open the `control-plane` container console
-   (or `docker exec`) and run `pnpm seed`. Uses `OPERATOR_EMAIL` / `OPERATOR_PASSWORD`.
-5. Open the UI on `CONTROL_PLANE_PORT` (default 3000). Point Flock upstream URLs at your
-   Ollama/ComfyUI via `http://host.docker.internal:11434` etc.
+> `docker-compose.deploy.yml` is **superseded** by `docker-compose.portainer.yml`. The newer
+> file is a strict superset (inline defaults, fail-fast secrets, a Redis volume, a
+> loopback-by-default admin plane, optional Traefik labels). Prefer it for new stacks.
+
+### 1. Generate the secrets
+
+```bash
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.1.0 --email you@example.com
+```
+
+It prints a paste-ready `KEY=value` block with four 64-hex-char secrets. `--out <path>` also
+writes it to a mode-600 file (it refuses to overwrite one that already exists). Secrets are
+hex on purpose: `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`, and a password
+containing `:/@?#` would produce a malformed connection string.
+
+### 2. Create the stack
+
+**Stacks → Add stack → Web editor**, paste `docker-compose.portainer.yml`, add the generated
+block as the stack's **environment variables**, and Deploy. The one-shot `migrate` service
+runs first; the apps start only after it exits 0.
+
+### 3. Seed the first operator, once
+
+```bash
+docker exec -it <control-plane-container> pnpm seed
+```
+
+Uses `OPERATOR_EMAIL` / `OPERATOR_PASSWORD`. Change the password in the console afterwards.
+
+### Variables
+
+Four secrets are **required** and use `${VAR:?…}`, so the stack fails fast with a named
+error rather than silently booting with a guessable credential:
+
+| Required secret | Purpose |
+|-----------------|---------|
+| `POSTGRES_PASSWORD` | bundled Postgres, and the password inside the default `DATABASE_URL` |
+| `SESSION_SECRET` | control-plane session signing (≥16 chars) |
+| `LICENSE_KEY_SECRET` | encrypts the stored Lemon Squeezy key at rest. **Losing or changing it makes an existing entitlement undecryptable** — re-activate the license |
+| `OPERATOR_PASSWORD` | the first admin created by `pnpm seed` |
+
+Everything else defaults:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `TAG` | `0.1.0` | Image tag. The git tag `v0.1.0` publishes images as `0.1.0` — the `v` is stripped |
+| `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
+| `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
+| `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
+| `DATABASE_URL` | built from the Postgres vars | Set it explicitly to point at an external Postgres |
+| `REDIS_URL` | `redis://redis:6379` | Required by the worker; without it the data-plane runs in-memory with no durable metering |
+| `CONTROL_PLANE_BIND` | `127.0.0.1` | **Loopback on purpose** — see below |
+| `CONTROL_PLANE_PORT` | `3200` | Host port for the console |
+| `DATA_PLANE_BIND` / `DATA_PLANE_PORT` | `0.0.0.0` / `8787` | The public API |
+| `TRAEFIK_ENABLE` | `false` | `true` to activate the router labels |
+| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | `websecure` / `letsencrypt` | Match your Traefik's names |
+| `WORKER_NAME` | `worker-1` | Consumer name |
+| `SCHEDULER_INTERVAL_MS` | `43200000` (12h) | License re-validation cadence |
+
+### The two planes are not equally public
+
+The **data-plane is the API** — that is what `api.metamodels.cc` should point at. The
+**control-plane is the admin console**, and it binds to `127.0.0.1` by default so it is not
+internet-reachable. Reach it over SSH port-forwarding, a VPN, or a tunnel. Only set
+`CONTROL_PLANE_BIND=0.0.0.0` if something in front of it terminates TLS and adds access
+control — and note the login throttle keys on `X-Forwarded-For`, so it needs a trusted proxy
+to be meaningful (see Deploy gotchas). Postgres and Redis are never port-published.
+
+### Pointing at Ollama / ComfyUI on the same host
+
+The `data-plane` service gets `host.docker.internal:host-gateway`, so when Ollama and ComfyUI
+run in Docker on the same machine, set a Flock's upstream URL to:
+
+```
+http://host.docker.internal:11434   # Ollama
+http://host.docker.internal:8188    # ComfyUI
+```
+
+That works as long as those containers publish their ports on the host. The alternative is to
+attach `data-plane` to their existing Docker network and use the container name — cleaner
+isolation, but it couples the stacks and Compose cannot make the network conditional, so the
+host gateway is the default.
+
+A flock URL must resolve **from inside the data-plane container**. `localhost` there is the
+container itself, which is the single most common mistake.
+
+### Ingress and TLS are not included
+
+This stack publishes host ports; it does not terminate TLS. Point `api.metamodels.cc` at the
+host by whichever route fits: a Traefik/Caddy already on that box (set `TRAEFIK_ENABLE=true`
+and match the entrypoint names), or a Cloudflare Tunnel if the host is behind NAT or on a
+residential connection — a tunnel needs no inbound ports and no certificate management.
 
 Images are single-arch `linux/amd64` and carry build-provenance attestations. **Verify them
 before deploying** and pin the resolved digest (see `docs/RELEASING.md` for the exact
 `gh attestation verify` commands).
-
-**Bundled Postgres credentials.** The `postgres` service in `docker-compose.deploy.yml` uses
-default creds `metamodels` / `metamodels` (database `metamodels`). It is **not** port-published —
-only reachable over the compose network — so this is fine for a self-contained stack. If you
-expose the DB port or share the Docker network with other workloads, override `POSTGRES_USER`
-and `POSTGRES_PASSWORD` and update the matching `DATABASE_URL` to keep them in sync.
