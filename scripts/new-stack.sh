@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DOMAIN='api.metamodels.cc'
-TAG='0.2.0'
+TAG='0.3.0'
 EMAIL='admin@metamodels.cc'
 OUT=''
 
