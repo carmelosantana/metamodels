@@ -104,7 +104,7 @@ minimal deploy only needs four secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.2.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.3.0 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with four 64-hex-char secrets. `--out <path>` also
@@ -118,13 +118,23 @@ containing `:/@?#` would produce a malformed connection string.
 block as the stack's **environment variables**, and Deploy. The one-shot `migrate` service
 runs first; the apps start only after it exits 0.
 
-### 3. Seed the first operator, once
+### 3. Nothing else — the first operator is seeded automatically
+
+A one-shot `seed` service runs after `migrate` and creates the first admin from
+`OPERATOR_EMAIL` / `OPERATOR_PASSWORD`, so a Portainer-only deploy needs **no shell access at
+all**. **Change the password in the console after first login.**
+
+It is safe on every restart: `seedAdmin` returns early when the email already exists and never
+touches an existing password (`Admin <email> already exists — no change.`, exit 0). It exits
+non-zero — loudly, in that service's log — if the email belongs to a **non-admin** user, which
+is a real misconfiguration rather than noise. Nothing depends on `seed` completing, so a failed
+seed never takes the stack down.
+
+To seed a different account later, or to re-run it by hand, the image still carries the script:
 
 ```bash
 docker exec -it <control-plane-container> pnpm seed
 ```
-
-Uses `OPERATOR_EMAIL` / `OPERATOR_PASSWORD`. Change the password in the console afterwards.
 
 ### Variables
 
@@ -142,7 +152,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.2.0` | Image tag. The git tag `v0.2.0` publishes images as `0.2.0` — the `v` is stripped |
+| `TAG` | `0.3.0` | Image tag. The git tag `v0.3.0` publishes images as `0.3.0` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |

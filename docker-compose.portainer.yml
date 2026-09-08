@@ -45,7 +45,7 @@ services:
       retries: 10
 
   migrate:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.2.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
     working_dir: /app/apps/migrate
     command: ["pnpm", "start"]
     environment:
@@ -54,8 +54,27 @@ services:
       postgres:
         condition: service_healthy
 
+  # One-shot first-admin bootstrap, so a Portainer-only deploy needs no shell access.
+  # Idempotent: seedAdmin returns early when the email already exists and never touches an
+  # existing password. It exits non-zero (loudly, in this service's log) if that email
+  # belongs to a NON-admin user — that is a real misconfiguration, not noise to swallow.
+  # Nothing depends on it completing: a failed seed must not take the stack down.
+  seed:
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
+    restart: "no"
+    command: ["pnpm", "seed"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:-admin@metamodels.cc}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?set OPERATOR_PASSWORD — run scripts/new-stack.sh}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   control-plane:
-    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.2.0}
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
@@ -81,7 +100,7 @@ services:
       retries: 5
 
   data-plane:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.2.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
     restart: unless-stopped
     working_dir: /app/apps/data-plane
     command: ["pnpm", "start"]
@@ -118,7 +137,7 @@ services:
       retries: 5
 
   worker:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.2.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
     restart: unless-stopped
     working_dir: /app/apps/worker
     command: ["pnpm", "start"]
@@ -135,7 +154,7 @@ services:
         condition: service_completed_successfully
 
   scheduler:
-    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.2.0}
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
     restart: unless-stopped
     command: ["pnpm", "scheduler"]
     environment:
