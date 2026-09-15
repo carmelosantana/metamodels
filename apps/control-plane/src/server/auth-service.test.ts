@@ -4,7 +4,7 @@ import * as schema from '@metamodels/schema'
 import { freshDb } from '../test/db'
 import { seedAdmin } from './seed'
 import { verifyLogin, DUMMY_PASSWORD_HASH } from './auth-service'
-import { verifyPassword } from '../auth/password'
+import { verifyPassword } from '@metamodels/schema'
 
 describe('verifyLogin', () => {
   test('accepts correct credentials for an active user', async () => {

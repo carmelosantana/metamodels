@@ -1,8 +1,7 @@
 import { eq } from 'drizzle-orm'
-import { user } from '@metamodels/schema'
+import { user, verifyPassword } from '@metamodels/schema'
 import type { Db } from './db'
 import { isRole, type Actor } from '../auth/authorize'
-import { verifyPassword } from '../auth/password'
 
 /**
  * A fixed, well-formed scrypt hash used ONLY to spend equivalent KDF time on the

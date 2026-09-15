@@ -1,7 +1,7 @@
-import { USER_ROLES, type UserRole } from '@metamodels/schema'
+import { USER_ROLES, type UserRole, type Capability } from '@metamodels/schema'
 
+export type { Capability }
 export type Role = UserRole
-export type Capability = 'read' | 'resource.write' | 'user.manage' | 'license.manage'
 
 export interface Actor {
   id: string

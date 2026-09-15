@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
 import { freshDb } from '../test/db'
 import { NotAdminError, seedAdmin } from './seed'
-import { verifyPassword } from '../auth/password'
+import { verifyPassword } from '@metamodels/schema'
 
 describe('seedAdmin', () => {
   test('creates an org + active admin whose password verifies', async () => {

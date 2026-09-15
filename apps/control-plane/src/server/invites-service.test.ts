@@ -4,7 +4,7 @@ import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import { inviteUser, listPendingInvites, revokeInvite, hashInviteToken, SeatLimitError, NotFoundError } from './invites-service'
 import { acceptInvite, InviteError } from './invites-service'
-import { verifyPassword } from '../auth/password'
+import { verifyPassword } from '@metamodels/schema'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 const NOW = 1_800_000_000_000
