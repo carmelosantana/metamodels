@@ -1,5 +1,6 @@
 import type { ZodTypeAny } from 'zod'
 import type { MeterDim, RouteClass } from '@metamodels/schema'
+import type { McpToolDef } from './mcp.js'
 
 export interface RouteSpec {
   method: string
@@ -104,7 +105,11 @@ export interface Breed<C = unknown> {
   guard(ctx: RequestCtx, fence: C): GuardResult | Promise<GuardResult>
   meter(ctx: RequestCtx, upstream: UpstreamResult): MeterEvent[]
   billingDimensions: MeterDim[]
-  toMcp?(fence: C): unknown[]
+  /**
+   * Derive this paddock's MCP tools from its fence (spec §4.4). Pure and deterministic: sorted by
+   * name, valid per `toolDefProblems`, and never a tool for a `mutate` route.
+   */
+  toMcp?(fence: C): McpToolDef[]
   handle?(ctx: RequestCtx, fence: C, io: BreedIO): Promise<BreedHandleResult>
 }
 
