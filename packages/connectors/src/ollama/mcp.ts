@@ -2,8 +2,8 @@ import { byToolName, type JsonSchema, type McpToolAnnotations, type McpToolDef }
 import type { OllamaConstraint } from './constraint.js'
 
 // Inference reads a model and changes nothing on the flock. Hints only — guard() enforces.
-const INFERENCE: McpToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false }
-const LISTING: McpToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+const INFERENCE: Readonly<McpToolAnnotations> = Object.freeze({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false })
+const LISTING: Readonly<McpToolAnnotations> = Object.freeze({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false })
 
 /** A fresh object per call: tools must not share (and so co-mutate) schema nodes. */
 function modelSchema(allowed: readonly string[] | null): JsonSchema {
@@ -84,7 +84,7 @@ function listModelsTool(): McpToolDef {
   return {
     name: 'list_models',
     title: 'List models',
-    description: 'List the models this paddock can use.',
+    description: "List the models installed on this paddock's upstream. Inference tools accept only the models their model parameter allows.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: LISTING,
   }
