@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 const id = () => uuid('id').primaryKey().defaultRandom()
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
@@ -140,3 +140,25 @@ export const auditLog = pgTable('audit_log', {
   detail: jsonb('detail'),
   createdAt: createdAt(),
 })
+
+/**
+ * oidc-provider's persisted state (sessions, interactions, grants, codes, tokens), written only
+ * by the auth service's adapter. `model` namespaces `id`. `expires_at` null = never expires;
+ * rows past it are invisible to lookups and removed by the auth service's periodic sweep.
+ */
+export const oidcPayload = pgTable('oidc_payload', {
+  model: text('model').notNull(),
+  id: text('id').notNull(),
+  payload: jsonb('payload').notNull(),
+  grantId: text('grant_id'),
+  userCode: text('user_code'),
+  uid: text('uid'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+}, (t) => [
+  primaryKey({ columns: [t.model, t.id] }),
+  index('oidc_payload_grant_id').on(t.grantId),
+  index('oidc_payload_uid').on(t.uid),
+  index('oidc_payload_user_code').on(t.userCode),
+  index('oidc_payload_expires_at').on(t.expiresAt),
+])
