@@ -1,0 +1,24 @@
+{
+  "name": "@metamodels/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@metamodels/schema": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "oidc-provider": "~9.12.2",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@types/koa": "^3.0.3",
+    "@types/oidc-provider": "~9.12.1",
+    "jose": "^6.2.12",
+    "tsx": "^4.23.1"
+  }
+}

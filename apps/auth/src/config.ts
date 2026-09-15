@@ -1,0 +1,73 @@
+export interface AuthConfig {
+  /** Public issuer URL (origin only, no trailing slash). Browsers, clients and token `iss` all see this. */
+  issuer: string
+  /** Public console URL (origin only, no trailing slash). */
+  consoleUrl: string
+  consoleClientSecret: string
+  /** Cookie-signing keys, newest first. */
+  cookieKeys: string[]
+  /** PKCS#8 PEM of the RSA signing key, or null when unset (only legal with allowEphemeralKey). */
+  signingKeyPem: string | null
+  allowEphemeralKey: boolean
+  databaseUrl: string
+  port: number
+}
+
+type Env = Record<string, string | undefined>
+
+const MIN_SECRET_LENGTH = 16
+
+function required(env: Env, name: string): string {
+  const v = env[name]?.trim()
+  if (!v) throw new Error(`${name} is required`)
+  return v
+}
+
+/** An absolute http(s) URL that is a bare origin; returned without a trailing slash. */
+function origin(name: string, value: string): string {
+  let u: URL
+  try {
+    u = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL`)
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`${name} must be an absolute http(s) URL`)
+  if (u.pathname !== '/' || u.search || u.hash) throw new Error(`${name} must be an origin (no path, query or fragment)`)
+  return u.origin
+}
+
+function secret(name: string, value: string): string {
+  if (value.length < MIN_SECRET_LENGTH) throw new Error(`${name} must be at least ${MIN_SECRET_LENGTH} characters`)
+  return value
+}
+
+export function loadAuthConfig(env: Env): AuthConfig {
+  const cookieKeys = required(env, 'OIDC_COOKIE_KEYS').split(',').map((k) => k.trim()).filter(Boolean)
+  for (const k of cookieKeys) secret('OIDC_COOKIE_KEYS', k)
+
+  const allowEphemeralKey = env.OIDC_ALLOW_EPHEMERAL_KEY === 'true'
+  const rawKey = env.OIDC_SIGNING_KEY?.trim()
+  let signingKeyPem: string | null = null
+  if (rawKey) {
+    signingKeyPem = Buffer.from(rawKey, 'base64').toString('utf8')
+    if (!signingKeyPem.includes('-----BEGIN PRIVATE KEY-----')) {
+      throw new Error('OIDC_SIGNING_KEY must be base64 of a PKCS#8 PEM (-----BEGIN PRIVATE KEY-----)')
+    }
+  } else if (!allowEphemeralKey) {
+    throw new Error('OIDC_SIGNING_KEY is required (OIDC_ALLOW_EPHEMERAL_KEY=true is for local development only)')
+  }
+
+  const port = env.AUTH_PORT ? Number(env.AUTH_PORT) : 3100
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('AUTH_PORT must be a TCP port number')
+
+  return {
+    issuer: origin('OIDC_ISSUER', required(env, 'OIDC_ISSUER')),
+    consoleUrl: origin('CONSOLE_URL', required(env, 'CONSOLE_URL')),
+    consoleClientSecret: secret('CONSOLE_CLIENT_SECRET', required(env, 'CONSOLE_CLIENT_SECRET')),
+    cookieKeys,
+    signingKeyPem,
+    allowEphemeralKey,
+    databaseUrl: required(env, 'DATABASE_URL'),
+    port,
+  }
+}
