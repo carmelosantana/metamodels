@@ -88,6 +88,8 @@ function jobResultTool(): McpToolDef {
  * ComfyUI's MCP tools for one paddock (spec §4.4): one `run_<template>` per approved template,
  * plus `get_job_result` whenever there is anything to run. Raw graphs are no more reachable
  * through MCP than through REST — every tool funnels into `handle` → `reconstructGraph`.
+ * An image parameter is uploaded by handle through ComfyUI's /upload/image (a mutate-class route)
+ * as an internal step of the run — no tool ever maps to a mutate route directly.
  */
 export function comfyToMcp(fence: ComfyConstraint): McpToolDef[] {
   const byId = new Map<string, WorkflowTemplate>()
