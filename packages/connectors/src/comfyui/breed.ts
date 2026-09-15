@@ -12,6 +12,7 @@ import type {
 } from '../breed.js'
 import { reconstructGraph } from './template.js'
 import type { ParamSpec, WorkflowTemplate } from './template.js'
+import { comfyToMcp } from './mcp.js'
 
 // ---- Constraint (Fence) schema ----------------------------------------------
 //
@@ -126,6 +127,7 @@ export const comfyuiBreed: Breed<ComfyConstraint> = defineBreed<ComfyConstraint>
   ],
   constraintSchema: comfyuiConstraint,
   billingDimensions: ['jobs', 'gpu_ms', 'images'],
+  toMcp: comfyToMcp,
 
   // Defense in depth: the data plane routes ComfyUI requests to `handle`, never
   // through guard→proxy→meter. But if `guard` is ever reached, it must reject —
