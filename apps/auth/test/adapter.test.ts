@@ -59,6 +59,15 @@ describe('PgAdapter', () => {
     expect(found && found.consumed).toBeTruthy()
   })
 
+  test('re-saving a consumed record never un-consumes it (replay detection)', async () => {
+    const db = await makeDb()
+    const a = new PgAdapter(db, 'AuthorizationCode')
+    await a.upsert('c1', { kind: 'AuthorizationCode' }, 60)
+    await a.consume('c1')
+    await a.upsert('c1', { kind: 'AuthorizationCode' }, 60)
+    expect((await a.find('c1'))?.consumed).toBeTruthy()
+  })
+
   test('destroy removes the row', async () => {
     const db = await makeDb()
     const a = new PgAdapter(db, 'Session')
