@@ -66,6 +66,9 @@ importers:
       ioredis:
         specifier: 5.4.2
         version: 5.4.2
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
       next:
         specifier: 16.2.0
         version: 16.2.0(@playwright/test@1.62.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
