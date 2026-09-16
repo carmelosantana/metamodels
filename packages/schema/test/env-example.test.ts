@@ -18,6 +18,7 @@ const EXCLUDED = new Set([
   'OLLAMA_TEST_MODEL',
   'E2E_BASE_URL',
   'E2E_PROXY_URL',
+  'E2E_AUTH_URL',
   'E2E_SCREENSHOT_DIR',
 ])
 

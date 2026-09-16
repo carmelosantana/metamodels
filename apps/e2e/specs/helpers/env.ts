@@ -12,6 +12,9 @@ export const CONTROL_PLANE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3
 /** Data-plane (the governed proxy consumers actually call). */
 export const PROXY_URL = process.env.E2E_PROXY_URL ?? 'http://localhost:8787'
 
+/** Auth service (sign-in). Must equal the stack's OIDC_ISSUER — the console redirects there. */
+export const AUTH_URL = process.env.E2E_AUTH_URL ?? 'http://localhost:3100'
+
 /**
  * Upstream Ollama, as reachable **from inside the data-plane container** — not from your
  * shell. A LAN address works; `localhost` would resolve to the container itself.
