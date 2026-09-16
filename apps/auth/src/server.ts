@@ -17,10 +17,13 @@ export function startAuthServer(cfg: AuthConfig, db: Db = drizzle(postgres(cfg.d
   }
   const server = createServer(createProvider(cfg, db).callback())
 
-  const sweep = setInterval(() => {
+  const runSweep = () => {
     // eslint-disable-next-line no-console
     sweepExpired(db).catch((err) => console.error('[auth] expired-row sweep failed:', err))
-  }, SWEEP_INTERVAL_MS)
+  }
+  // Once now, as well as hourly: a container restarting more often than the interval never sweeps.
+  runSweep()
+  const sweep = setInterval(runSweep, SWEEP_INTERVAL_MS)
   sweep.unref()
   server.on('close', () => clearInterval(sweep))
 
