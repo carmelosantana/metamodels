@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
-# Bring the whole stack up from a clean state, verify migrate + health, then tear down.
-# Requires a Docker daemon. Usage: ./scripts/smoke.sh
+# Bring the whole stack up from a clean state, verify migrate, health and the sign-in hand-off,
+# then tear down. Requires a Docker daemon.
+#
+#   ./scripts/smoke.sh                        # .env.example: host ports 3000 / 8787 / 3100
+#   ENV_FILE=.env.verify ./scripts/smoke.sh   # another env file; its ports and URLs move the probes
 set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env.example}"
-COMPOSE="docker compose --env-file ${ENV_FILE}"
+# A dedicated compose project. Without -p, compose names the project after the directory, so
+# running this from a checkout that also hosts a real stack would `down -v` that stack — and
+# its database volume — on exit.
+PROJECT="${SMOKE_PROJECT:-metamodels-smoke}"
+COMPOSE="docker compose -p ${PROJECT} --env-file ${ENV_FILE}"
+
+# Probe the ports and URLs from the same file compose interpolates.
+case "$ENV_FILE" in */*) ENV_PATH="$ENV_FILE" ;; *) ENV_PATH="./$ENV_FILE" ;; esac
+set -a; . "$ENV_PATH"; set +a
+: "${OIDC_ISSUER:?OIDC_ISSUER must be set in $ENV_FILE}"
+CONSOLE="http://localhost:${CONTROL_PLANE_PORT:-3000}"
+PROXY="http://localhost:${DATA_PLANE_PORT:-8787}"
+AUTH="http://localhost:${AUTH_HOST_PORT:-3100}"
 
 cleanup() { $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-echo "== building + starting stack =="
+echo "== building + starting stack (project ${PROJECT}) =="
 $COMPOSE up -d --build
 
 echo "== waiting for migrate to complete =="
@@ -24,9 +39,11 @@ echo "migrate OK"
 
 echo "== waiting for health endpoints =="
 for probe in \
-  "data-plane http://localhost:8787/healthz" \
-  "data-plane http://localhost:8787/readyz" \
-  "control-plane http://localhost:3000/api/healthz"; do
+  "data-plane ${PROXY}/healthz" \
+  "data-plane ${PROXY}/readyz" \
+  "auth ${AUTH}/healthz" \
+  "auth ${AUTH}/.well-known/openid-configuration" \
+  "control-plane ${CONSOLE}/api/healthz"; do
   name=$(echo "$probe" | awk '{print $1}')
   url=$(echo "$probe" | awk '{print $2}')
   ok=""
@@ -37,5 +54,17 @@ for probe in \
   if [ -z "$ok" ]; then echo "FAILED: $name $url"; $COMPOSE logs "$name"; exit 1; fi
   echo "OK: $name $url"
 done
+
+echo "== checking the sign-in hand-off =="
+# /login must answer 303 with a Location on the PUBLIC issuer. That proves the console reached
+# the auth service over the compose network (OIDC_INTERNAL_URL) AND re-homed the browser-facing
+# endpoint onto OIDC_ISSUER rather than http://auth:3100, which no browser can resolve.
+read -r status location < <(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' "${CONSOLE}/login")
+if [ "$status" != "303" ] || [[ "${location:-}" != "${OIDC_ISSUER}/auth?"* ]]; then
+  echo "FAILED: /login answered ${status} -> ${location:-<none>} (expected 303 -> ${OIDC_ISSUER}/auth?...)"
+  $COMPOSE logs control-plane auth
+  exit 1
+fi
+echo "OK: console /login -> ${OIDC_ISSUER}/auth"
 
 echo "== smoke passed =="
