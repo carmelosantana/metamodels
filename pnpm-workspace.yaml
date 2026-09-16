@@ -4,3 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: false
+overrides:
+  # GHSA-2v37-7h3g-55p8 (high): nanoid <3.3.18 loops on size 0. Reaches the control-plane
+  # image via next>postcss; postcss's ^3.3.16 range lets the lockfile keep a vulnerable copy.
+  "nanoid@<3.3.18": "^3.3.18"
