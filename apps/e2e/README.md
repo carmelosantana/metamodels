@@ -29,6 +29,20 @@ The suite also fails if the console logs a **CSP violation or page error** on an
 visits. A blocked script degrades the UI without failing any ordinary assertion, and this
 walkthrough happens to visit every screen.
 
+### Sign-in (`specs/sign-in.spec.ts`)
+
+Signing in is handed to the auth service (`apps/auth`, an OpenID Provider). This spec proves
+the round trip in a real browser: `/login` lands on the auth service's password form, a
+correct password comes back to a signed-in console with an `HttpOnly`, `SameSite=Lax`
+session cookie, a wrong one stays on the form and mints nothing, and **Sign out** ends the
+auth service's session as well as the console's. No CSP violation is tolerated on either
+origin. It needs no upstream model, so it never skips.
+
+Each run records **one failed login** against the auth service (the wrong-password check).
+The auth service's throttle refuses every login from an address after five failures within
+15 minutes, even a correct one, so a sixth run inside that window fails at sign-in. Wait for
+the window to pass, or restart the auth container (the throttle is in memory).
+
 ## Running it
 
 The suite drives a stack that is already running — it does not start one.
@@ -45,8 +59,9 @@ Then, from `apps/e2e`:
 OLLAMA_TEST_URL=http://ollama:11434 pnpm test:e2e
 ```
 
-Without `OLLAMA_TEST_URL` the suite **skips** rather than fails — the same opt-in
-convention as the `PG_TEST_URL` / `REDIS_TEST_URL` integration suites.
+Without `OLLAMA_TEST_URL` the walkthrough **skips** rather than fails — the same opt-in
+convention as the `PG_TEST_URL` / `REDIS_TEST_URL` integration suites. The sign-in spec
+still runs.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -54,6 +69,7 @@ convention as the `PG_TEST_URL` / `REDIS_TEST_URL` integration suites.
 | `OLLAMA_TEST_MODEL` | `qwen2.5-coder:0.5b` | Must exist upstream. A small model keeps the run fast |
 | `E2E_BASE_URL` | `http://localhost:3000` | Control-plane. Match `CONTROL_PLANE_PORT` if you changed it |
 | `E2E_PROXY_URL` | `http://localhost:8787` | Data-plane |
+| `E2E_AUTH_URL` | `http://localhost:3100` | Auth service. Must equal the stack's `OIDC_ISSUER` |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | `admin@example.com` / `change-me` | The seeded operator |
 
 ## Notes for whoever changes this next

@@ -1,6 +1,6 @@
 # MetaModels — drop-in Portainer stack.
 #
-# Paste this whole file into Portainer › Stacks › Add stack › Web editor, set the four
+# Paste this whole file into Portainer › Stacks › Add stack › Web editor, set the seven
 # secrets in the stack's Environment variables, and Deploy. Everything else has an inline
 # default, so a minimal deploy only needs the secrets.
 #
@@ -10,11 +10,13 @@
 # NOT run them — it points at them over the host gateway (see UPSTREAM notes in docs/DEPLOY.md).
 #
 # SECURITY POSTURE (read before changing):
-#   * The four secrets use ${VAR:?...} deliberately — they FAIL FAST rather than defaulting.
+#   * The seven secrets use ${VAR:?...} deliberately — they FAIL FAST rather than defaulting.
 #     A default password on an internet-reachable admin plane is a vulnerability, not a
 #     convenience. Everything non-secret defaults.
 #   * The control-plane is the ADMIN plane. It binds to 127.0.0.1 by default so it is NOT
 #     internet-reachable. Only the data-plane (the actual API) is meant to be public.
+#   * The auth service (sign-in) is admin-side too: loopback by default. The console sends
+#     browsers to it, so an operator forwards BOTH ports (see docs/DEPLOY.md).
 #   * Postgres and Redis are never port-published — compose-network only.
 
 services:
@@ -45,7 +47,7 @@ services:
       retries: 10
 
   migrate:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.4.0}
     working_dir: /app/apps/migrate
     command: ["pnpm", "start"]
     environment:
@@ -60,7 +62,7 @@ services:
   # belongs to a NON-admin user — that is a real misconfiguration, not noise to swallow.
   # Nothing depends on it completing: a failed seed must not take the stack down.
   seed:
-    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.4.0}
     restart: "no"
     command: ["pnpm", "seed"]
     environment:
@@ -74,13 +76,17 @@ services:
         condition: service_completed_successfully
 
   control-plane:
-    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.4.0}
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET — run scripts/new-stack.sh}
       LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET:?set LICENSE_KEY_SECRET — run scripts/new-stack.sh}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${AUTH_HOST_PORT:-3100}}
+      OIDC_INTERNAL_URL: http://auth:3100
+      CONSOLE_URL: ${CONSOLE_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT:-3200}}
+      CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?set CONSOLE_CLIENT_SECRET — run scripts/new-stack.sh}
       OPERATOR_EMAIL: ${OPERATOR_EMAIL:-admin@metamodels.cc}
       OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?set OPERATOR_PASSWORD — run scripts/new-stack.sh}
       NODE_ENV: production
@@ -93,14 +99,46 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      auth:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # The sign-in service (OpenID Provider). Same loopback posture as the console: it holds the
+  # password form and signs every token. Forward its port alongside the console's.
+  auth:
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.4.0}
+    restart: unless-stopped
+    working_dir: /app/apps/auth
+    command: ["pnpm", "start"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${AUTH_HOST_PORT:-3100}}
+      CONSOLE_URL: ${CONSOLE_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT:-3200}}
+      CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?set CONSOLE_CLIENT_SECRET — run scripts/new-stack.sh}
+      OIDC_COOKIE_KEYS: ${OIDC_COOKIE_KEYS:?set OIDC_COOKIE_KEYS — run scripts/new-stack.sh}
+      OIDC_SIGNING_KEY: ${OIDC_SIGNING_KEY:?set OIDC_SIGNING_KEY — run scripts/new-stack.sh}
+      # Hard-wired, not a variable: a deployed stack must never mint a throwaway signing key.
+      OIDC_ALLOW_EPHEMERAL_KEY: "false"
+      AUTH_PORT: 3100
+    ports:
+      - "${AUTH_BIND:-127.0.0.1}:${AUTH_HOST_PORT:-3100}:3100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   data-plane:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.4.0}
     restart: unless-stopped
     working_dir: /app/apps/data-plane
     command: ["pnpm", "start"]
@@ -137,7 +175,7 @@ services:
       retries: 5
 
   worker:
-    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-runtime:${TAG:-0.4.0}
     restart: unless-stopped
     working_dir: /app/apps/worker
     command: ["pnpm", "start"]
@@ -154,7 +192,7 @@ services:
         condition: service_completed_successfully
 
   scheduler:
-    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.3.0}
+    image: ghcr.io/carmelosantana/metamodels-control-plane:${TAG:-0.4.0}
     restart: unless-stopped
     command: ["pnpm", "scheduler"]
     environment:

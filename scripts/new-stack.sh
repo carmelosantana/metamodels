@@ -3,14 +3,14 @@
 #
 #   ./scripts/new-stack.sh                      # print the block
 #   ./scripts/new-stack.sh --out .env.portainer # also write it to a file (mode 600)
-#   ./scripts/new-stack.sh --domain api.example.com --tag 0.3.0 --email me@example.com
+#   ./scripts/new-stack.sh --domain api.example.com --tag 0.4.0 --email me@example.com
 #
 # Secrets are URL-safe hex on purpose: POSTGRES_PASSWORD is interpolated into DATABASE_URL,
 # so a password containing :/@?# would produce a malformed connection string.
 set -euo pipefail
 
 DOMAIN='api.metamodels.cc'
-TAG='0.3.0'
+TAG='0.4.0'
 EMAIL='admin@metamodels.cc'
 OUT=''
 
@@ -27,8 +27,11 @@ done
 
 command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
 
-# 32 bytes of hex = 64 chars, comfortably above the >=16-char floor both secrets enforce.
+# 32 bytes of hex = 64 chars, comfortably above the >=16-char floor every secret enforces.
 gen() { openssl rand -hex 32; }
+# The token-signing key: RSA-2048 as a PKCS#8 PEM (genpkey's default), base64'd onto one line
+# so it survives being a KEY=value environment variable.
+genkey() { openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | openssl base64 -A; }
 
 BLOCK=$(cat <<EOF
 # MetaModels stack — generated $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -40,6 +43,9 @@ POSTGRES_PASSWORD=$(gen)
 SESSION_SECRET=$(gen)
 LICENSE_KEY_SECRET=$(gen)
 OPERATOR_PASSWORD=$(gen)
+CONSOLE_CLIENT_SECRET=$(gen)
+OIDC_COOKIE_KEYS=$(gen)
+OIDC_SIGNING_KEY=$(genkey)
 EOF
 )
 
@@ -66,10 +72,17 @@ Store these now — they are not recoverable from the running stack.
                       undecryptable and you must re-activate the license.
   OPERATOR_PASSWORD   only used by `pnpm seed` to create the first admin.
                       Change it in the console after first login.
+  OIDC_SIGNING_KEY    signs every token the sign-in service issues. Changing
+                      it invalidates issued tokens; it does not sign anyone
+                      out (see "Rotating the sign-in keys" in docs/DEPLOY.md).
+  OIDC_COOKIE_KEYS    signs the sign-in service's cookies. Rotate without
+                      signing anyone out by prepending: <new>,<old>
 
 Next: paste docker-compose.portainer.yml as the stack, add the block above as the
-stack's environment variables, deploy, then seed the first operator once:
+stack's environment variables, and deploy. The first operator is seeded
+automatically. The console and the sign-in service are loopback-only by default,
+so forward both ports, then open http://127.0.0.1:3200 (exactly — it is CONSOLE_URL):
 
-  docker exec -it <control-plane-container> pnpm seed
+  ssh -L 3200:127.0.0.1:3200 -L 3100:127.0.0.1:3100 <host>
 --------------------------------------------------------------------------------
 NOTE

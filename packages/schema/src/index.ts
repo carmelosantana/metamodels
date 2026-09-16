@@ -1,4 +1,7 @@
 export * from './keys.js'
+export * from './capabilities.js'
+export * from './oidc.js'
+export * from './password.js'
 export * from './period.js'
 export * from './enums.js'
 export * from './config.js'
