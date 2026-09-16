@@ -1,5 +1,6 @@
 const MESSAGES: Record<string, string> = {
   unavailable: 'The sign-in service is not reachable. Check that the auth service is running.',
+  misconfigured: "The console's sign-in configuration is invalid. Check the console's server logs.",
   access_denied: 'Sign-in was cancelled or refused.',
   provider_error: 'The sign-in service reported an error.',
   state_mismatch: 'This sign-in attempt expired, or was started in another tab.',

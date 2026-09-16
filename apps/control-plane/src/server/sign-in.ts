@@ -9,6 +9,21 @@ export type SignInFailure =
   | 'missing_code'
   | 'token_exchange_failed'
   | 'account_unavailable'
+  | 'misconfigured'
+
+/** Every reason /auth/error can show: the callback's failures, plus /login's unreachable OP. */
+export type SignInErrorReason = SignInFailure | 'unavailable'
+
+export type SignInLog = (...args: string[]) => void
+
+/**
+ * The only way a sign-in failure is logged. A fixed prefix, the reason and the error's message —
+ * never the error object (jose errors can carry token claims), tokens, codes, the client secret
+ * or cookies. The browser only ever sees the reason.
+ */
+export function logSignInFailure(log: SignInLog, reason: SignInErrorReason, err: unknown): void {
+  log('[console] sign-in failed:', reason, err instanceof Error ? err.message : String(err))
+}
 
 export type SignInResult = { ok: true; actor: Actor } | { ok: false; reason: SignInFailure }
 
@@ -16,6 +31,8 @@ export interface SignInDeps {
   issuer: string
   exchangeCode(code: string, tx: AuthTransaction): Promise<{ sub: string }>
   loadActor(sub: string): Promise<Actor | null>
+  /** Server-side log sink; `console.error` at the call site. */
+  log: SignInLog
 }
 
 /**
@@ -37,7 +54,8 @@ export async function completeSignIn(
   let sub: string
   try {
     ;({ sub } = await deps.exchangeCode(code, tx))
-  } catch {
+  } catch (err) {
+    logSignInFailure(deps.log, 'token_exchange_failed', err)
     return { ok: false, reason: 'token_exchange_failed' }
   }
   const actor = await deps.loadActor(sub)

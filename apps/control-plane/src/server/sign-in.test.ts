@@ -11,6 +11,7 @@ function deps(over: Partial<SignInDeps> = {}): SignInDeps {
     issuer: ISSUER,
     exchangeCode: vi.fn(async () => ({ sub: 'u-1' })),
     loadActor: vi.fn(async () => ACTOR),
+    log: vi.fn(),
     ...over,
   }
 }
@@ -55,7 +56,25 @@ describe('completeSignIn', () => {
 
   test('a failed token exchange is reported without leaking the error', async () => {
     const d = deps({ exchangeCode: vi.fn(async () => { throw new Error('secret detail') }) })
-    expect(await completeSignIn(ok(), TX, d)).toEqual({ ok: false, reason: 'token_exchange_failed' })
+    const result = await completeSignIn(ok(), TX, d)
+    expect(result).toEqual({ ok: false, reason: 'token_exchange_failed' })
+    expect(JSON.stringify(result)).not.toContain('secret detail')
+  })
+
+  test('a failed token exchange is logged server-side: prefix, reason and message only', async () => {
+    const err = Object.assign(new Error('token exchange failed: invalid_client'), { claims: { sub: 'u-1' } })
+    const d = deps({ exchangeCode: vi.fn(async () => { throw err }) })
+    await completeSignIn(ok(), TX, d)
+    expect(d.log).toHaveBeenCalledTimes(1)
+    expect(d.log).toHaveBeenCalledWith('[console] sign-in failed:', 'token_exchange_failed', 'token exchange failed: invalid_client')
+    // Never the error object itself: jose errors can carry token claims.
+    for (const arg of vi.mocked(d.log).mock.calls[0]) expect(typeof arg).toBe('string')
+  })
+
+  test('a successful sign-in logs nothing', async () => {
+    const d = deps()
+    await completeSignIn(ok(), TX, d)
+    expect(d.log).not.toHaveBeenCalled()
   })
 
   test('a subject with no active account is refused', async () => {
