@@ -15,6 +15,19 @@ export function resourceServers(consoleUrl: string): ReadonlyMap<string, Resourc
   }]])
 }
 
+/**
+ * oidc-provider's `ttl.AccessToken`. It consults a token's resource server ONLY when this option is
+ * a function: `BaseToken.expiresIn` returns a numeric `ttl.AccessToken` as-is and never looks at the
+ * token, which would make every `accessTokenTTL` above dead config — M4's per-paddock lifetimes
+ * included. Tokens bound to no resource server (the opaque userinfo ones) keep the one-hour default.
+ */
+export function accessTokenTtl(
+  _ctx: unknown,
+  token: { resourceServer?: { accessTokenTTL?: number } },
+): number {
+  return token.resourceServer?.accessTokenTTL ?? 60 * 60
+}
+
 /** oidc-provider's `getResourceServerInfo`: known resources only, everything else `invalid_target`. */
 export function makeGetResourceServerInfo(servers: ReadonlyMap<string, ResourceServer>) {
   return async (_ctx: unknown, resourceIndicator: string): Promise<ResourceServer> => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { jwtVerify } from 'jose'
 import { adminApiResource, CAPABILITIES, CONSOLE_CLIENT_ID } from '@metamodels/schema'
-import { resourceServers } from '../src/resources.js'
+import { accessTokenTtl, resourceServers } from '../src/resources.js'
 import { seedUser } from './helpers/db.js'
 import { authorize, CONSOLE_URL, exchangeCode, opJwks, startTestOp, type TestOp } from './helpers/flow.js'
 
@@ -37,6 +37,10 @@ describe('resource servers', () => {
       issuer: op!.issuer, audience: ADMIN, typ: 'at+jwt', algorithms: ['RS256'],
     })
     expect(protectedHeader.alg).toBe('RS256')
+    // Exactly this audience, not merely one of several: jose's `audience` option is a membership
+    // check, so a widened `aud` array would still satisfy jwtVerify while destroying the audience
+    // restriction M2 and M4 depend on.
+    expect(payload.aud).toBe(ADMIN)
     expect(payload.sub).toBe(id)
     expect(payload.client_id).toBe(CONSOLE_CLIENT_ID)
     expect(String(payload.scope).split(' ').sort()).toEqual(['read', 'resource.write'])
@@ -49,6 +53,7 @@ describe('resource servers', () => {
     if (out.kind !== 'redirect') throw new Error('expected a code')
     const token = await exchangeCode(op!, out.url.searchParams.get('code')!, out.verifier, { resource: ADMIN })
     const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op!), { issuer: op!.issuer, audience: ADMIN })
+    expect(payload.aud).toBe(ADMIN)
     expect(payload.scope).toBe('read')
   }, T)
 
@@ -66,4 +71,27 @@ describe('resource servers', () => {
     expect(token.status).toBe(200)
     expect(String(token.json.access_token).split('.')).not.toHaveLength(3)
   }, T)
+})
+
+/**
+ * `ttl.AccessToken` must stay a FUNCTION in provider.ts. oidc-provider's `BaseToken.expiresIn`
+ * returns a numeric `ttl.AccessToken` directly and never consults the token's resource server, so
+ * a static number would silently ignore every `resourceServer.accessTokenTTL` — including the
+ * per-paddock ones M4 declares. These pin both directions, which `exp - iat === 3600` cannot.
+ */
+describe('access-token TTL', () => {
+  test('a resource server governs its own access-token lifetime', () => {
+    expect(accessTokenTtl({}, { resourceServer: { accessTokenTTL: 900 } })).toBe(900)
+  })
+
+  test('a token bound to no resource server falls back to an hour', () => {
+    expect(accessTokenTtl({}, {})).toBe(3600)
+    expect(accessTokenTtl({}, { resourceServer: {} })).toBe(3600)
+  })
+
+  test('the admin API resource declares the TTL its tokens actually get', () => {
+    const rs = resourceServers(CONSOLE_URL).get(ADMIN)!
+    expect(rs.accessTokenTTL).toBe(3600)
+    expect(accessTokenTtl({}, { resourceServer: rs })).toBe(3600)
+  })
 })

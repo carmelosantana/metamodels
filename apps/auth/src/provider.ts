@@ -7,7 +7,7 @@ import type { Db } from './db.js'
 import { interactionMiddleware } from './interactions.js'
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
-import { makeGetResourceServerInfo, resourceServers } from './resources.js'
+import { accessTokenTtl, makeGetResourceServerInfo, resourceServers } from './resources.js'
 import { authCsp, renderLogoutPage, renderMessagePage } from './views.js'
 
 export interface ProviderOptions {
@@ -65,7 +65,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       ctx.body = renderMessagePage('Sign-in error', out.error_description ?? out.error)
     },
     ttl: {
-      AccessToken: 60 * 60,
+      // A function, not a number: only this shape lets a resource server's accessTokenTTL govern.
+      AccessToken: accessTokenTtl,
       AuthorizationCode: 60,
       IdToken: 60 * 60,
       Interaction: 10 * 60,
