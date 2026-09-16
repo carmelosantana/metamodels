@@ -55,8 +55,17 @@ describe('sealJson / openJson', () => {
   })
 
   test('session tokens are byte-compatible with the previous codec', () => {
-    const token = signSession(base, SECRET, 60_000, 1_000)
-    const [body] = token.split('.')
-    expect(JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))).toEqual({ uid: 'u1', oid: 'o1', role: 'admin', exp: 61_000 })
+    // The exact string the pre-`sealJson` codec minted for these inputs, generated from the
+    // implementation at ba587c6 and reproduced byte for byte by the current one. This is a golden
+    // value, not a derived one: it pins the minting format itself, JSON key order included. A
+    // regression that merely reordered the fields (`sealJson({ exp, ...payload })`, or emitting
+    // `role` before `oid`) would mint a different string while still satisfying a key-order-
+    // insensitive `toEqual` on the parsed body, and the old codec no longer exists to catch it.
+    // If this assertion ever has to change, every operator session cookie already in the wild
+    // stops verifying the moment the change deploys — treat that as a breaking release.
+    const GOLDEN = 'eyJ1aWQiOiJ1MSIsIm9pZCI6Im8xIiwicm9sZSI6ImFkbWluIiwiZXhwIjo2MTAwMH0.avsNdesBiQc6gl-UBeyPBGslPWBd8cj7OsYIPiElmZs'
+    expect(signSession(base, SECRET, 60_000, 1_000)).toBe(GOLDEN)
+    // ...and a cookie in that format still opens, which is the property operators actually feel.
+    expect(verifySession(GOLDEN, SECRET, 30_000)).toEqual({ uid: 'u1', oid: 'o1', role: 'admin', exp: 61_000 })
   })
 })

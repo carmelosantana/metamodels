@@ -4,7 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { CONSOLE_CLIENT_ID } from '@metamodels/schema'
 import {
-  codeChallenge, loadOidcClientConfig, newTransaction, OidcClient, onOrigin, type OidcClientConfig,
+  codeChallenge, loadOidcClientConfig, newTransaction, OidcClient, onOrigin,
+  type AuthTransaction, type OidcClientConfig,
 } from './oidc-client'
 
 const SUB = '00000000-0000-4000-8000-000000000001'
@@ -17,10 +18,14 @@ interface StubOp {
   issuer: string
   discoveryCount: number
   tokenRequests: Array<{ host: string; authorization: string; body: URLSearchParams }>
+  /** The `Host` each JWKS fetch arrived on — proof of which origin the key set was pulled from. */
+  jwksRequests: string[]
   idTokenClaims: Record<string, unknown>
   audience: string
   tokenStatus: number
   discoveryIssuer?: string
+  /** When set, discovery advertises endpoints on this origin whatever `Host` the request carried. */
+  endpointOrigin?: string
   close(): Promise<void>
 }
 
@@ -34,7 +39,7 @@ async function startStubOp(): Promise<StubOp> {
   const { privateKey, publicKey } = await generateKeyPair('RS256')
   const jwk = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' }
   const op = {
-    port: 0, issuer: '', discoveryCount: 0, tokenRequests: [], idTokenClaims: {},
+    port: 0, issuer: '', discoveryCount: 0, tokenRequests: [], jwksRequests: [], idTokenClaims: {},
     audience: CONSOLE_CLIENT_ID, tokenStatus: 200,
   } as unknown as StubOp
   const server = createServer(async (req, res) => {
@@ -46,8 +51,9 @@ async function startStubOp(): Promise<StubOp> {
     if (path === '/.well-known/openid-configuration') {
       op.discoveryCount += 1
       // Like oidc-provider (OIDCContext#urlFor resolves against the request URL), endpoints are
-      // built from the Host the request arrived on, not from the issuer.
-      const base = `http://${req.headers.host}`
+      // built from the Host the request arrived on, not from the issuer. `endpointOrigin` overrides
+      // that to model an OP behind a proxy that rewrites Host to the public name.
+      const base = op.endpointOrigin ?? `http://${req.headers.host}`
       return json(200, {
         issuer: op.discoveryIssuer ?? op.issuer,
         authorization_endpoint: `${base}/auth`,
@@ -56,7 +62,10 @@ async function startStubOp(): Promise<StubOp> {
         end_session_endpoint: `${base}/session/end`,
       })
     }
-    if (path === '/jwks') return json(200, { keys: [jwk] })
+    if (path === '/jwks') {
+      op.jwksRequests.push(req.headers.host ?? '')
+      return json(200, { keys: [jwk] })
+    }
     if (path === '/token' && req.method === 'POST') {
       op.tokenRequests.push({ host: req.headers.host ?? '', authorization: req.headers.authorization ?? '', body: new URLSearchParams(await body(req)) })
       if (op.tokenStatus !== 200) return json(op.tokenStatus, { error: 'invalid_grant' })
@@ -156,10 +165,41 @@ describe('OidcClient', () => {
     expect(op.tokenRequests[0].host).toBe(`127.0.0.1:${op.port}`)
   })
 
+  test('keeps the token and JWKS calls on the back channel when the OP advertises public endpoints', async () => {
+    op = await startStubOp()
+    const internal = op.issuer                    // the only origin this process can actually reach
+    op.issuer = `http://localhost:${op.port}`     // the public name, signed as `iss`
+    // An OP behind a proxy that rewrites Host advertises PUBLIC endpoints even to a back-channel
+    // caller. The server-to-server calls must still be re-homed onto internalUrl; without that,
+    // the console would dial the public name, which in Docker is unreachable from inside the network.
+    op.endpointOrigin = op.issuer
+    const client = new OidcClient(cfg(op, { issuer: op.issuer, internalUrl: internal }))
+    expect(await client.exchangeCode('c', TX)).toEqual({ sub: SUB })
+    expect(op.tokenRequests[0].host).toBe(`127.0.0.1:${op.port}`)
+    expect(op.jwksRequests).toEqual([`127.0.0.1:${op.port}`])
+    // The browser-facing half is unaffected: it still points at the public issuer.
+    expect(new URL(await client.authorizationUrl(TX)).origin).toBe(op.issuer)
+  })
+
   test('rejects an ID token with the wrong nonce', async () => {
     op = await startStubOp()
     op.idTokenClaims = { nonce: 'someone-elses-nonce' }
     await expect(new OidcClient(cfg(op)).exchangeCode('c', TX)).rejects.toThrow('nonce mismatch')
+  })
+
+  test('rejects a transaction with no usable nonce, even when the ID token also omits the claim', async () => {
+    op = await startStubOp()
+    op.idTokenClaims = { nonce: undefined }  // JSON.stringify drops it: the ID token carries no nonce
+    // Task 11 reconstitutes the transaction from a sealed cookie, and `openJson` returns
+    // Record<string, unknown>. Casting instead of validating is the realistic mistake, so build the
+    // transaction exactly that way: `undefined !== undefined` is false, and a bare comparison would
+    // have accepted this token.
+    const fromCookie = (payload: Record<string, unknown>) => payload as unknown as AuthTransaction
+    const client = new OidcClient(cfg(op))
+    await expect(client.exchangeCode('c', fromCookie({ state: 'st', codeVerifier: 'v'.repeat(43) })))
+      .rejects.toThrow('nonce mismatch')
+    await expect(client.exchangeCode('c', fromCookie({ state: 'st', nonce: '', codeVerifier: 'v'.repeat(43) })))
+      .rejects.toThrow('nonce mismatch')
   })
 
   test('rejects an ID token issued for another client', async () => {

@@ -159,7 +159,13 @@ export class OidcClient {
     const { payload } = await jwtVerify(json.id_token, this.jwks, {
       issuer: this.cfg.issuer, audience: CONSOLE_CLIENT_ID, algorithms: ['RS256'],
     })
-    if (payload.nonce !== tx.nonce) throw new OidcError('ID token nonce mismatch')
+    // Validate the expected nonce, never just compare it. A transaction reconstituted from a sealed
+    // cookie arrives as `Record<string, unknown>`; if a caller casts instead of validating, a cookie
+    // missing `nonce` gives `tx.nonce === undefined`, an ID token without the claim gives
+    // `payload.nonce === undefined`, and a bare `!==` would quietly accept the pair.
+    if (typeof tx.nonce !== 'string' || tx.nonce === '' || payload.nonce !== tx.nonce) {
+      throw new OidcError('ID token nonce mismatch')
+    }
     if (typeof payload.sub !== 'string' || payload.sub === '') throw new OidcError('ID token has no subject')
     return { sub: payload.sub }
   }
