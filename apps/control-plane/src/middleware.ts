@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { buildCsp } from './lib/csp.js'
+import { buildCsp, originOf } from './lib/csp.js'
 
 /**
  * Mints a per-request CSP nonce and attaches the policy to both the request (so Next stamps
@@ -10,7 +10,11 @@ import { buildCsp } from './lib/csp.js'
  */
 export function middleware(request: NextRequest) {
   const nonce = btoa(crypto.randomUUID())
-  const csp = buildCsp(nonce, { dev: process.env.NODE_ENV !== 'production' })
+  const authOrigin = originOf(process.env.OIDC_ISSUER)
+  const csp = buildCsp(nonce, {
+    dev: process.env.NODE_ENV !== 'production',
+    formActionOrigins: authOrigin ? [authOrigin] : [],
+  })
 
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-nonce', nonce)
@@ -23,6 +27,9 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Node, not edge: OIDC_ISSUER must be read from the container's environment on each request.
+  // The published image is built once, with no deployment's values present.
+  runtime: 'nodejs',
   matcher: [
     /*
      * Every path except build output and the favicon — those are static files with no

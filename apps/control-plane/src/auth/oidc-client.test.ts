@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { CONSOLE_CLIENT_ID } from '@metamodels/schema'
 import {
-  codeChallenge, loadOidcClientConfig, newTransaction, OidcClient, onOrigin,
+  codeChallenge, loadOidcClientConfig, newTransaction, OidcClient, onOrigin, parseTransaction,
   type AuthTransaction, type OidcClientConfig,
 } from './oidc-client'
 
@@ -239,4 +239,32 @@ describe('OidcClient', () => {
     expect(url.searchParams.get('client_id')).toBe(CONSOLE_CLIENT_ID)
     expect(url.searchParams.get('post_logout_redirect_uri')).toBe('https://console.example.test/login')
   })
+})
+
+describe('parseTransaction', () => {
+  const good = { state: 'st', nonce: 'expected-nonce', codeVerifier: 'v'.repeat(43) }
+
+  test('a well-formed sealed payload becomes an AuthTransaction and nothing else', () => {
+    // openJson stamps `exp` onto every payload it returns; only the three fields survive.
+    expect(parseTransaction({ ...good, exp: 1_700_000_000_000 })).toEqual(good)
+  })
+
+  test('an unopenable cookie (null) yields no transaction', () => {
+    expect(parseTransaction(null)).toBeNull()
+  })
+
+  test.each(['state', 'nonce', 'codeVerifier'] as const)(
+    'refuses a %s that is missing, empty, or not a string',
+    (field) => {
+      const missing: Record<string, unknown> = { ...good }
+      delete missing[field]
+      expect(parseTransaction(missing)).toBeNull()
+      // Empty string matters as much as absent: exchangeCode rejects `nonce === ''` outright,
+      // so a transaction carrying one must never reach it in the first place.
+      expect(parseTransaction({ ...good, [field]: '' })).toBeNull()
+      expect(parseTransaction({ ...good, [field]: 42 })).toBeNull()
+      expect(parseTransaction({ ...good, [field]: null })).toBeNull()
+      expect(parseTransaction({ ...good, [field]: undefined })).toBeNull()
+    },
+  )
 })

@@ -72,6 +72,22 @@ export function newTransaction(): AuthTransaction {
   return { state: random(), nonce: random(), codeVerifier: random() }
 }
 
+/**
+ * The sealed transaction payload as a usable AuthTransaction, or null if any field is unusable.
+ *
+ * `openJson` hands back `Record<string, unknown>`, so every field is validated rather than cast:
+ * a cast would let a cookie missing `nonce` reach `exchangeCode` as `undefined`, where a bare
+ * comparison against an ID token that also omits the claim would have quietly matched. Empty
+ * strings are refused for the same reason — `exchangeCode` rejects `nonce === ''` outright.
+ */
+export function parseTransaction(p: Record<string, unknown> | null): AuthTransaction | null {
+  if (!p) return null
+  const usable = (v: unknown): v is string => typeof v === 'string' && v !== ''
+  const { state, nonce, codeVerifier } = p
+  if (!usable(state) || !usable(nonce) || !usable(codeVerifier)) return null
+  return { state, nonce, codeVerifier }
+}
+
 export function codeChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url')
 }

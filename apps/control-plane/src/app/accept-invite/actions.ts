@@ -2,7 +2,6 @@
 import { redirect } from 'next/navigation'
 import { getDb } from '../../server/db'
 import { acceptInvite } from '../../server/invites-service'
-import { setSessionCookie } from '../../server/current-user'
 
 export async function acceptInviteAction(_prev: unknown, fd: FormData): Promise<{ error?: string }> {
   const token = String(fd.get('token') ?? '')
@@ -15,6 +14,7 @@ export async function acceptInviteAction(_prev: unknown, fd: FormData): Promise<
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Could not accept this invite.' }
   }
-  await setSessionCookie(actor)
-  redirect('/')
+  // Console sessions are only minted from a verified ID token now: send the new user through the
+  // OP to sign in with the password they just set, email pre-filled.
+  redirect(`/login?login_hint=${encodeURIComponent(actor.email)}`)
 }
