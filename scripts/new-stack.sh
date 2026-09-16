@@ -73,7 +73,8 @@ Store these now — they are not recoverable from the running stack.
   OPERATOR_PASSWORD   only used by `pnpm seed` to create the first admin.
                       Change it in the console after first login.
   OIDC_SIGNING_KEY    signs every token the sign-in service issues. Changing
-                      it signs everyone out and invalidates every token.
+                      it invalidates issued tokens; it does not sign anyone
+                      out (see "Rotating the sign-in keys" in docs/DEPLOY.md).
   OIDC_COOKIE_KEYS    signs the sign-in service's cookies. Rotate without
                       signing anyone out by prepending: <new>,<old>
 

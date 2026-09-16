@@ -15,6 +15,7 @@ COMPOSE="docker compose -p ${PROJECT} --env-file ${ENV_FILE}"
 
 # Probe the ports and URLs from the same file compose interpolates.
 case "$ENV_FILE" in */*) ENV_PATH="$ENV_FILE" ;; *) ENV_PATH="./$ENV_FILE" ;; esac
+# The env file is shell-sourced here, so it must hold shell-safe values: compose does not evaluate $(…), the shell does.
 set -a; . "$ENV_PATH"; set +a
 : "${OIDC_ISSUER:?OIDC_ISSUER must be set in $ENV_FILE}"
 CONSOLE="http://localhost:${CONTROL_PLANE_PORT:-3000}"

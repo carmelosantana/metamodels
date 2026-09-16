@@ -6,7 +6,7 @@ MetaModels runs as one `docker compose` stack: Postgres, Redis, a one-shot migra
 
 ```bash
 cp .env.example .env          # then edit .env — set the secrets and the operator login
-docker compose up -d --build  # postgres+redis -> migrate -> control-plane/data-plane/worker
+docker compose up -d --build  # postgres+redis -> migrate -> control-plane/auth/data-plane/worker
 docker compose run --rm control-plane pnpm seed   # create the first admin (uses OPERATOR_EMAIL/PASSWORD)
 ```
 
@@ -17,6 +17,8 @@ docker compose run --rm control-plane pnpm seed   # create the first admin (uses
 If a host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` / `AUTH_HOST_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected. Moving the console or sign-in port also moves its public URL: update `CONSOLE_URL` / `OIDC_ISSUER` to match.
 
 Migrations run automatically via the `migrate` service before the apps start; it exits 0 when the database is up to date.
+
+`.env.example` sets `OIDC_ALLOW_EPHEMERAL_KEY=true` with an empty `OIDC_SIGNING_KEY`, so a local stack signs tokens with a throwaway key that changes on every restart of the `auth` service. That is fine for local use. Any real deployment must set `OIDC_SIGNING_KEY`; the deploy and Portainer stacks hard-wire `OIDC_ALLOW_EPHEMERAL_KEY` to `false`.
 
 ## Environment
 
@@ -31,7 +33,7 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_INTERNAL_URL` | control-plane | How the console reaches the sign-in service server-to-server: `http://auth:3100` in compose. Defaults to `OIDC_ISSUER`. |
 | `CONSOLE_CLIENT_SECRET` | auth, control-plane | ≥16 chars, the same value in both. `openssl rand -hex 32`. |
 | `OIDC_COOKIE_KEYS` | auth | Cookie-signing keys, comma-separated, newest first, each ≥16 chars. |
-| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. |
+| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Changing it invalidates issued tokens but signs nobody out — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
@@ -159,7 +161,7 @@ error rather than silently booting with a guessable credential:
 | `OPERATOR_PASSWORD` | the first admin created by `pnpm seed` |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
-| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). **Changing it signs everyone out** |
+| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Changing it invalidates issued tokens; it does **not** sign anyone out |
 
 Everything else defaults:
 
@@ -202,10 +204,68 @@ redirect-URI error.
 
 - **`OIDC_COOKIE_KEYS`** — prepend a new key (`<new>,<old>`) and redeploy: new cookies are
   signed with it and old ones still verify. Drop the old key after a day.
-- **`OIDC_SIGNING_KEY`** — replacing it invalidates every issued token and signs every operator
-  out of the console. Do it deliberately, e.g. after a suspected leak.
+- **`OIDC_SIGNING_KEY`** — replacing it invalidates every ID and access token already issued.
+  The sign-in service publishes only the current key, so there is no overlap window: a token
+  signed with the old key fails verification immediately. It does **not** sign anyone out.
+  Console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
+  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
+
+### Forcing everyone to sign in again
+
+After a suspected leak, end both kinds of session:
+
+1. **Rotate `SESSION_SECRET`** (`openssl rand -hex 32`). Every console session cookie stops
+   verifying, so every operator is signed out of the console.
+2. **Replace `OIDC_COOKIE_KEYS`** with a single new key — replace, do not prepend. A prepended
+   list still verifies cookies signed with the old key, so sign-in service sessions would
+   survive and sign the browser straight back in.
+3. Redeploy both services.
+4. Optionally, delete the orphaned session rows. They can no longer be reached once the cookie
+   keys change, and expire on their own within 12 hours:
+
+   ```sql
+   DELETE FROM oidc_payload WHERE model = 'Session';
+   ```
+
+Rotate `OIDC_SIGNING_KEY` as well if the leak may have included it.
+
+### Upgrading from 0.3.x
+
+0.4.0 moves sign-in out of the console into the new `auth` service. An existing stack keeps its
+database, its operators and its secrets; it only gains a service and five variables.
+
+1. **Add only the new variables** to the stack's environment:
+
+   | Variable | Value |
+   |----------|-------|
+   | `CONSOLE_CLIENT_SECRET` | `openssl rand -hex 32` |
+   | `OIDC_COOKIE_KEYS` | `openssl rand -hex 32` |
+   | `OIDC_SIGNING_KEY` | `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A` |
+   | `CONSOLE_URL` | The exact origin your browser uses for the console, e.g. `http://127.0.0.1:3200` |
+   | `OIDC_ISSUER` | The exact origin your browser uses for the sign-in service, e.g. `http://127.0.0.1:3100` |
+
+   **Do not paste a whole fresh `new-stack.sh` block.** It also generates a new
+   `POSTGRES_PASSWORD`, which will not match the password already stored in the existing
+   Postgres volume, and a new `LICENSE_KEY_SECRET`, which makes the stored licence key
+   undecryptable. Keep every variable you already have.
+2. **Replace the stack file** with the current `docker-compose.portainer.yml`; the `auth`
+   service exists only there.
+3. **Reach the sign-in service as well as the console.** Forward or publish the auth port
+   (`AUTH_HOST_PORT`, default `3100`) alongside the console's, e.g.
+   `ssh -L 3200:127.0.0.1:3200 -L 3100:127.0.0.1:3100 <host>`, or route it through the same
+   proxy or tunnel. The browser must reach it at exactly `OIDC_ISSUER`.
+4. **Set `TAG` to `0.4.0`** if your stack pins it, and redeploy.
+
+What changes for operators:
+
+- **Existing console sessions survive the upgrade.** The session cookie's format and
+  `SESSION_SECRET` are unchanged, so nobody is signed out.
+- **The console no longer has its own password form.** `/login` sends the browser to the
+  sign-in service, which holds the form, and back.
+- **Accepting an invite is now two steps:** set a password on the invite page, then sign in
+  with it at the sign-in service.
 
 ### Pointing at Ollama / ComfyUI on the same host
 

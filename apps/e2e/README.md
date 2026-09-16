@@ -38,6 +38,11 @@ session cookie, a wrong one stays on the form and mints nothing, and **Sign out*
 auth service's session as well as the console's. No CSP violation is tolerated on either
 origin. It needs no upstream model, so it never skips.
 
+Each run records **one failed login** against the auth service (the wrong-password check).
+The auth service's throttle refuses every login from an address after five failures within
+15 minutes, even a correct one, so a sixth run inside that window fails at sign-in. Wait for
+the window to pass, or restart the auth container (the throttle is in memory).
+
 ## Running it
 
 The suite drives a stack that is already running — it does not start one.

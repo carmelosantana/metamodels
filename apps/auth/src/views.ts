@@ -28,6 +28,9 @@ button.secondary{margin-top:8px;background:transparent;color:#9a8b7c;border:1px 
  * nonce is needed. `form-action` lists every origin a form POST may end up redirecting to,
  * because Chrome enforces form-action across the redirect chain — the login POST ends at the
  * console's /auth/callback, and logout confirmation ends at the console's /login.
+ *
+ * `redirectOrigins` must be pre-normalized origins (`new URL(x).origin`), never raw config
+ * strings: they are spliced into the policy unescaped.
  */
 export function authCsp(redirectOrigins: readonly string[]): string {
   return [
