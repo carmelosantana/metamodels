@@ -1,11 +1,12 @@
 import { cookies } from 'next/headers'
+import { OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { signSession, verifySession } from '../auth/session'
 import { type Actor } from '../auth/authorize'
 import { loadActiveActor } from './actor'
 import { getDb } from './db'
 
 export const SESSION_COOKIE = 'mm_session'
-export const SESSION_TTL_MS = 12 * 60 * 60 * 1000
+export const SESSION_TTL_MS = OPERATOR_SESSION_TTL_MS
 
 export function sessionSecret(): string {
   const s = process.env.SESSION_SECRET

@@ -47,9 +47,12 @@ export async function startTestOp(opts: { extraClients?: ClientMetadata[] } = {}
 /** Just enough of a browser cookie store: ignores Path/Domain, honours deletion. */
 export class CookieJar {
   private readonly cookies = new Map<string, string>()
+  /** Every raw Set-Cookie line received, in order — for asserting on attributes. */
+  readonly setCookieLines: string[] = []
 
   store(res: Response): void {
     for (const line of res.headers.getSetCookie()) {
+      this.setCookieLines.push(line)
       const [pair, ...attrs] = line.split(';')
       const eq = pair.indexOf('=')
       const name = pair.slice(0, eq).trim()
@@ -93,6 +96,8 @@ export interface AuthorizeOptions {
   pkce?: boolean
   extra?: Record<string, string>
   headers?: Record<string, string>
+  /** Reuse a browser that already holds cookies (e.g. an established OP session). */
+  jar?: CookieJar
 }
 
 /**
@@ -101,7 +106,7 @@ export interface AuthorizeOptions {
  * page that is not a login form it is about to submit.
  */
 export async function authorize(op: TestOp, o: AuthorizeOptions = {}): Promise<AuthorizeOutcome> {
-  const jar = new CookieJar()
+  const jar = o.jar ?? new CookieJar()
   const { verifier, challenge } = pkcePair()
   const redirectUri = o.redirectUri ?? REDIRECT_URI
   const url = new URL(`${op.issuer}/auth`)

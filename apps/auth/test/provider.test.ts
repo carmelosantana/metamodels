@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { jwtVerify } from 'jose'
-import { CONSOLE_CLIENT_ID } from '@metamodels/schema'
+import { CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { seedUser } from './helpers/db.js'
 import { authorize, exchangeCode, opJwks, send, startTestOp, type TestOp } from './helpers/flow.js'
 
@@ -79,6 +79,23 @@ describe('auth service — authorization code flow', () => {
     const out = await authorize(op, { email: 'gone@x.io', password: 'hunter2hunter2' })
     if (out.kind !== 'page') throw new Error('expected the login page again')
     expect(out.body).toContain('This account is deactivated.')
+  }, T)
+
+  test('the OP session cookie expires no later than the console session (12 hours)', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const before = Date.now()
+    const out = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'redirect') throw new Error('expected a redirect')
+    const lines = out.jar.setCookieLines.filter((l) => /^_session=/.test(l))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) {
+      const expires = /;\s*expires=([^;]+)/i.exec(line)?.[1]
+      const maxAge = /;\s*max-age=(\d+)/i.exec(line)?.[1]
+      expect(expires ?? maxAge).toBeDefined()
+      if (expires) expect(Date.parse(expires)).toBeLessThanOrEqual(before + OPERATOR_SESSION_TTL_MS + 60_000)
+      if (maxAge) expect(Number(maxAge) * 1000).toBeLessThanOrEqual(OPERATOR_SESSION_TTL_MS)
+    }
   }, T)
 
   test('login_hint pre-fills the email field', async () => {

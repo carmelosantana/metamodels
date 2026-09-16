@@ -10,3 +10,11 @@ export const CONSOLE_CLIENT_ID = 'metamodels-console'
 export function adminApiResource(consoleUrl: string): string {
   return `${consoleUrl}/api/admin`
 }
+
+/**
+ * How long an operator stays signed in: the console's `mm_session` lifetime AND the auth
+ * service's OP session lifetime. They must match — an OP session that outlives the console
+ * session would silently sign the browser back in, with no password, after the console session
+ * ends.
+ */
+export const OPERATOR_SESSION_TTL_MS = 12 * 60 * 60 * 1000

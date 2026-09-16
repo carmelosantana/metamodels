@@ -1,5 +1,5 @@
 import Provider, { type ClientMetadata, type Configuration } from 'oidc-provider'
-import { CONSOLE_CLIENT_ID } from '@metamodels/schema'
+import { CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { makeFindAccount } from './account.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
@@ -70,7 +70,11 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       AuthorizationCode: 60,
       IdToken: 60 * 60,
       Interaction: 10 * 60,
-      Session: 14 * 24 * 60 * 60,
+      // Never longer than the console session: the OP session cookie is persistent (login results
+      // are remembered), so a longer OP session would silently sign the browser back in, with no
+      // password, after the console session ends.
+      Session: OPERATOR_SESSION_TTL_MS / 1000,
+      // A grant without a live OP session cannot sign anyone in, so its longer lifetime is harmless.
       Grant: 14 * 24 * 60 * 60,
     },
   }
