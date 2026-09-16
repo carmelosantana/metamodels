@@ -149,7 +149,10 @@ export class OidcClient {
       nonce: tx.nonce,
       code_challenge: codeChallenge(tx.codeVerifier),
       code_challenge_method: 'S256',
-      ...(loginHint ? { login_hint: loginHint } : {}),
+      // A hint alone never makes the OP prompt (oidc-provider's login prompt checks only for a
+      // missing session, max_age, id_token_hint and claims), so a browser with an existing OP
+      // session would be signed in as that other user. A hinted sign-in is always a fresh login.
+      ...(loginHint ? { login_hint: loginHint, prompt: 'login' } : {}),
     }).toString()
     return url.href
   }

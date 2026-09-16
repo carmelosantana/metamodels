@@ -141,6 +141,19 @@ describe('OidcClient', () => {
     expect(p.get('login_hint')).toBe('me@x.io')
   })
 
+  test('a login hint forces a fresh login; no hint sends neither hint nor prompt', async () => {
+    op = await startStubOp()
+    const client = new OidcClient(cfg(op))
+    // login_hint alone never makes the OP prompt: a browser already holding an OP session (say an
+    // admin opening an invite link) would be silently signed in as that other user.
+    const hinted = new URL(await client.authorizationUrl(TX, 'invitee@x.io')).searchParams
+    expect(hinted.get('login_hint')).toBe('invitee@x.io')
+    expect(hinted.get('prompt')).toBe('login')
+    const plain = new URL(await client.authorizationUrl(TX)).searchParams
+    expect(plain.has('login_hint')).toBe(false)
+    expect(plain.has('prompt')).toBe(false)
+  })
+
   test('exchanges a code with client_secret_basic and returns the verified subject', async () => {
     op = await startStubOp()
     expect(await new OidcClient(cfg(op)).exchangeCode('the-code', TX)).toEqual({ sub: SUB })

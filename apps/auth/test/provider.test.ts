@@ -98,6 +98,24 @@ describe('auth service — authorization code flow', () => {
     }
   }, T)
 
+  test('prompt=login shows the login form even when the browser already has an OP session', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const first = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (first.kind !== 'redirect') throw new Error('expected a redirect')
+
+    // Control: the same browser is signed in silently without prompt=login.
+    const silent = await authorize(op, { jar: first.jar })
+    expect(silent.kind).toBe('redirect')
+    if (silent.kind === 'redirect') expect(silent.url.searchParams.get('code')).toBeTruthy()
+
+    const forced = await authorize(op, { jar: first.jar, extra: { prompt: 'login', login_hint: 'invitee@x.io' } })
+    if (forced.kind !== 'page') throw new Error(`expected the login form, got a redirect to ${forced.url.href}`)
+    expect(forced.status).toBe(200)
+    expect(forced.body).toContain('<form method="post"')
+    expect(forced.body).toContain('value="invitee@x.io"')
+  }, T)
+
   test('login_hint pre-fills the email field', async () => {
     op = await startTestOp()
     const out = await authorize(op, { extra: { login_hint: 'hint@x.io' } })
