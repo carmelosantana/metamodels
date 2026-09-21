@@ -37,7 +37,7 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
-| `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. |
+| `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. There is no password-change screen yet; see [Retiring the seeded admin](#retiring-the-seeded-admin). |
 | `WORKER_NAME` | worker | Optional consumer name; defaults to `worker-<pid>`. |
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
 | `DATA_PLANE_PORT` | compose | Host port for the proxy. Default `8787`. |
@@ -158,7 +158,7 @@ error rather than silently booting with a guessable credential:
 | `POSTGRES_PASSWORD` | bundled Postgres, and the password inside the default `DATABASE_URL` |
 | `SESSION_SECRET` | control-plane session signing (≥16 chars) |
 | `LICENSE_KEY_SECRET` | encrypts the stored Lemon Squeezy key at rest. **Losing or changing it makes an existing entitlement undecryptable** — re-activate the license |
-| `OPERATOR_PASSWORD` | the first admin created by `pnpm seed` |
+| `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
 | `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Changing it invalidates issued tokens; it does **not** sign anyone out |
@@ -199,6 +199,20 @@ console sends your browser to it to sign in, so forward **both** ports —
 If you put either behind TLS, set `CONSOLE_URL` and `OIDC_ISSUER` to the public `https://`
 origins: both are compared exactly, and a mismatch fails sign-in with an issuer or
 redirect-URI error.
+
+### Retiring the seeded admin
+
+`OPERATOR_PASSWORD` is only read by `pnpm seed` when it creates the first admin. The console has
+no password-change screen yet, and re-running `pnpm seed` will **not** reset an existing user — it
+returns the account untouched. To stop relying on that password:
+
+1. Sign in as the seeded admin and invite a second **admin** from **Team**. The invitee sets their
+   own password when they accept, then signs in through the sign-in service.
+2. Sign in as the new admin and **deactivate** the seeded account from **Team**. Deactivation takes
+   effect on the next request: the console re-reads the user on every request, so an existing
+   session stops working immediately.
+
+Keep at least one active admin — deactivating the last one locks everybody out of the console.
 
 ### Rotating the sign-in keys
 

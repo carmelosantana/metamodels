@@ -71,7 +71,10 @@ Store these now — they are not recoverable from the running stack.
                       Losing or changing it makes an existing entitlement
                       undecryptable and you must re-activate the license.
   OPERATOR_PASSWORD   only used by `pnpm seed` to create the first admin.
-                      Change it in the console after first login.
+                      There is no password-change screen yet, and re-running
+                      `pnpm seed` will not reset an existing user. To retire
+                      it, invite a second admin from Team (they choose their
+                      own password), then deactivate the seeded account.
   OIDC_SIGNING_KEY    signs every token the sign-in service issues. Changing
                       it invalidates issued tokens; it does not sign anyone
                       out (see "Rotating the sign-in keys" in docs/DEPLOY.md).
