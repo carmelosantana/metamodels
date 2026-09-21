@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCsp, HSTS_VALUE } from './csp.js'
+import { buildCsp, HSTS_VALUE, originOf } from './csp.js'
 
 /** Parse a CSP header string into { directive: [values] } for order-independent assertions. */
 function parse(csp: string): Record<string, string[]> {
@@ -68,6 +68,17 @@ describe('buildCsp', () => {
     const csp = buildCsp('abc123', { dev: false })
     expect(csp).not.toMatch(/[\r\n]/)
     expect(csp.endsWith(';')).toBe(false)
+  })
+
+  it('lets forms redirect to the auth service origin, and nowhere else', () => {
+    const d = parse(buildCsp('abc123', { dev: false, formActionOrigins: ['https://auth.example.test'] }))
+    expect(d['form-action']).toEqual(["'self'", 'https://auth.example.test'])
+  })
+
+  it('originOf reduces a URL to its origin and tolerates junk', () => {
+    expect(originOf('https://auth.example.test/some/path')).toBe('https://auth.example.test')
+    expect(originOf(undefined)).toBeUndefined()
+    expect(originOf('not a url')).toBeUndefined()
   })
 })
 

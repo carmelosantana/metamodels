@@ -43,6 +43,13 @@
       "when": 1785340963323,
       "tag": "0005_spooky_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789513638971,
+      "tag": "0006_foamy_captain_cross",
+      "breakpoints": true
     }
   ]
 }

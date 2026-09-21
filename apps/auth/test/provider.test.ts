@@ -1,0 +1,175 @@
+import { afterEach, describe, expect, test } from 'vitest'
+import { jwtVerify } from 'jose'
+import { CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
+import { seedUser } from './helpers/db.js'
+import { authorize, exchangeCode, opJwks, send, startTestOp, type TestOp } from './helpers/flow.js'
+
+const T = 20_000
+let op: TestOp | undefined
+afterEach(async () => { await op?.close(); op = undefined })
+
+describe('auth service — discovery and plumbing', () => {
+  test('publishes discovery with PKCE S256, RFC 9207 iss, logout, and no dynamic registration', async () => {
+    op = await startTestOp()
+    const meta = await (await fetch(`${op.issuer}/.well-known/openid-configuration`)).json()
+    expect(meta.issuer).toBe(op.issuer)
+    expect(meta.code_challenge_methods_supported).toContain('S256')
+    expect(meta.authorization_response_iss_parameter_supported).toBe(true)
+    expect(meta.end_session_endpoint).toBe(`${op.issuer}/session/end`)
+    expect(meta.registration_endpoint).toBeUndefined()
+  }, T)
+
+  test('health, stylesheet and security headers are served', async () => {
+    op = await startTestOp()
+    const health = await fetch(`${op.issuer}/healthz`)
+    expect(health.status).toBe(200)
+    expect(await health.json()).toEqual({ ok: true })
+    expect(health.headers.get('content-security-policy')).toContain("form-action 'self' http://console.test")
+    expect(health.headers.get('x-frame-options')).toBe('DENY')
+    const css = await fetch(`${op.issuer}/assets/auth.css`)
+    expect(css.status).toBe(200)
+    expect(css.headers.get('content-type')).toContain('text/css')
+  }, T)
+})
+
+describe('auth service — authorization code flow', () => {
+  test('a valid login completes the flow and yields an ID token for that user', async () => {
+    op = await startTestOp()
+    const id = await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const out = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'redirect') throw new Error(`expected a redirect, got ${out.status}: ${out.body.slice(0, 200)}`)
+    expect(out.url.searchParams.get('state')).toBe('state-123')
+    expect(out.url.searchParams.get('iss')).toBe(op.issuer)
+
+    const token = await exchangeCode(op, out.url.searchParams.get('code')!, out.verifier)
+    expect(token.status).toBe(200)
+    const { payload } = await jwtVerify(token.json.id_token as string, await opJwks(op), {
+      issuer: op.issuer, audience: CONSOLE_CLIENT_ID, algorithms: ['RS256'],
+    })
+    expect(payload.sub).toBe(id)
+    expect(payload.nonce).toBe('nonce-456')
+  }, T)
+
+  test('an authorization code is single-use', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const out = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'redirect') throw new Error('expected a redirect')
+    const code = out.url.searchParams.get('code')!
+    expect((await exchangeCode(op, code, out.verifier)).status).toBe(200)
+    const replay = await exchangeCode(op, code, out.verifier)
+    expect(replay.status).toBe(400)
+    expect(replay.json.error).toBe('invalid_grant')
+  }, T)
+
+  test('a wrong password and an unknown email get the same generic error', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    for (const [email, password] of [['admin@x.io', 'wrong'], ['ghost@x.io', 'hunter2hunter2']]) {
+      const out = await authorize(op, { email, password })
+      if (out.kind !== 'page') throw new Error('expected the login page again')
+      expect(out.status).toBe(401)
+      expect(out.body).toContain('Invalid email or password.')
+    }
+  }, T)
+
+  test('a deactivated account is told so', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'gone@x.io', password: 'hunter2hunter2', status: 'deactivated' })
+    const out = await authorize(op, { email: 'gone@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'page') throw new Error('expected the login page again')
+    expect(out.body).toContain('This account is deactivated.')
+  }, T)
+
+  test('the OP session cookie expires no later than the console session (12 hours)', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const before = Date.now()
+    const out = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'redirect') throw new Error('expected a redirect')
+    const lines = out.jar.setCookieLines.filter((l) => /^_session=/.test(l))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) {
+      const expires = /;\s*expires=([^;]+)/i.exec(line)?.[1]
+      const maxAge = /;\s*max-age=(\d+)/i.exec(line)?.[1]
+      expect(expires ?? maxAge).toBeDefined()
+      if (expires) expect(Date.parse(expires)).toBeLessThanOrEqual(before + OPERATOR_SESSION_TTL_MS + 60_000)
+      if (maxAge) expect(Number(maxAge) * 1000).toBeLessThanOrEqual(OPERATOR_SESSION_TTL_MS)
+    }
+  }, T)
+
+  test('prompt=login shows the login form even when the browser already has an OP session', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const first = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (first.kind !== 'redirect') throw new Error('expected a redirect')
+
+    // Control: the same browser is signed in silently without prompt=login.
+    const silent = await authorize(op, { jar: first.jar })
+    expect(silent.kind).toBe('redirect')
+    if (silent.kind === 'redirect') expect(silent.url.searchParams.get('code')).toBeTruthy()
+
+    const forced = await authorize(op, { jar: first.jar, extra: { prompt: 'login', login_hint: 'invitee@x.io' } })
+    if (forced.kind !== 'page') throw new Error(`expected the login form, got a redirect to ${forced.url.href}`)
+    expect(forced.status).toBe(200)
+    expect(forced.body).toContain('<form method="post"')
+    expect(forced.body).toContain('value="invitee@x.io"')
+  }, T)
+
+  test('login_hint pre-fills the email field', async () => {
+    op = await startTestOp()
+    const out = await authorize(op, { extra: { login_hint: 'hint@x.io' } })
+    if (out.kind !== 'page') throw new Error('expected the login page')
+    expect(out.status).toBe(200)
+    expect(out.body).toContain('value="hint@x.io"')
+  }, T)
+
+  test('PKCE is mandatory, even for the confidential console client', async () => {
+    op = await startTestOp()
+    const out = await authorize(op, { pkce: false })
+    if (out.kind !== 'redirect') throw new Error('expected an error redirect to the client')
+    expect(out.url.searchParams.get('error')).toBe('invalid_request')
+  }, T)
+
+  test('an unregistered redirect_uri is never redirected to', async () => {
+    op = await startTestOp()
+    const out = await authorize(op, { redirectUri: 'http://evil.test/cb' })
+    expect(out.kind).toBe('page')
+    if (out.kind === 'page') expect(out.status).toBe(400)
+  }, T)
+
+  test('five failures lock out an address; another address is unaffected', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const first = await authorize(op)
+    if (first.kind !== 'page') throw new Error('expected the login page')
+    const action = new URL(/action="([^"]+)"/.exec(first.body)![1], op.issuer).href
+    const post = (password: string, ip: string) => send(first.jar, action, {
+      method: 'POST',
+      headers: { 'x-forwarded-for': ip, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'admin@x.io', password }).toString(),
+    })
+    for (let i = 0; i < 5; i++) expect((await post('wrong', '203.0.113.7')).status).toBe(401)
+    expect((await post('hunter2hunter2', '203.0.113.7')).status).toBe(429)
+    expect((await post('hunter2hunter2', '198.51.100.2')).status).toBe(303)
+  }, T)
+
+  test('a third-party client is refused at consent instead of being silently granted', async () => {
+    op = await startTestOp({
+      extraClients: [{
+        client_id: 'third-party',
+        client_secret: 'third-party-secret-0123',
+        redirect_uris: ['http://third.test/cb'],
+        grant_types: ['authorization_code'],
+        response_types: ['code'],
+      }],
+    })
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const out = await authorize(op, {
+      clientId: 'third-party', redirectUri: 'http://third.test/cb', email: 'admin@x.io', password: 'hunter2hunter2',
+    })
+    if (out.kind !== 'redirect') throw new Error('expected an error redirect to the client')
+    expect(out.url.searchParams.get('error')).toBe('access_denied')
+    expect(out.url.searchParams.get('code')).toBeNull()
+  }, T)
+})
