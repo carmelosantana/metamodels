@@ -2,6 +2,7 @@ import { defineBreed } from '../breed.js'
 import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent, ModelListResult } from '../breed.js'
 import { ollamaConstraint, routeGroup } from './constraint.js'
 import type { OllamaConstraint } from './constraint.js'
+import { ollamaToMcp } from './mcp.js'
 
 // Bound upstream calls so a hung Ollama never ties up the caller indefinitely.
 const UPSTREAM_TIMEOUT_MS = 10_000
@@ -19,6 +20,7 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
   ],
   constraintSchema: ollamaConstraint,
   billingDimensions: ['tokens_in', 'tokens_out'],
+  toMcp: ollamaToMcp,
 
   guard(ctx: RequestCtx, fence: OllamaConstraint): GuardResult {
     const group = routeGroup(ctx.path)
