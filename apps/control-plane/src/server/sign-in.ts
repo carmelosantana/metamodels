@@ -20,9 +20,13 @@ export type SignInLog = (...args: string[]) => void
  * The only way a sign-in failure is logged. A fixed prefix, the reason and the error's message —
  * never the error object (jose errors can carry token claims), tokens, codes, the client secret
  * or cookies. The browser only ever sees the reason.
+ *
+ * CR and LF are replaced first: part of the message comes from the OP (its `error` code or an HTTP
+ * status), so a newline in it could otherwise forge a second, fabricated log line.
  */
 export function logSignInFailure(log: SignInLog, reason: SignInErrorReason, err: unknown): void {
-  log('[console] sign-in failed:', reason, err instanceof Error ? err.message : String(err))
+  const message = err instanceof Error ? err.message : String(err)
+  log('[console] sign-in failed:', reason, message.replace(/[\r\n]/g, ' '))
 }
 
 export type SignInResult = { ok: true; actor: Actor } | { ok: false; reason: SignInFailure }

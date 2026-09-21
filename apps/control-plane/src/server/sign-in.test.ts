@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { Actor } from '../auth/authorize'
-import { completeSignIn, type SignInDeps } from './sign-in'
+import { completeSignIn, logSignInFailure, type SignInDeps } from './sign-in'
 
 const ISSUER = 'https://auth.example.test'
 const TX = { state: 'st-1', nonce: 'n-1', codeVerifier: 'v'.repeat(43) }
@@ -80,5 +80,21 @@ describe('completeSignIn', () => {
   test('a subject with no active account is refused', async () => {
     expect(await completeSignIn(ok(), TX, deps({ loadActor: vi.fn(async () => null) })))
       .toEqual({ ok: false, reason: 'account_unavailable' })
+  })
+})
+
+describe('logSignInFailure', () => {
+  test('a newline in the error message cannot forge a second log line', () => {
+    const log = vi.fn()
+    logSignInFailure(log, 'token_exchange_failed', new Error('bad\r\nADMIN: granted everything'))
+    const [, , message] = vi.mocked(log).mock.calls[0]
+    expect(message).toBe('bad  ADMIN: granted everything')
+    expect(message).not.toMatch(/[\r\n]/)
+  })
+
+  test('a non-Error value is stringified and sanitised too', () => {
+    const log = vi.fn()
+    logSignInFailure(log, 'misconfigured', { toString: () => 'line1\nline2' })
+    expect(vi.mocked(log).mock.calls[0][2]).toBe('line1 line2')
   })
 })
