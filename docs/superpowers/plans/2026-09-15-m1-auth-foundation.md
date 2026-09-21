@@ -4218,7 +4218,12 @@ These hold after M1. Each is a constraint on a later milestone, not unfinished M
   - `iss` = `OIDC_ISSUER`;
   - `aud` = `adminApiResource(CONSOLE_URL)`, imported from `@metamodels/schema` and never re-typed;
   - RS256 against `/jwks`, fetched through `OIDC_INTERNAL_URL` with `onOrigin`, like the console;
-  - granted scopes ∩ the user's role capabilities (spec §2, C3).
+  - granted scopes ∩ the user's role capabilities (spec §2, C3);
+  - `aud` is minted as a bare string, but RFC 9068 allows a string or an array, so verifiers must accept both;
+  - resolve `kid` from `/jwks` (e.g. `createRemoteJWKSet`) and never pin it;
+  - the JWKS publishes a single key, so rotating `OIDC_SIGNING_KEY` has no overlap window and in-flight tokens fail at once. Before M2 relies on access tokens, publish the previous key alongside the new one during rotation;
+  - `/healthz` does not touch the database, so `auth` reports healthy while Postgres is down;
+  - the OP session is capped to the console session lifetime (`OPERATOR_SESSION_TTL_MS`, 12 hours). A future CLI or device client needs its own decision about session length.
 - **Restrict resources per client before a second client exists.** In M1 any client may ask for the admin-API resource. Only the console is registered, and it never asks. `makeGetResourceServerInfo` receives the client as its third argument: gate on it the moment M2 registers the CLI (device grant) or M4 admits CIMD clients.
 - **Consent (M4).** Third-party clients get `access_denied` at the consent prompt today (Task 7). The consent screen replaces exactly that branch; first-party auto-consent stays keyed on `CONSOLE_CLIENT_ID`.
 - **The OP's `form-action` lists only the console origin.** A CIMD client's redirect origin must be added per interaction (`authCsp(redirectOrigins)`). Otherwise Chrome blocks the post-consent redirect, because it enforces `form-action` across redirects.

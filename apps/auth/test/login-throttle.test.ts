@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { LoginThrottle } from './login-throttle'
+import { LoginThrottle } from '../src/login-throttle.js'
 
 describe('LoginThrottle', () => {
   test('blocks after 5 failures in the window, resets after it elapses', () => {

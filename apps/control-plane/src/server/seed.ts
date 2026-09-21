@@ -1,8 +1,7 @@
 import { eq } from 'drizzle-orm'
-import { org, user } from '@metamodels/schema'
+import { hashPassword, org, user } from '@metamodels/schema'
 import type { Db } from './db'
 import type { Actor } from '../auth/authorize'
-import { hashPassword } from '../auth/password'
 
 export interface SeedOpts { email: string; password: string; orgName?: string }
 export interface SeedResult { created: boolean; actor: Actor }

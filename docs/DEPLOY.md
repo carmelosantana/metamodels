@@ -1,21 +1,24 @@
 # Deploying MetaModels
 
-MetaModels runs as one `docker compose` stack: Postgres, Redis, a one-shot migration step, and three app services (control-plane UI, data-plane proxy, metering worker).
+MetaModels runs as one `docker compose` stack: Postgres, Redis, a one-shot migration step, and four app services (control-plane UI, auth sign-in service, data-plane proxy, metering worker).
 
 ## Quickstart
 
 ```bash
-cp .env.example .env          # then edit .env — set the two secrets and the operator login
-docker compose up -d --build  # postgres+redis -> migrate -> control-plane/data-plane/worker
+cp .env.example .env          # then edit .env — set the secrets and the operator login
+docker compose up -d --build  # postgres+redis -> migrate -> control-plane/auth/data-plane/worker
 docker compose run --rm control-plane pnpm seed   # create the first admin (uses OPERATOR_EMAIL/PASSWORD)
 ```
 
 - Control-plane UI: http://localhost:3000
 - Data-plane proxy: http://localhost:8787 (`/healthz`, `/readyz`)
+- Sign-in service: http://localhost:3100 — the console sends your browser here to sign in, so it must be reachable at exactly `OIDC_ISSUER`
 
-If either host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected.
+If a host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` / `AUTH_HOST_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected. Moving the console or sign-in port also moves its public URL: update `CONSOLE_URL` / `OIDC_ISSUER` to match.
 
 Migrations run automatically via the `migrate` service before the apps start; it exits 0 when the database is up to date.
+
+`.env.example` sets `OIDC_ALLOW_EPHEMERAL_KEY=true` with an empty `OIDC_SIGNING_KEY`, so a local stack signs tokens with a throwaway key that changes on every restart of the `auth` service. That is fine for local use. Any real deployment must set `OIDC_SIGNING_KEY`; the deploy and Portainer stacks hard-wire `OIDC_ALLOW_EPHEMERAL_KEY` to `false`.
 
 ## Environment
 
@@ -25,11 +28,20 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `REDIS_URL` | data-plane (opt), worker (required) | Without it the data-plane runs single-process/in-memory (no durable metering); the worker requires it. |
 | `PORT` | data-plane | Default `8787`. |
 | `SESSION_SECRET` | control-plane | ≥16 chars. `openssl rand -hex 32`. |
+| `OIDC_ISSUER` | auth, control-plane | Public URL of the sign-in service, origin only. Also the token issuer, so browsers and clients must see exactly this. |
+| `CONSOLE_URL` | auth, control-plane | Public URL of the console, origin only. Its sign-in redirect and post-logout URIs derive from it. |
+| `OIDC_INTERNAL_URL` | control-plane | How the console reaches the sign-in service server-to-server: `http://auth:3100` in compose. Defaults to `OIDC_ISSUER`. |
+| `CONSOLE_CLIENT_SECRET` | auth, control-plane | ≥16 chars, the same value in both. `openssl rand -hex 32`. |
+| `OIDC_COOKIE_KEYS` | auth | Cookie-signing keys, comma-separated, newest first, each ≥16 chars. |
+| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Changing it invalidates issued tokens but signs nobody out — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
+| `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
+| `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
-| `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. |
+| `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. There is no password-change screen yet; see [Retiring the seeded admin](#retiring-the-seeded-admin). |
 | `WORKER_NAME` | worker | Optional consumer name; defaults to `worker-<pid>`. |
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
 | `DATA_PLANE_PORT` | compose | Host port for the proxy. Default `8787`. |
+| `AUTH_HOST_PORT` | compose | Host port for the sign-in service. Default `3100`. |
 
 ## Security headers
 
@@ -86,7 +98,7 @@ docker rm -f mm-pg mm-redis
 
 ## Deploy gotchas
 
-- **Trusted reverse proxy for the login throttle.** The control-plane login throttle keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
+- **Trusted reverse proxy for the login throttle.** The sign-in throttle (in the auth service) keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
 - **Typecheck needs a build first.** Control-plane `tsc -b` depends on `.next/types` produced by `next build`/`next typegen`; a cold clone must build the app before typechecking it. (Enforced in Plan 6b CI.)
 - **Base images are digest-pinned; refresh them deliberately.** The Node base (`docker/Dockerfile`) and the `postgres:16-bookworm` / `redis:7-bookworm` services (compose files) are pinned by `@sha256:` for reproducible, tamper-evident builds. Pinned digests don't receive upstream security patches automatically — re-bump each on a CVE or on a quarterly cadence via `docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'`.
 
@@ -95,7 +107,7 @@ docker rm -f mm-pg mm-redis
 MetaModels publishes two public images to GHCR — `ghcr.io/carmelosantana/metamodels-control-plane`
 and `…-runtime`. **`docker-compose.portainer.yml`** is a self-contained stack that pulls them:
 no source checkout, no local build, and every non-secret value has an inline default, so a
-minimal deploy only needs four secrets.
+minimal deploy only needs seven secrets.
 
 > `docker-compose.deploy.yml` is **superseded** by `docker-compose.portainer.yml`. The newer
 > file is a strict superset (inline defaults, fail-fast secrets, a Redis volume, a
@@ -104,10 +116,10 @@ minimal deploy only needs four secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.3.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.4.0 --email you@example.com
 ```
 
-It prints a paste-ready `KEY=value` block with four 64-hex-char secrets. `--out <path>` also
+It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
 writes it to a mode-600 file (it refuses to overwrite one that already exists). Secrets are
 hex on purpose: `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`, and a password
 containing `:/@?#` would produce a malformed connection string.
@@ -138,7 +150,7 @@ docker exec -it <control-plane-container> pnpm seed
 
 ### Variables
 
-Four secrets are **required** and use `${VAR:?…}`, so the stack fails fast with a named
+Seven secrets are **required** and use `${VAR:?…}`, so the stack fails fast with a named
 error rather than silently booting with a guessable credential:
 
 | Required secret | Purpose |
@@ -146,13 +158,16 @@ error rather than silently booting with a guessable credential:
 | `POSTGRES_PASSWORD` | bundled Postgres, and the password inside the default `DATABASE_URL` |
 | `SESSION_SECRET` | control-plane session signing (≥16 chars) |
 | `LICENSE_KEY_SECRET` | encrypts the stored Lemon Squeezy key at rest. **Losing or changing it makes an existing entitlement undecryptable** — re-activate the license |
-| `OPERATOR_PASSWORD` | the first admin created by `pnpm seed` |
+| `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
+| `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
+| `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
+| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Changing it invalidates issued tokens; it does **not** sign anyone out |
 
 Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.3.0` | Image tag. The git tag `v0.3.0` publishes images as `0.3.0` — the `v` is stripped |
+| `TAG` | `0.4.0` | Image tag. The git tag `v0.4.0` publishes images as `0.4.0` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -160,6 +175,9 @@ Everything else defaults:
 | `REDIS_URL` | `redis://redis:6379` | Required by the worker; without it the data-plane runs in-memory with no durable metering |
 | `CONTROL_PLANE_BIND` | `127.0.0.1` | **Loopback on purpose** — see below |
 | `CONTROL_PLANE_PORT` | `3200` | Host port for the console |
+| `AUTH_BIND` / `AUTH_HOST_PORT` | `127.0.0.1` / `3100` | The sign-in service — loopback, like the console |
+| `CONSOLE_URL` | `http://127.0.0.1:<CONTROL_PLANE_PORT>` | Where you open the console. Must match your browser's address bar exactly |
+| `OIDC_ISSUER` | `http://127.0.0.1:<AUTH_HOST_PORT>` | Where browsers reach the sign-in service; also the token issuer |
 | `DATA_PLANE_BIND` / `DATA_PLANE_PORT` | `0.0.0.0` / `8787` | The public API |
 | `TRAEFIK_ENABLE` | `false` | `true` to activate the router labels |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | `websecure` / `letsencrypt` | Match your Traefik's names |
@@ -174,6 +192,94 @@ internet-reachable. Reach it over SSH port-forwarding, a VPN, or a tunnel. Only 
 `CONTROL_PLANE_BIND=0.0.0.0` if something in front of it terminates TLS and adds access
 control — and note the login throttle keys on `X-Forwarded-For`, so it needs a trusted proxy
 to be meaningful (see Deploy gotchas). Postgres and Redis are never port-published.
+
+The **sign-in service** (`auth`) is admin-side too and binds to `127.0.0.1` by default. The
+console sends your browser to it to sign in, so forward **both** ports —
+`ssh -L 3200:127.0.0.1:3200 -L 3100:127.0.0.1:3100 <host>` — then open exactly `CONSOLE_URL`.
+If you put either behind TLS, set `CONSOLE_URL` and `OIDC_ISSUER` to the public `https://`
+origins: both are compared exactly, and a mismatch fails sign-in with an issuer or
+redirect-URI error.
+
+### Retiring the seeded admin
+
+`OPERATOR_PASSWORD` is only read by `pnpm seed` when it creates the first admin. The console has
+no password-change screen yet, and re-running `pnpm seed` will **not** reset an existing user — it
+returns the account untouched. To stop relying on that password:
+
+1. Sign in as the seeded admin and invite a second **admin** from **Team**. The invitee sets their
+   own password when they accept, then signs in through the sign-in service.
+2. Sign in as the new admin and **deactivate** the seeded account from **Team**. Deactivation takes
+   effect on the next request: the console re-reads the user on every request, so an existing
+   session stops working immediately.
+
+Keep at least one active admin — deactivating the last one locks everybody out of the console.
+
+### Rotating the sign-in keys
+
+- **`OIDC_COOKIE_KEYS`** — prepend a new key (`<new>,<old>`) and redeploy: new cookies are
+  signed with it and old ones still verify. Drop the old key after a day.
+- **`OIDC_SIGNING_KEY`** — replacing it invalidates every ID and access token already issued.
+  The sign-in service publishes only the current key, so there is no overlap window: a token
+  signed with the old key fails verification immediately. It does **not** sign anyone out.
+  Console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
+  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
+- **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
+  redeploy; nobody is signed out.
+
+### Forcing everyone to sign in again
+
+After a suspected leak, end both kinds of session:
+
+1. **Rotate `SESSION_SECRET`** (`openssl rand -hex 32`). Every console session cookie stops
+   verifying, so every operator is signed out of the console.
+2. **Replace `OIDC_COOKIE_KEYS`** with a single new key — replace, do not prepend. A prepended
+   list still verifies cookies signed with the old key, so sign-in service sessions would
+   survive and sign the browser straight back in.
+3. Redeploy both services.
+4. Optionally, delete the orphaned session rows. They can no longer be reached once the cookie
+   keys change, and expire on their own within 12 hours:
+
+   ```sql
+   DELETE FROM oidc_payload WHERE model = 'Session';
+   ```
+
+Rotate `OIDC_SIGNING_KEY` as well if the leak may have included it.
+
+### Upgrading from 0.3.x
+
+0.4.0 moves sign-in out of the console into the new `auth` service. An existing stack keeps its
+database, its operators and its secrets; it only gains a service and five variables.
+
+1. **Add only the new variables** to the stack's environment:
+
+   | Variable | Value |
+   |----------|-------|
+   | `CONSOLE_CLIENT_SECRET` | `openssl rand -hex 32` |
+   | `OIDC_COOKIE_KEYS` | `openssl rand -hex 32` |
+   | `OIDC_SIGNING_KEY` | `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A` |
+   | `CONSOLE_URL` | The exact origin your browser uses for the console, e.g. `http://127.0.0.1:3200` |
+   | `OIDC_ISSUER` | The exact origin your browser uses for the sign-in service, e.g. `http://127.0.0.1:3100` |
+
+   **Do not paste a whole fresh `new-stack.sh` block.** It also generates a new
+   `POSTGRES_PASSWORD`, which will not match the password already stored in the existing
+   Postgres volume, and a new `LICENSE_KEY_SECRET`, which makes the stored licence key
+   undecryptable. Keep every variable you already have.
+2. **Replace the stack file** with the current `docker-compose.portainer.yml`; the `auth`
+   service exists only there.
+3. **Reach the sign-in service as well as the console.** Forward or publish the auth port
+   (`AUTH_HOST_PORT`, default `3100`) alongside the console's, e.g.
+   `ssh -L 3200:127.0.0.1:3200 -L 3100:127.0.0.1:3100 <host>`, or route it through the same
+   proxy or tunnel. The browser must reach it at exactly `OIDC_ISSUER`.
+4. **Set `TAG` to `0.4.0`** if your stack pins it, and redeploy.
+
+What changes for operators:
+
+- **Existing console sessions survive the upgrade.** The session cookie's format and
+  `SESSION_SECRET` are unchanged, so nobody is signed out.
+- **The console no longer has its own password form.** `/login` sends the browser to the
+  sign-in service, which holds the form, and back.
+- **Accepting an invite is now two steps:** set a password on the invite page, then sign in
+  with it at the sign-in service.
 
 ### Pointing at Ollama / ComfyUI on the same host
 

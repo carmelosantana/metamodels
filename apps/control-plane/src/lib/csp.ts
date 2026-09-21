@@ -14,6 +14,21 @@
 export interface CspOptions {
   /** Dev server: webpack HMR needs eval + a websocket back to the dev server. */
   dev: boolean
+  /**
+   * Origins a form submission may redirect to. Sign-out posts to the console and is redirected to
+   * the auth service's end-session endpoint; Chrome enforces form-action across that redirect.
+   */
+  formActionOrigins?: readonly string[]
+}
+
+/** The origin of an absolute URL, or undefined for anything unparseable. */
+export function originOf(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    return new URL(url).origin
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -26,7 +41,7 @@ export interface CspOptions {
  */
 export const HSTS_VALUE = 'max-age=63072000'
 
-export function buildCsp(nonce: string, { dev }: CspOptions): string {
+export function buildCsp(nonce: string, { dev, formActionOrigins = [] }: CspOptions): string {
   const scriptSrc = ["'self'", `'nonce-${nonce}'`, "'strict-dynamic'"]
   const connectSrc = ["'self'"]
 
@@ -51,7 +66,7 @@ export function buildCsp(nonce: string, { dev }: CspOptions): string {
     ['object-src', ["'none'"]],
     ['frame-src', ["'none'"]],
     ['base-uri', ["'self'"]],
-    ['form-action', ["'self'"]],
+    ['form-action', ["'self'", ...formActionOrigins]],
     ['frame-ancestors', ["'none'"]],
   ]
 

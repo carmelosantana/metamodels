@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { hashPassword, verifyPassword } from './password'
+import { hashPassword, verifyPassword } from '../src/password.js'
 
 describe('password', () => {
   test('hash is salted, prefixed, and not the plaintext', async () => {
