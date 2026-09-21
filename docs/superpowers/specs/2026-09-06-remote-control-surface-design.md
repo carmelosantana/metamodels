@@ -1,6 +1,6 @@
 # Remote control surface — unified OIDC auth, admin API, per-paddock MCP
 
-**Status:** design settled, not planned. **Date:** 2026-09-06.
+**Status:** design settled; M1 and M3 planned. Amended 2026-09-15 — see §7. **Date:** 2026-09-06.
 **Wayfinding map:** Kanboard #3871 (project 142).
 **Research:** [`2026-09-06-mcp-remote-research.md`](../briefs/2026-09-06-mcp-remote-research.md) ·
 [`2026-09-06-admin-api-patterns-research.md`](../briefs/2026-09-06-admin-api-patterns-research.md)
@@ -33,13 +33,13 @@ authentication. Deciding it twice would produce two incompatible token systems.
 
 ### What changed the design
 
-Three premises the work started from turned out to be false, each verified this session:
+Premises the work started from, checked against the repo:
 
 | Premise | Reality |
 |---|---|
-| Control plane binds `127.0.0.1`, so an admin API would weaken that posture | Both compose files publish `"${CONTROL_PLANE_PORT:-3000}:3000"` with **no host-IP prefix** — that is `0.0.0.0` (`docker-compose.yml:56`, `docker-compose.deploy.yml:50`). There is no loopback posture to preserve, only one to *establish*. Docker also documents that published ports bypass `ufw`. |
+| Control plane binds `127.0.0.1`, so an admin API would weaken that posture | **True for production only.** The Portainer stack binds `"${CONTROL_PLANE_BIND:-127.0.0.1}:…"` (`docker-compose.portainer.yml:90`) — loopback by default, deliberately, reached over a tunnel. The dev and generic files publish `"${CONTROL_PLANE_PORT:-3000}:3000"` with no host-IP prefix, i.e. `0.0.0.0` (`docker-compose.yml:56`, `docker-compose.deploy.yml:50`), and Docker documents that published ports bypass `ufw`. *Amended 2026-09-15: the original row missed the Portainer file and said there was no loopback posture to preserve.* |
 | Adding an MCP SDK would break the zero-dependency norm for MCP's sake | The norm breaks for **OAuth**, not MCP. Under spec `2026-07-28` a minimal MCP server is three JSON-RPC methods over one POST route. |
-| `toMcp?(fence)` is the right shape, merely unwired | It is structurally incapable of serving ComfyUI (§4.4). |
+| `toMcp?(fence)` is the right shape, merely unwired | **Correct.** ComfyUI templates are embedded in the fence, so `toMcp(fence)` serves both breeds; only the `unknown[]` return type is wrong (§4.4). *Amended 2026-09-15: the original row claimed the signature could not serve ComfyUI — that was false.* |
 
 ### MCP specification baseline
 
@@ -74,7 +74,7 @@ different from earlier revisions:
 | C4 | MCP home + shape | **Data plane, per-paddock** `/p/<slug>/mcp` | Data plane already holds the fence |
 | C5 | MCP auth | **Full OAuth 2.1** | Unlocks Claude.ai and ChatGPT connectors |
 | C8 | AS source & absorption | **Embed `oidc-provider`**, **full unification**, **separate `auth` service** | Certified; Koa cannot mount in Next |
-| C6 | `toMcp` fate | **Reshape** to `(ctx) => McpToolDef[]` | Current signature cannot serve ComfyUI |
+| C6 | `toMcp` fate | **Keep `toMcp(fence)`, type the return** as `McpToolDef[]` | Templates already ride in the fence. *Amended 2026-09-15 — first decided as "reshape" on a false premise, re-decided by the operator* |
 | C7 | Staging | **Four milestones** | M1 is load-bearing for M2 and M4 |
 
 ### 2.1 Why the admin API lives in the control plane (C2)
@@ -138,6 +138,7 @@ entered this spec):
 | Provenance | `attestations` + `signatures` present |
 | Maintainers | sole, `panva` — also authors `jose`, `openid-client`; no ownership change |
 | Direct deps | 3 — `debug`, `jose ^6.2.10`, `koa ^3.2.1` |
+| Transitive | 39 packages, all koa's tree; deps.dev lists no advisories for `oidc-provider`, `koa` or `jose` (checked 2026-09-15) |
 | Licence | MIT — compatible with AGPL-3.0 |
 
 The repo's existing `.npmrc` (`minimumReleaseAge=1440`, `blockExoticSubdeps=true`) already quarantines
@@ -216,10 +217,20 @@ Requires a Drizzle-backed storage `Adapter`, `findAccount`, and login/consent in
 reuse the existing password and throttle code. Enable RFC 8707 resource indicators, RFC 9207 `iss`,
 and CIMD; **do not** build DCR as the primary registration path — it is deprecated.
 
+**Staged (amended 2026-09-15).** M1 enables resource indicators, JWT access tokens and `iss`, and
+serves only statically registered first-party clients, whose consent is automatic. CIMD and a real
+consent screen land in M4, where MCP clients first exercise them — until then any non-first-party
+consent prompt is refused with `access_denied`. The device grant lands in M2 with the admin CLI. The
+adapter is Postgres-backed (`oidc_payload`), matching the rest of the system of record.
+
 ### 4.2 Console becomes a relying party
 
-`auth/session.ts` (the hand-rolled signed cookie) is retired in favour of the OP session.
-`auth/password.ts` and `auth/login-throttle.ts` move behind the OP's interaction flow, not deleted.
+**Amended 2026-09-15.** The console keeps a local session: `auth/session.ts` stays, as the relying
+party's session codec. The original text said it would be retired in favour of the OP session, but a
+relying party on its own origin cannot read the OP's cookie — every OIDC RP keeps a local session.
+What leaves the console is password handling: the login form, `verifyLogin` and the login throttle
+move behind the OP's interaction flow, and a console session is only ever minted from a verified ID
+token. `hashPassword` stays shared, because seeding and invite acceptance still set passwords.
 This is the highest-risk change in the programme: it is the one path that must never break.
 
 ### 4.3 Admin API
@@ -237,30 +248,32 @@ Three supporting changes:
 - **CSRF posture is bearer-only, no cookie fallback.** Server actions get an automatic Origin-vs-Host
   check; Route Handlers get nothing. Reject any request presenting both a bearer token and a session
   cookie, as Portainer does.
+- **Keys have no hard delete.** `revokeKey` (`keys-service.ts:97`) only sets `status: 'revoked'`
+  and no key delete exists, while flocks, paddocks and templates hard-delete. The admin API must
+  define `DELETE` semantics for keys explicitly rather than inherit the asymmetry. *(Surfaced
+  2026-09-15 by the provisioning-plugin port, whose teardown tripped on it.)*
 - **OpenAPI is generated, not hand-written.** Verified: `zod@3.25.76` resolves for all four packages,
   and the permanently-available `zod/v4` subpath exports `z.toJSONSchema()` producing valid
   draft-2020-12 *and* `target: 'openapi-3.0'` output. **Zero new dependencies.** Every
   `@asteasolutions/zod-to-openapi` 8.x/9.x requires `zod@^4.0.0`, which `3.25.76` does not satisfy.
 
-### 4.4 Breed contract and config publisher
-
-`toMcp` is reshaped:
+### 4.4 Breed contract
 
 ```ts
-toMcp?(ctx: { fence: C; templates: WorkflowTemplate[]; paddock: PaddockRef }): McpToolDef[]
+toMcp?(fence: C): McpToolDef[]
 ```
 
-The current signature is not merely untyped, it is **insufficient**. `ResolvedPaddock.fence` is
-`{ constraintJson, rateLimit, quota }` (`apps/data-plane/src/config/types.ts`), and
-`workflow_template` is a separate table (`packages/schema/src/schema.ts:82`) that never reaches the
-data plane. `toMcp(fence)` can serve Ollama — tools derive from `allowedModels` and `allowedRoutes`
-inside `constraintJson` — but cannot serve ComfyUI, whose useful tools are one-per-WorkflowTemplate
-with typed inputs. The hook would have failed on the second breed the moment anyone implemented it.
+Only the return type changes — `unknown[]` becomes `McpToolDef[]`, the type the v1 spec specified.
 
-Folding templates into `constraintJson` was rejected: it conflates policy with content. A Fence
-means *what is allowed*, not *what exists*.
+**Amended 2026-09-15.** This section originally reshaped the hook to take `{ fence, templates,
+paddock }`, claiming `toMcp(fence)` could not serve ComfyUI because templates live in the separate
+`workflow_template` table. That was wrong. `templates-service.ts` writes templates into
+`fence.constraint_json.templates`, `comfyuiBreed.handle()` reads `fence.templates`, and the data
+plane already receives them inside `ResolvedPaddock.fence.constraintJson`. The `workflow_template`
+table is not read at runtime. No config-publisher or config-store change is needed.
 
-`config-publisher` therefore carries templates into `ResolvedPaddock`.
+Embedded templates carry `id`, `graph`, `params` and `cost` but no display name, so ComfyUI tool names
+derive from the template id.
 
 ### 4.5 MCP endpoint
 
@@ -279,8 +292,13 @@ means *what is allowed*, not *what exists*.
 
 ### 4.6 Exposure posture
 
-The `0.0.0.0` publish is now a decision to make deliberately rather than an inherited default. It is
-in scope for M2 and must be settled there, not left implicit.
+**Amended 2026-09-15.** Production (Portainer) binds the console to loopback by default and expects
+a tunnel; only the dev and generic compose files bind `0.0.0.0`. M1 gives the new `auth` service the
+same loopback default in production (`AUTH_BIND`). Whether the admin API and the OP become publicly
+reachable is decided in M2 (admin API) and M4 (MCP clients must reach the OP), not inherited.
+
+`api.metamodels.cc` currently resolves to `168.231.74.113`, not the GPU host, so every public URL
+(`OIDC_ISSUER`, `CONSOLE_URL`) is configuration — never derived and never hardcoded.
 
 ---
 
@@ -300,18 +318,18 @@ in scope for M2 and must be settled there, not left implicit.
 
 | M | Milestone | Contents |
 |---|---|---|
-| **M1** | Auth foundation | `auth` service, oidc-provider, Drizzle adapter, `findAccount`, interaction views; console cut over to RP; `session.ts` retired |
-| **M2** | Admin API | `/api/admin/*` Route Handlers, scopes ∩ role, audit `changed_by`, OpenAPI from Zod, bind/exposure decision |
-| **M3** | Breed & config prep | `toMcp` reshape, templates into `ResolvedPaddock`, both breeds implement |
-| **M4** | MCP endpoint | `/p/<slug>/mcp`, Streamable HTTP, RFC 9728 on both resource servers |
+| **M1** | Auth foundation | `auth` service (oidc-provider, Postgres adapter, `findAccount`, login view, first-party auto-consent, resource indicators + the JWT access-token contract); console cut over to relying party — password login leaves the console, `session.ts` stays as the RP session |
+| **M2** | Admin API | `/api/admin/*` Route Handlers, scopes ∩ role, audit `changed_by`, key-delete semantics, device grant for the admin CLI, OpenAPI from Zod, bind/exposure decision |
+| **M3** | Breed prep | `toMcp` return typed as `McpToolDef[]`; both breeds implement |
+| **M4** | MCP endpoint | `/p/<slug>/mcp`, Streamable HTTP, RFC 9728 on both resource servers, CIMD, consent screen |
 
 M1 is load-bearing — M2 and M4 both authenticate against it. M3 is independent of M1/M2 and may run
 in parallel if capacity allows.
 
 ### Risks
 
-- **M1 touches the one path that must never break.** Console login has no fallback once `session.ts`
-  is retired. Consider proving the OP alongside the existing login before cutting over.
+- **M1 touches the one path that must never break.** Console login has no fallback once password
+  login leaves the console. Consider proving the OP alongside the existing login before cutting over.
 - **CIMD is experimental upstream.** Breaking changes arrive in minor versions; pin `~` and treat
   spec drift as ongoing maintenance. MCP's own auth story has already changed materially this year.
 - **Scope grew during design.** This began as "an admin API" and became "an identity provider".
@@ -324,3 +342,21 @@ Per house rules, no milestone claims completion without command output proving i
 a real MCP client completing `server/discover` → `tools/list` → `tools/call` against a throwaway
 paddock, plus the negative cases the proxy already proves: disallowed model 403, `mutate` route 403,
 no key 401, unfenced route 403.
+
+---
+
+## 7. Amendments (2026-09-15)
+
+Made while planning, each verified against `main` at `185c5be`:
+
+| § | Was | Now |
+|---|---|---|
+| 1, 4.6 | "No loopback posture to preserve" | Production binds loopback by default; only dev/generic bind `0.0.0.0` |
+| 2 (C6), 4.4 | Reshape `toMcp` to take templates + paddock | Keep `toMcp(fence)`; templates already live in the fence. Re-decided by the operator |
+| 4.2 | `session.ts` retired | `session.ts` stays as the RP session; password login leaves the console |
+| 4.1, 6 | CIMD in the auth-service milestone | CIMD + consent screen in M4; device grant in M2 |
+| 4.3 | — | Keys have no hard delete; M2 defines `DELETE` semantics |
+
+Plans: [`2026-09-15-m1-auth-foundation.md`](../plans/2026-09-15-m1-auth-foundation.md) ·
+[`2026-09-15-m3-breed-mcp-tooldefs.md`](../plans/2026-09-15-m3-breed-mcp-tooldefs.md).
+M2 and M4 are planned once M1's token contract exists as code.
