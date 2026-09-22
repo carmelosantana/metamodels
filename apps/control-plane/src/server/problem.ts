@@ -71,8 +71,21 @@ export function problemForError(e: unknown): Response {
   }
   if (e instanceof TokenError) return unauthorized('the presented access token was rejected')
   if (e instanceof SlugTakenError) return problem(409, 'Conflict', e.message)
+  /**
+   * `detail` deliberately does NOT name the body. `ZodError` reaches here from three places now —
+   * `readJsonObject` (a body), `parsePathId` (a path segment) and the usage reports' query schemas
+   * (a query string) — and `GET /flocks/my-flock` carries no body at all. A detail saying otherwise
+   * would contradict the `errors[]` array sitting beside it in the same response.
+   *
+   * Not derived from the issue paths either, which is the tempting alternative: nothing in a
+   * `ZodError` records which source threw it, and the paths are genuinely ambiguous — `POST /flocks`
+   * accepts an `id` IN THE BODY, so `path: ['id']` alone cannot tell a bad path segment from a bad
+   * body field. Guessing would trade a detail that is wrong on 17 surfaces for one that is wrong
+   * occasionally and unpredictably. `errors[]` is the precise, machine-readable half; `detail` is
+   * the half whose only job is not to lie.
+   */
   if (e instanceof ZodError) {
-    return problem(422, 'Unprocessable Content', 'request body failed validation', {
+    return problem(422, 'Unprocessable Content', 'request failed validation', {
       errors: e.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     })
   }

@@ -114,6 +114,30 @@ describe('/api/admin/v1/usage/matrix', () => {
     expect(res.headers.get('content-type')).toBe('application/problem+json')
   })
 
+  // `usage-range.ts` argues the case for validating a range at all: "an empty report is a claim".
+  // A backwards window is the same claim by another route — every bucket comparison is false, so
+  // the service truthfully finds nothing and the route says "you used nothing" about a window that
+  // runs backwards. Lexicographic `<=` is exact on this fixed-width, zero-padded format.
+  test('GET with startBucket after endBucket is 422, not 200 with an empty report', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(matrix, '/usage/matrix?startBucket=2026-07-28T00&endBucket=2026-07-22T00', t)
+    expect(res.status).toBe(422)
+    const body = await res.json() as { detail: string; errors: { path: string }[] }
+    // Anchored positively: this is the RANGE-ORDER issue, not some other 422 the route also emits.
+    expect(body.errors.map((e) => e.path)).toEqual(['endBucket'])
+    // A query string is not a body; the detail must not say it was one.
+    expect(body.detail).toBe('request failed validation')
+  })
+
+  test('GET with startBucket EQUAL to endBucket is a legal one-hour window', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(matrix, '/usage/matrix?startBucket=2026-07-25T10&endBucket=2026-07-25T10', t)
+    expect(res.status).toBe(200)
+    const rows = await res.json() as { keyName: string; dims: Record<string, number> }[]
+    expect(rows.map((r) => r.keyName)).toEqual(['Acme', 'Beta'])
+    expect(rows[0].dims.tokens_out).toBe(100) // the 10:00 bucket only, not the 11:00 one
+  })
+
   test.each([
     ['a missing startBucket', 'endBucket=2026-07-28T23'],
     ['a missing endBucket', 'startBucket=2026-07-22T00'],
@@ -148,6 +172,13 @@ describe('/api/admin/v1/usage/daily', () => {
     expect(res.headers.get('content-type')).toBe('application/problem+json')
   })
 
+  test('GET with a backwards range is 422 here too', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(daily, '/usage/daily?startBucket=2026-07-28T00&endBucket=2026-07-22T00&dim=tokens_out', t)
+    expect(res.status).toBe(422)
+    expect((await res.json() as { errors: { path: string }[] }).errors.map((e) => e.path)).toEqual(['endBucket'])
+  })
+
   test('GET with a dim outside METER_DIMS is 422', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const res = await call(daily, `/usage/daily?${RANGE}&dim=dollars`, t)
@@ -171,6 +202,14 @@ describe('/api/admin/v1/usage/top-keys', () => {
     expect(res.status).toBe(200)
     const rows = await res.json() as { keyName: string }[]
     expect(rows.map((r) => r.keyName)).toEqual(['Beta'])
+  })
+
+  test('GET with a backwards range is 422 here too', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(topKeysRoute,
+      '/usage/top-keys?startBucket=2026-07-28T00&endBucket=2026-07-22T00&dim=tokens_out', t)
+    expect(res.status).toBe(422)
+    expect((await res.json() as { errors: { path: string }[] }).errors.map((e) => e.path)).toEqual(['endBucket'])
   })
 
   // `limit` reaches SQL's LIMIT. Zero is not a smaller page, it is a request for nothing; `abc`

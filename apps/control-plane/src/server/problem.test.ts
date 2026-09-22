@@ -35,6 +35,29 @@ describe('problemForError', () => {
     await expect(res.json()).resolves.toHaveProperty('errors')
   })
 
+  /**
+   * `ZodError` is no longer the body parser's private error. Three sources reach this arm now —
+   * `readJsonObject` (a body), `parsePathId` (a path segment) and the usage reports' query schemas
+   * (a query string) — and `GET /flocks/my-flock` carries no body at all. A `detail` naming the
+   * body contradicts the `errors[]` beside it, on a response Task 10 is about to document.
+   *
+   * The issues themselves are the precise half; `detail` is the half that must not lie. Nothing in
+   * a `ZodError` records which of the three threw it, so the fix is for `detail` to stop naming a
+   * source rather than to guess one.
+   */
+  test.each([
+    ['a body', ['name'] as const],
+    ['a path segment', ['id'] as const],
+    ['a query parameter', ['startBucket'] as const],
+  ])('the 422 detail does not claim a body when the fault was %s', async (_src, path) => {
+    const res = problemForError(new z.ZodError([{ code: 'custom', path: [...path], message: 'bad' }]))
+    const body = await res.json() as { detail: string; errors: { path: string }[] }
+    // The positive anchor: this really is the issue under test, not some other 422.
+    expect(body.errors).toEqual([{ path: path[0], message: 'bad' }])
+    expect(body.detail).toBe('request failed validation')
+    expect(body.detail).not.toContain('body')
+  })
+
   test('TokenError becomes 401', () => {
     expect(problemForError(new TokenError('expired')).status).toBe(401)
   })

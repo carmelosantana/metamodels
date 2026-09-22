@@ -176,9 +176,12 @@ describe('a malformed path id is 422, never an opaque 500', () => {
     // The POSITIVE anchor. A 422 alone is also what a rejected BODY produces, so without this the
     // table would pass against a handler that never looked at its path at all — which is precisely
     // the bug under test. Only the path-id parser puts `id` in `errors[].path`.
-    const p = await res.json() as { status: number; errors?: { path: string }[] }
+    const p = await res.json() as { status: number; detail: string; errors?: { path: string }[] }
     expect(p.status).toBe(422)
     expect(p.errors?.map((e) => e.path)).toContain('id')
+    // These are GETs and DELETEs with no body at all, so a detail blaming one would be a
+    // response contradicting its own `errors[]`.
+    expect(p.detail).toBe('request failed validation')
   })
 
   // `{tid}` is NOT a uuid and must not be parsed as one: `saveTemplate` keys on the draft's own id

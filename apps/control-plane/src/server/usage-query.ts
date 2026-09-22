@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { METER_DIMS } from '@metamodels/schema'
 import { isBucket } from '../lib/usage-range'
+import { uuidSchema } from './path-id'
 
 /**
  * The query strings of the three usage reports (spec §3), parsed once here rather than three times
@@ -22,31 +23,58 @@ const bucketSchema = z.string().refine(isBucket, {
 
 /**
  * `keyId` and `paddockId` are compared against uuid COLUMNS. Postgres rejects an invalid uuid
- * literal with a driver error `problemForError` cannot map, so without `.uuid()` here a client
- * typing a key's name where its id belongs gets a 500 that blames the server.
+ * literal with a driver error `problemForError` cannot map, so without this a client typing a key's
+ * name where its id belongs gets a 500 that blames the server.
+ *
+ * `uuidSchema` is imported from `path-id.ts` rather than rewritten: that module is the one
+ * definition of what an id is in this API, and a second `z.string().uuid()` here would be a second
+ * one waiting to drift.
  */
 const rangeShape = {
   startBucket: bucketSchema,
   endBucket: bucketSchema,
-  keyId: z.string().uuid().optional(),
-  paddockId: z.string().uuid().optional(),
+  keyId: uuidSchema.optional(),
+  paddockId: uuidSchema.optional(),
 }
 
 const dimSchema = z.enum(METER_DIMS)
 
-export const matrixQuery = z.object(rangeShape)
+/**
+ * The window must run forwards. Both buckets can be well-formed and still describe nothing: every
+ * `period >= start AND period <= end` comparison is false, so the service truthfully returns no
+ * rows and the report answers `200 []` — telling the caller they used nothing over a window that
+ * ran backwards. That is the claim `isBucket` exists to prevent, arriving by another route.
+ *
+ * Lexicographic `<=` is exact here, not an approximation: `YYYY-MM-DDTHH` is fixed-width,
+ * zero-padded and most-significant-first, so string order IS chronological order. Equal bounds are
+ * legal — that is a one-hour window, and a real question to ask.
+ *
+ * The issue is reported on `endBucket` because that is the bound a caller sweeping a range forward
+ * most often gets wrong, and naming one field beats an issue with no path at all.
+ */
+const rangeRunsForwards = (q: { startBucket: string; endBucket: string }) => q.startBucket <= q.endBucket
+const RANGE_ORDER_ISSUE: Partial<Omit<z.ZodCustomIssue, 'code'>> = {
+  path: ['endBucket'],
+  message: 'endBucket must not be earlier than startBucket',
+}
 
-export const dailyQuery = z.object({ ...rangeShape, dim: dimSchema })
+export const matrixQuery = z.object(rangeShape).refine(rangeRunsForwards, RANGE_ORDER_ISSUE)
 
-export const topKeysQuery = z.object({
-  startBucket: bucketSchema,
-  endBucket: bucketSchema,
-  dim: dimSchema,
-  // Rejected rather than clamped, for `parsePageOpts`'s reason: silently returning a different
-  // number of rows than asked for is a lie a client acts on. `limit` also reaches SQL's LIMIT
-  // directly, where `abc` is a driver error and `0` is a request for nothing.
-  limit: z.coerce.number().int().min(1).max(100).default(10),
-})
+export const dailyQuery = z
+  .object({ ...rangeShape, dim: dimSchema })
+  .refine(rangeRunsForwards, RANGE_ORDER_ISSUE)
+
+export const topKeysQuery = z
+  .object({
+    startBucket: bucketSchema,
+    endBucket: bucketSchema,
+    dim: dimSchema,
+    // Rejected rather than clamped, for `parsePageOpts`'s reason: silently returning a different
+    // number of rows than asked for is a lie a client acts on. `limit` also reaches SQL's LIMIT
+    // directly, where `abc` is a driver error and `0` is a request for nothing.
+    limit: z.coerce.number().int().min(1).max(100).default(10),
+  })
+  .refine(rangeRunsForwards, RANGE_ORDER_ISSUE)
 
 /**
  * `searchParams` as a plain object, dropping absent keys so `.optional()` and `.default()` behave.
