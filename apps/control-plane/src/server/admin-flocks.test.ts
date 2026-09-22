@@ -53,7 +53,7 @@ const rawCall = (
     { params: Promise.resolve(params) },
   )
 
-const FLOCK ={ name: 'f1', breed: 'ollama', baseUrl: 'http://ollama:11434', tlsTrust: true }
+const FLOCK = { name: 'f1', breed: 'ollama', baseUrl: 'http://ollama:11434', tlsTrust: true }
 
 let db: TestDb
 let adminUserId: string
