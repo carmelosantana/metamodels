@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import { listKeys, createKey, revokeKey, NotFoundError } from './keys-service'
+import { encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
@@ -150,5 +151,37 @@ describe('keys-service revokeKey', () => {
     const created = await createKey(db, admin, { name: 'k', paddockIds: [pid] })
     const viewer: Actor = { ...admin, role: 'viewer', email: 'viewer@x.io' }
     await expect(revokeKey(db, viewer, created.id)).rejects.toThrow(ForbiddenError)
+  })
+})
+
+describe('keys-service listKeys pagination', () => {
+  /** Two paddocks per key: a limit applied to the slug aggregation instead of the key query
+   *  would return a short page here, so this test pins the limit to the key query. */
+  async function threeKeysEachScopedToTwoPaddocks(db: TestDb, actor: Actor) {
+    const a = await paddockIn(db, actor.orgId, 'pa')
+    const b = await paddockIn(db, actor.orgId, 'pb')
+    const made = []
+    for (const n of ['k1', 'k2', 'k3']) made.push(await createKey(db, actor, { name: n, paddockIds: [a, b] }))
+    return [...made].sort((x, y) => x.id.localeCompare(y.id))
+  }
+
+  test('listKeys paginates by id and a cursor resumes exactly after it', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const byId = await threeKeysEachScopedToTwoPaddocks(db, actor)
+
+    const first = await listKeys(db, actor, { limit: 2 })
+    expect(first.map((k) => k.id)).toEqual([byId[0].id, byId[1].id])
+    expect(first[0].paddockSlugs).toEqual(['pa', 'pb'])
+
+    const second = await listKeys(db, actor, { limit: 2, cursor: encodeCursor(byId[1].id) })
+    expect(second.map((k) => k.id)).toEqual([byId[2].id])
+  })
+
+  test('listKeys without opts still returns every row (the console path is unchanged)', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    await threeKeysEachScopedToTwoPaddocks(db, actor)
+    expect(await listKeys(db, actor)).toHaveLength(3)
   })
 })

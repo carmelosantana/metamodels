@@ -2,13 +2,16 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
-import { listFlocks, saveFlock, deleteFlock, NotFoundError } from './flocks-service'
+import { listFlocks, getFlock, saveFlock, deleteFlock, NotFoundError } from './flocks-service'
+import { encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: Awaited<ReturnType<typeof freshDb>>, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
   return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
 }
+
+const base = { breed: 'ollama', name: 'f', baseUrl: 'http://a', tlsTrust: false }
 
 describe('flocks-service', () => {
   test('member can create a flock; it is org-scoped and audited', async () => {
@@ -76,5 +79,44 @@ describe('flocks-service', () => {
     expect(await db.select().from(schema.flock)).toHaveLength(0)
     const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'flock.delete'))
     expect(audits).toHaveLength(1)
+  })
+
+  test('listFlocks paginates by id and a cursor resumes exactly after it', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const made = []
+    for (const n of ['a', 'b', 'c']) made.push(await saveFlock(db, actor, { ...base, name: n }))
+    const byId = [...made].sort((x, y) => x.id.localeCompare(y.id))
+
+    const first = await listFlocks(db, actor, { limit: 2 })
+    expect(first.map((f) => f.id)).toEqual([byId[0].id, byId[1].id])
+
+    const second = await listFlocks(db, actor, { limit: 2, cursor: encodeCursor(byId[1].id) })
+    expect(second.map((f) => f.id)).toEqual([byId[2].id])
+  })
+
+  test('listFlocks without opts still returns every row (the console path is unchanged)', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    for (const n of ['a', 'b', 'c']) await saveFlock(db, actor, { ...base, name: n })
+    expect(await listFlocks(db, actor)).toHaveLength(3)
+  })
+
+  test('an empty cursor is rejected, not quietly treated as page one', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    await saveFlock(db, actor, base)
+    await expect(listFlocks(db, actor, { limit: 2, cursor: '' })).rejects.toThrow()
+  })
+
+  test('getFlock is org-scoped — another org 404s rather than leaking', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const mine = await saveFlock(db, actor, base)
+    expect((await getFlock(db, actor, mine.id)).id).toBe(mine.id)
+
+    const other = await seedOrg(db, 'other')
+    const otherOrgActor: Actor = { ...actor, orgId: other.id }
+    await expect(getFlock(db, otherOrgActor, mine.id)).rejects.toThrow(NotFoundError)
   })
 })

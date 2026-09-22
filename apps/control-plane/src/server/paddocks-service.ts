@@ -1,10 +1,11 @@
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq, gt } from 'drizzle-orm'
 import { flock, paddock, type Paddock, type PaddockTheme } from '@metamodels/schema'
 import type { Db } from './db'
 import { requireCapability, type Actor } from '../auth/authorize'
 import { writeAudit } from './audit'
 import { NotFoundError } from './flocks-service'
 import { savePaddockInput } from '../lib/paddock-schema'
+import { decodeCursor, type PageOpts } from './page'
 
 export class SlugTakenError extends Error {
   constructor(slug: string) {
@@ -13,9 +14,27 @@ export class SlugTakenError extends Error {
   }
 }
 
-export async function listPaddocks(db: Db, actor: Actor): Promise<Paddock[]> {
+export async function listPaddocks(db: Db, actor: Actor, opts?: PageOpts): Promise<Paddock[]> {
   requireCapability(actor, 'read')
-  return db.select().from(paddock).where(eq(paddock.orgId, actor.orgId))
+  const conds = [eq(paddock.orgId, actor.orgId)]
+  // `!== undefined`, not truthiness: an empty cursor is malformed input to reject, not a
+  // silent fall back to page one.
+  if (opts?.cursor !== undefined) conds.push(gt(paddock.id, decodeCursor(opts.cursor)))
+  const q = db.select().from(paddock).where(and(...conds)).orderBy(asc(paddock.id))
+  // No `opts` means no pagination at all: the console's pages call this bare and must keep
+  // receiving every row.
+  return opts ? q.limit(opts.limit) : q
+}
+
+/** The single by-id read. In the service, not the handler, so org scoping lives in one place. */
+export async function getPaddock(db: Db, actor: Actor, id: string): Promise<Paddock> {
+  requireCapability(actor, 'read')
+  const rows = await db.select().from(paddock)
+    .where(and(eq(paddock.id, id), eq(paddock.orgId, actor.orgId))).limit(1)
+  const row = rows[0]
+  // Another org's row is "not found", never a 403: whether it exists is itself the leak.
+  if (!row) throw new NotFoundError(`paddock ${id}`)
+  return row
 }
 
 export async function savePaddock(db: Db, actor: Actor, input: unknown): Promise<Paddock> {

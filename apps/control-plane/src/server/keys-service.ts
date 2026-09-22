@@ -1,10 +1,11 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray } from 'drizzle-orm'
 import { apiKey, generateApiKey, keyPaddock, paddock } from '@metamodels/schema'
 import type { Db } from './db'
 import { requireCapability, type Actor } from '../auth/authorize'
 import { writeAudit } from './audit'
 import { NotFoundError } from './flocks-service'
 import { createKeyInput } from '../lib/key-schema'
+import { decodeCursor, type PageOpts } from './page'
 
 export { NotFoundError }
 
@@ -26,15 +27,26 @@ export interface CreatedKey {
   plaintext: string
 }
 
-export async function listKeys(db: Db, actor: Actor): Promise<KeyRow[]> {
+export async function listKeys(db: Db, actor: Actor, opts?: PageOpts): Promise<KeyRow[]> {
   requireCapability(actor, 'read')
-  const keys = await db
+  // The page is taken here, on the key query that drives the whole result — one row per key.
+  // Limiting the slug join below instead would cut the page short whenever a key is scoped to
+  // more than one paddock.
+  const conds = [eq(apiKey.orgId, actor.orgId)]
+  // `!== undefined`, not truthiness: an empty cursor is malformed input to reject, not a
+  // silent fall back to page one.
+  if (opts?.cursor !== undefined) conds.push(gt(apiKey.id, decodeCursor(opts.cursor)))
+  const keyQuery = db
     .select({
       id: apiKey.id, name: apiKey.name, prefix: apiKey.prefix,
       status: apiKey.status, expiresAt: apiKey.expiresAt, createdAt: apiKey.createdAt,
     })
     .from(apiKey)
-    .where(eq(apiKey.orgId, actor.orgId))
+    .where(and(...conds))
+    .orderBy(asc(apiKey.id))
+  // No `opts` means no pagination at all: the console's pages call this bare and must keep
+  // receiving every row.
+  const keys = await (opts ? keyQuery.limit(opts.limit) : keyQuery)
   if (keys.length === 0) return []
 
   // Scope slugs per key, org-scoped on the paddock join (defense in depth).
