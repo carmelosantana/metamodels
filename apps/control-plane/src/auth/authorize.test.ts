@@ -8,6 +8,7 @@ import {
   type Actor,
   type Role,
   type Capability,
+  type Credential,
 } from './authorize'
 
 const actor = (role: Role, grants?: string[]): Actor => ({
@@ -93,5 +94,25 @@ describe('authorize — C3 intersection', () => {
     } catch (e) {
       expect((e as ForbiddenError).capability).toBe('user.manage')
     }
+  })
+})
+
+// The Credential grammar (spec §4.2) is a compile-time contract: `credential` is the source for
+// `audit_log.changed_by`, so the only thing worth asserting is that tsc rejects anything outside
+// the two legal forms. These tests fail in `pnpm --filter @metamodels/control-plane build`, not in
+// vitest — the runtime expects below merely keep the values from being elided as dead code.
+describe('Credential grammar (spec §4.2) — enforced by tsc, not by these assertions', () => {
+  test('both legal forms are assignable', () => {
+    const session = 'session' satisfies Credential
+    // Task 3 builds this from claims, so it must stay assignable as `token:${string}:${string}`.
+    const bearer = `token:${'console'}:${'jti-1'}` satisfies Credential
+    expect([session, bearer]).toEqual(['session', 'token:console:jti-1'])
+  })
+
+  test('an arbitrary string is not a credential', () => {
+    // @ts-expect-error — if Credential ever widens to `string`, this directive becomes unused and
+    // the build fails, which is the point: the guard cannot silently rot.
+    const rogue: Credential = 'whatever'
+    expect(rogue).toBe('whatever')
   })
 })

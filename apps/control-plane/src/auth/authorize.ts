@@ -3,6 +3,14 @@ import { USER_ROLES, type UserRole, type Capability } from '@metamodels/schema'
 export type { Capability }
 export type Role = UserRole
 
+/**
+ * Which credential performed a mutation, for `audit_log.changed_by` (spec §4.2). Exactly two
+ * forms exist: the console cookie session, and a bearer access token identified by its client
+ * and its `jti`. Typed as a closed grammar rather than `string` because this is an audit
+ * identity — an arbitrary string here is an audit row nobody can trust.
+ */
+export type Credential = 'session' | `token:${string}:${string}`
+
 export interface Actor {
   id: string
   orgId: string
@@ -16,7 +24,7 @@ export interface Actor {
    */
   grants?: ReadonlySet<Capability>
   /** Which credential acted, for `audit_log.changed_by`: `session` or `token:<client_id>:<jti>`. */
-  credential: string
+  credential: Credential
 }
 
 const MATRIX = {
