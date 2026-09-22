@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 import { KeySetUnavailableError, TokenError } from './admin-token'
 import { withAdmin, type AdminContext } from './admin-route'
+import * as flockItem from '../app/api/admin/v1/flocks/[id]/route'
+import * as paddockItem from '../app/api/admin/v1/paddocks/[id]/route'
+import * as paddockStatus from '../app/api/admin/v1/paddocks/[id]/status/route'
+import * as paddockFence from '../app/api/admin/v1/paddocks/[id]/fence/route'
+import * as templates from '../app/api/admin/v1/paddocks/[id]/templates/route'
+import * as templateItem from '../app/api/admin/v1/paddocks/[id]/templates/[tid]/route'
+import * as keyItem from '../app/api/admin/v1/keys/[id]/route'
+import * as revokeRoute from '../app/api/admin/v1/keys/[id]/revoke/route'
 
 const actorFromToken = vi.hoisted(() => vi.fn())
 vi.mock('./admin-token', async (importOriginal) => ({
@@ -109,5 +117,85 @@ describe('withAdmin — errors become problems', () => {
     })
     expect(res.status).toBe(403)
     await expect(res.json()).resolves.toMatchObject({ capability: 'user.manage' })
+  })
+})
+
+/**
+ * Cross-cutting, and here rather than in the per-resource suites for the same reason `withAdmin`
+ * is: the defect is one a NEW `[id]` route inherits by default, so the test has to name every
+ * route module at once and fail when one is added without the guard.
+ *
+ * `actorFromToken` and `getDb` are already mocked above, so a handler that fails to parse the path
+ * id reaches a fake `{}` database and throws a `TypeError` — which `problemForError` maps to an
+ * opaque 500. That IS the production defect in miniature: in production the same unparsed value
+ * reaches Postgres, which rejects it as an invalid uuid literal, with the same unmappable result.
+ */
+const GARBAGE = 'my-flock'
+const AUTH = { authorization: 'Bearer x.y.z', 'content-type': 'application/json' }
+
+const callRoute = (
+  mod: Record<string, unknown>,
+  method: string,
+  params: Record<string, string>,
+  body?: unknown,
+) =>
+  (mod[method] as (r: Request, c: { params: Promise<Record<string, string>> }) => Promise<Response>)(
+    new Request('https://console.test/api/admin/v1/x', {
+      method,
+      headers: AUTH,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+    { params: Promise.resolve(params) },
+  )
+
+describe('a malformed path id is 422, never an opaque 500', () => {
+  // Bodies are deliberately VALID where a handler reads one, so the only thing wrong with each
+  // request is its path. A `{}` body on the status route would 422 on the body instead and this
+  // table would pass green against a route that never looked at its id.
+  const CASES = [
+    ['GET /flocks/{id}', flockItem, 'GET', { id: GARBAGE }, undefined],
+    ['PUT /flocks/{id}', flockItem, 'PUT', { id: GARBAGE }, { name: 'n', breed: 'ollama', baseUrl: 'http://u' }],
+    ['DELETE /flocks/{id}', flockItem, 'DELETE', { id: GARBAGE }, undefined],
+    ['GET /paddocks/{id}', paddockItem, 'GET', { id: GARBAGE }, undefined],
+    ['PUT /paddocks/{id}', paddockItem, 'PUT', { id: GARBAGE }, { name: 'n', slug: 's' }],
+    ['DELETE /paddocks/{id}', paddockItem, 'DELETE', { id: GARBAGE }, undefined],
+    ['PUT /paddocks/{id}/status', paddockStatus, 'PUT', { id: GARBAGE }, { status: 'active' }],
+    ['GET /paddocks/{id}/fence', paddockFence, 'GET', { id: GARBAGE }, undefined],
+    ['PUT /paddocks/{id}/fence', paddockFence, 'PUT', { id: GARBAGE }, { rateLimit: null, quota: null }],
+    ['GET /paddocks/{id}/templates', templates, 'GET', { id: GARBAGE }, undefined],
+    ['POST /paddocks/{id}/templates', templates, 'POST', { id: GARBAGE }, { id: 't', graphText: '{}', params: [], cost: 0 }],
+    ['PUT /paddocks/{id}/templates/{tid}', templateItem, 'PUT', { id: GARBAGE, tid: 'txt2img' }, { graphText: '{}', params: [], cost: 0 }],
+    ['DELETE /paddocks/{id}/templates/{tid}', templateItem, 'DELETE', { id: GARBAGE, tid: 'txt2img' }, undefined],
+    ['POST /keys/{id}/revoke', revokeRoute, 'POST', { id: GARBAGE }, undefined],
+  ] as const
+
+  test.each(CASES)('%s', async (_name, mod, method, params, body) => {
+    const res = await callRoute(mod as unknown as Record<string, unknown>, method, params, body)
+    expect(res.status).toBe(422)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+    // The POSITIVE anchor. A 422 alone is also what a rejected BODY produces, so without this the
+    // table would pass against a handler that never looked at its path at all — which is precisely
+    // the bug under test. Only the path-id parser puts `id` in `errors[].path`.
+    const p = await res.json() as { status: number; errors?: { path: string }[] }
+    expect(p.status).toBe(422)
+    expect(p.errors?.map((e) => e.path)).toContain('id')
+  })
+
+  // `{tid}` is NOT a uuid and must not be parsed as one: `saveTemplate` keys on the draft's own id
+  // (`txt2img`, `img2img`), which lives inside a JSON column and never reaches a uuid cast. A
+  // helper applied indiscriminately to every path segment would 422 every template call there is.
+  test('a non-uuid {tid} is untouched — only {id} is a uuid', async () => {
+    const res = await callRoute(templateItem, 'DELETE', { id: crypto.randomUUID(), tid: 'txt2img' })
+    expect(res.status).not.toBe(422)
+  })
+
+  // A method refusal does not depend on the id: `DELETE /keys/{id}` touches no database, reads no
+  // params and answers on the method alone (spec §2.1). Parsing the id first here would turn a
+  // fixed, publishable contract into one that varies with the caller's input.
+  test('DELETE /keys/{id} is still 405 with a malformed id', async () => {
+    const res = await callRoute(keyItem, 'DELETE', { id: GARBAGE })
+    expect(res.status).toBe(405)
+    expect(res.headers.get('allow')).toBe('')
+    expect(await res.json()).toMatchObject({ status: 405, title: 'Method Not Allowed' })
   })
 })

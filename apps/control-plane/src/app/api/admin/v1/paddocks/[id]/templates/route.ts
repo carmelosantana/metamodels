@@ -2,6 +2,7 @@ import { withAdmin } from '../../../../../../../server/admin-route'
 import { getDb } from '../../../../../../../server/db'
 import { readJsonObject } from '../../../../../../../server/json-body'
 import { listTemplates, saveTemplate } from '../../../../../../../server/templates-service'
+import { parsePathId } from '../../../../../../../server/path-id'
 
 /**
  * Templates live inside the paddock's fence `constraint_json`, not in a table of their own, so this
@@ -10,7 +11,7 @@ import { listTemplates, saveTemplate } from '../../../../../../../server/templat
  * which is the point: neither tells a caller anything about rows they may not see.
  */
 export const GET = withAdmin(async ({ actor, params }) =>
-  Response.json(await listTemplates(getDb(), actor, params.id)))
+  Response.json(await listTemplates(getDb(), actor, parsePathId(params.id))))
 
 /**
  * ⚠ The 201 body is the WHOLE template array, not the created template. `saveTemplate` returns the
@@ -30,7 +31,9 @@ export const GET = withAdmin(async ({ actor, params }) =>
  * otherwise create a row under this actor's org from another org's paddock id.
  */
 export const POST = withAdmin(async ({ actor, req, params }) => {
+  // Before the body, not after: a path that names no resource makes the body moot (`path-id.ts`).
+  const paddockId = parsePathId(params.id)
   const draft = await readJsonObject(req)
-  const saved = await saveTemplate(getDb(), actor, { paddockId: params.id, draft })
+  const saved = await saveTemplate(getDb(), actor, { paddockId, draft })
   return Response.json(saved, { status: 201 })
 })

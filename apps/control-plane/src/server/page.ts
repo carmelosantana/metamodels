@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from './path-id'
 
 export const DEFAULT_LIMIT = 50
 export const MAX_LIMIT = 200
@@ -9,7 +10,6 @@ export interface PageOpts {
 }
 
 const limitSchema = z.coerce.number().int().min(1).max(MAX_LIMIT)
-const uuidSchema = z.string().uuid()
 
 /** Rejects rather than clamps: silently returning fewer rows than asked for is a lie a client acts on. */
 export function parsePageOpts(url: URL): PageOpts {

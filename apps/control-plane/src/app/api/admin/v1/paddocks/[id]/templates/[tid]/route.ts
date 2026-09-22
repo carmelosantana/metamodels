@@ -2,6 +2,7 @@ import { withAdmin } from '../../../../../../../../server/admin-route'
 import { getDb } from '../../../../../../../../server/db'
 import { readJsonObject } from '../../../../../../../../server/json-body'
 import { deleteTemplate, saveTemplate } from '../../../../../../../../server/templates-service'
+import { parsePathId } from '../../../../../../../../server/path-id'
 
 /**
  * PUT replaces the template the PATH names. `saveTemplate` keys on the draft's `id` — it replaces a
@@ -13,9 +14,12 @@ import { deleteTemplate, saveTemplate } from '../../../../../../../../server/tem
  * The tenancy guard is inside `saveTemplate`'s transaction (see `../route.ts`), not out here.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
+  // `{id}` is a paddock uuid and is parsed; `{tid}` is the template's OWN id (`txt2img`), which
+  // lives inside a JSON column and is never a uuid — parsing it would 422 every legitimate call.
+  const paddockId = parsePathId(params.id)
   const body = await readJsonObject(req)
   const saved = await saveTemplate(getDb(), actor, {
-    paddockId: params.id,
+    paddockId,
     draft: { ...body, id: params.tid },
   })
   return Response.json(saved)
@@ -27,6 +31,6 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
  * that is not there is a no-op that still audits — GET the collection to see what is left.
  */
 export const DELETE = withAdmin(async ({ actor, params }) => {
-  await deleteTemplate(getDb(), actor, { paddockId: params.id, templateId: params.tid })
+  await deleteTemplate(getDb(), actor, { paddockId: parsePathId(params.id), templateId: params.tid })
   return new Response(null, { status: 204 })
 })

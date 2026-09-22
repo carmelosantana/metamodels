@@ -3,6 +3,7 @@ import { getDb } from '../../../../../../../server/db'
 import { getFence, saveFence } from '../../../../../../../server/fences-service'
 import { buildBreedRegistry } from '../../../../../../../server/flock-health'
 import { readJsonObject } from '../../../../../../../server/json-body'
+import { parsePathId } from '../../../../../../../server/path-id'
 import { problem } from '../../../../../../../server/problem'
 
 // One registry per module, exactly as the console's fence action does it
@@ -13,11 +14,12 @@ import { problem } from '../../../../../../../server/problem'
 const registry = buildBreedRegistry()
 
 export const GET = withAdmin(async ({ actor, params }) => {
-  const found = await getFence(getDb(), actor, params.id)
+  const id = parsePathId(params.id)
+  const found = await getFence(getDb(), actor, id)
   // A paddock with no fence has no fence resource. 200 with a `null` body would tell a client the
   // resource exists and is empty, which is a different thing and one it cannot act on.
   // (An out-of-org paddock never reaches here — `getFence` throws NotFoundError first.)
-  if (!found) return problem(404, 'Not Found', `fence for paddock ${params.id}`)
+  if (!found) return problem(404, 'Not Found', `fence for paddock ${id}`)
   return Response.json(found)
 })
 
@@ -43,8 +45,10 @@ export const GET = withAdmin(async ({ actor, params }) => {
  * change to either one fails rather than passing silently. Task 10 documents it for clients.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
+  // Before the body, not after: a path that names no resource makes the body moot (`path-id.ts`).
+  const paddockId = parsePathId(params.id)
   const body = await readJsonObject(req)
   // The path owns the paddock id; a `paddockId` in the body is overwritten, never trusted.
-  const saved = await saveFence(getDb(), actor, registry, { ...body, paddockId: params.id })
+  const saved = await saveFence(getDb(), actor, registry, { ...body, paddockId })
   return Response.json(saved)
 })

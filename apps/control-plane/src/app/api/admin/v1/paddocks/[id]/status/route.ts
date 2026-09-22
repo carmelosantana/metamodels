@@ -4,6 +4,7 @@ import { withAdmin } from '../../../../../../../server/admin-route'
 import { getDb } from '../../../../../../../server/db'
 import { readJsonObject } from '../../../../../../../server/json-body'
 import { setPaddockStatus } from '../../../../../../../server/paddocks-service'
+import { parsePathId } from '../../../../../../../server/path-id'
 
 const statusBody = z.object({ status: z.enum(PADDOCK_STATUS) })
 
@@ -19,6 +20,8 @@ const statusBody = z.object({ status: z.enum(PADDOCK_STATUS) })
  * and throws NotFoundError when it matches no row — so a foreign id cannot create anything.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
+  // Before the body, not after: a path that names no resource makes the body moot (`path-id.ts`).
+  const id = parsePathId(params.id)
   const { status } = statusBody.parse(await readJsonObject(req))
-  return Response.json(await setPaddockStatus(getDb(), actor, params.id, status))
+  return Response.json(await setPaddockStatus(getDb(), actor, id, status))
 })

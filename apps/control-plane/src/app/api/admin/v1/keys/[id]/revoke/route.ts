@@ -1,6 +1,7 @@
 import { withAdmin } from '../../../../../../../server/admin-route'
 import { getDb } from '../../../../../../../server/db'
 import { revokeKey } from '../../../../../../../server/keys-service'
+import { parsePathId } from '../../../../../../../server/path-id'
 
 /**
  * The only way to retire a key over this API — `DELETE /keys/{id}` refuses precisely so that this
@@ -21,6 +22,6 @@ import { revokeKey } from '../../../../../../../server/keys-service'
  * service's predicate, which is deliberately not this route's to do.
  */
 export const POST = withAdmin(async ({ actor, params }) => {
-  await revokeKey(getDb(), actor, params.id)
+  await revokeKey(getDb(), actor, parsePathId(params.id))
   return new Response(null, { status: 204 })
 })
