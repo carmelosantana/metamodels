@@ -1,6 +1,7 @@
 import { withAdmin } from '../../../../../../server/admin-route'
 import { getDb } from '../../../../../../server/db'
 import { deleteFlock, getFlock, saveFlock } from '../../../../../../server/flocks-service'
+import { readJsonObject } from '../../../../../../server/json-body'
 
 export const GET = withAdmin(async ({ actor, params }) =>
   Response.json(await getFlock(getDb(), actor, params.id)))
@@ -10,9 +11,13 @@ export const GET = withAdmin(async ({ actor, params }) =>
  * a partial merge would have to read-modify-write outside the service's transaction, where it races.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
-  const body = await req.json() as Record<string, unknown>
+  const body = await readJsonObject(req)
   const db = getDb()
-  await getFlock(db, actor, params.id)          // 404 before any write if it is not ours
+  // A TENANCY GUARD, not a convenience. `saveFlock` happens to throw NotFoundError when its
+  // org-scoped UPDATE matches no row, but a service whose save UPSERTS would instead CREATE a row
+  // under this actor's org from another org's id. This read is the only thing that stops that.
+  // Do not remove it when copying this module to another resource.
+  await getFlock(db, actor, params.id)
   return Response.json(await saveFlock(db, actor, { ...body, id: params.id }))
 })
 

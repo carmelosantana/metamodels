@@ -46,7 +46,9 @@ describe('credentialOf', () => {
 // Round trip against a real signed RFC 9068 token and a real JWKS over HTTP.
 // Two keys are published under different `kid`s so that key resolution is
 // actually exercised rather than assumed.
-// Task 6, Step 3 hoists this setup into a shared `test-token.ts` fixture.
+// `test-token.ts` is the shared fixture the admin ROUTE suites use. This setup was not folded into
+// it and deliberately stays here: it publishes two `kid`s, which is what makes key resolution
+// testable, and `test-token.ts` publishes one because no route test needs the second.
 // ---------------------------------------------------------------------------
 
 const KID_A = 'test-key-1'

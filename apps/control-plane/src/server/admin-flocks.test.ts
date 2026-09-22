@@ -35,7 +35,25 @@ const call = (
     { params: Promise.resolve(params) },
   )
 
-const FLOCK = { name: 'f1', breed: 'ollama', baseUrl: 'http://ollama:11434', tlsTrust: true }
+/** Same as `call`, but the body goes on the wire verbatim — for bodies `JSON.stringify` cannot make. */
+const rawCall = (
+  mod: Record<string, unknown>,
+  method: 'POST' | 'PUT',
+  path: string,
+  token: string,
+  body: string,
+  params: Record<string, string> = {},
+) =>
+  (mod[method] as (r: Request, c: { params: Promise<Record<string, string>> }) => Promise<Response>)(
+    new Request(url(path), {
+      method,
+      headers: { ...bearer(token), 'content-type': 'application/json' },
+      body,
+    }),
+    { params: Promise.resolve(params) },
+  )
+
+const FLOCK ={ name: 'f1', breed: 'ollama', baseUrl: 'http://ollama:11434', tlsTrust: true }
 
 let db: TestDb
 let adminUserId: string
@@ -76,13 +94,29 @@ describe('/api/admin/v1/flocks', () => {
     expect(res.headers.get('Link')).toBeNull()
   })
 
-  test('GET ?limit=1 returns one row and a Link: rel="next"', async () => {
+  test('GET ?limit= returns a page and a Link whose cursor resumes AFTER the last row', async () => {
     const t = await tok.mint({ sub: adminUserId })
-    await call(collection, 'POST', '/flocks', t, { ...FLOCK, name: 'a' })
-    await call(collection, 'POST', '/flocks', t, { ...FLOCK, name: 'b' })
-    const res = await call(collection, 'GET', '/flocks?limit=1', t)
-    expect(await res.json()).toHaveLength(1)
-    expect(res.headers.get('Link')).toMatch(/; rel="next"$/)
+    for (const name of ['a', 'b', 'c']) {
+      await call(collection, 'POST', '/flocks', t, { ...FLOCK, name })
+    }
+    // Rows come back ordered by id, which is a random uuid — so insertion order proves nothing
+    // and the expected page contents have to be read off an unpaginated GET.
+    const ordered = await (await call(collection, 'GET', '/flocks', t)).json() as { id: string }[]
+    expect(ordered).toHaveLength(3)
+
+    const res = await call(collection, 'GET', '/flocks?limit=2', t)
+    expect((await res.json() as { id: string }[]).map((f) => f.id)).toEqual([ordered[0].id, ordered[1].id])
+    const link = res.headers.get('Link')
+    expect(link).toMatch(/; rel="next"$/)
+
+    // Three rows at limit=2, so the page is short of the last row and can only be reached by
+    // following the header. A cursor built from the page's FIRST row instead of its last would
+    // hand back row two again and loop a client forever — which a shape-only assertion on the
+    // header cannot see, and which is the one line every later collection route copies verbatim.
+    const next = new URL(link!.slice(1, link!.indexOf('>')))
+    const page2 = await call(collection, 'GET', `/flocks${next.search}`, t)
+    expect((await page2.json() as { id: string }[]).map((f) => f.id)).toEqual([ordered[2].id])
+    expect(page2.headers.get('Link')).toBeNull()
   })
 
   test('POST creates, returns 201 and a Location header', async () => {
@@ -96,6 +130,27 @@ describe('/api/admin/v1/flocks', () => {
   test('POST with an id in the body is 422', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const res = await call(collection, 'POST', '/flocks', t, { ...FLOCK, id: crypto.randomUUID() })
+    expect(res.status).toBe(422)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+  })
+
+  // A body defect is the caller's to fix. A 500 says the opposite, and says it with no detail.
+  test.each([
+    ['truncated JSON', '{"name":'],
+    ['a JSON null', 'null'],
+    ['a JSON array', '[{"name":"a"}]'],
+    ['a JSON scalar', '"nope"'],
+  ])('POST with %s is 422, never an opaque 500', async (_shape, raw) => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await rawCall(collection, 'POST', '/flocks', t, raw)
+    expect(res.status).toBe(422)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+  })
+
+  test('PUT with a malformed body is 422, never an opaque 500', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', t, FLOCK)).json() as { id: string }
+    const res = await rawCall(item, 'PUT', `/flocks/${created.id}`, t, '{"name":', { id: created.id })
     expect(res.status).toBe(422)
     expect(res.headers.get('content-type')).toBe('application/problem+json')
   })
