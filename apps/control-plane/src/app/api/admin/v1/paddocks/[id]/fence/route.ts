@@ -26,6 +26,21 @@ export const GET = withAdmin(async ({ actor, params }) => {
  * item PUT, an absent row here is the create case, so a pre-read would forbid the only way to make
  * a fence. The tenancy guard instead lives INSIDE `saveFence`, at the `paddockBreedInOrg` call that
  * opens its transaction: it is atomic with the upsert, which a route-level read could not be.
+ *
+ * ⚠ THIS PUT IS NOT A UNIFORM FULL REPLACE. `saveFence` treats the three fields differently, and
+ * a caller has to know which is which because this is the resource that holds the allow-list:
+ *
+ *   - `constraintJson` omitted → the stored constraint is PRESERVED (or, on a fresh row, the
+ *     breed default is applied). It is a merge. A client trying to reset a constraint by sending
+ *     a body without one silently keeps the old allow-list.
+ *   - `rateLimit` and `quota` omitted → both are set to NULL. Those are replaced.
+ *
+ * The asymmetry is `saveFence`'s, deliberate, and load-bearing for the console's comfyui path,
+ * where templates are managed on their own screen and the fence form must not clobber them
+ * (`src/app/(app)/paddocks/[id]/fence/actions.ts` omits `constraintJson` for exactly that reason).
+ * It is NOT this route's to change. What this route owes is that the contract is written down and
+ * pinned: `admin-paddocks.test.ts` asserts both halves against an existing fence, so a later
+ * change to either one fails rather than passing silently. Task 10 documents it for clients.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
   const body = await readJsonObject(req)

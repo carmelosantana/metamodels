@@ -148,6 +148,17 @@ describe('/api/admin/v1/paddocks', () => {
 
   // The slug is globally unique and `savePaddock` throws SlugTakenError for a collision.
   // `problemForError` maps it to 409; without that arm this would be an opaque 500.
+  // `savePaddockInput` no longer defaults `status`, so the column default (`schema.ts:65`,
+  // notNull().default('active')) is what makes a created paddock active. Pinned because the two
+  // defaults are in different files and only one of them is still load-bearing.
+  test('POST omitting status creates an active paddock', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await post(t)
+    expect(created.status).toBe('active')
+    const [row] = await db.select().from(paddock).where(eq(paddock.id, created.id))
+    expect(row.status).toBe('active')
+  })
+
   test('POST with a slug already taken is 409 Conflict, never a 500', async () => {
     const t = await tok.mint({ sub: adminUserId })
     await post(t, 'taken')
@@ -258,6 +269,14 @@ describe('/api/admin/v1/paddocks', () => {
     expect(after[0].name).toBe('foreign')
   })
 
+  test('DELETE /{id} of another org is 404 and deletes nothing', async () => {
+    const foreign = await createPaddockIn(otherOrgId)
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(item, 'DELETE', `/paddocks/${foreign.id}`, t, undefined, { id: foreign.id })
+    expect(res.status).toBe(404)
+    expect(await db.select().from(paddock).where(eq(paddock.id, foreign.id))).toHaveLength(1)
+  })
+
   test('DELETE /{id} is 204 and audits with changed_by = token:...', async () => {
     const t = await tok.mint({ sub: adminUserId, jti: 'jti-del' })
     const created = await post(t)
@@ -315,12 +334,16 @@ describe('/api/admin/v1/paddocks/{id}/status', () => {
 })
 
 describe('/api/admin/v1/paddocks/{id}/fence', () => {
-  test('GET is 404 when the paddock has no fence', async () => {
+  // "this paddock has no fence" and "there is no such paddock" are different failures with
+  // different fixes, and they share a status code. The detail is the only thing separating them,
+  // so both sides are asserted — here and in the foreign-org GET below.
+  test('GET is 404 naming the FENCE when the paddock has no fence', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await post(t)
     const res = await call(fenceRoute, 'GET', `/paddocks/${created.id}/fence`, t, undefined, { id: created.id })
     expect(res.status).toBe(404)
     expect(res.headers.get('content-type')).toBe('application/problem+json')
+    expect(await res.json()).toMatchObject({ detail: `fence for paddock ${created.id}` })
   })
 
   test('PUT saves and GET returns it', async () => {
@@ -362,11 +385,52 @@ describe('/api/admin/v1/paddocks/{id}/fence', () => {
     expect(await db.select().from(fence)).toHaveLength(0)
   })
 
-  test('GET for another org paddock is 404', async () => {
+  test('GET for another org paddock is 404 naming the PADDOCK, not the fence', async () => {
     const foreign = await createPaddockIn(otherOrgId)
     const t = await tok.mint({ sub: adminUserId })
     const res = await call(fenceRoute, 'GET', `/paddocks/${foreign.id}/fence`, t, undefined, { id: foreign.id })
     expect(res.status).toBe(404)
+    // `getFence` threw NotFoundError('paddock <id>') before it ever looked for a fence. If this
+    // said "fence for paddock", a caller would go hunting for a missing fence on a paddock that
+    // is not theirs and does not exist as far as they are concerned.
+    // `NotFoundError`'s own message, which reads `not found: paddock <id>`.
+    const body = await res.json() as { detail: string }
+    expect(body.detail).toBe(`not found: paddock ${foreign.id}`)
+    expect(body.detail).not.toContain('fence')
+  })
+
+  // I1: `saveFence` is a full replace for `rateLimit`/`quota` and a MERGE for `constraintJson`.
+  // Both halves pinned, because neither was covered and a future service change to either would
+  // have passed this suite silently — on the resource that IS the allow-list.
+  test('PUT omitting constraintJson PRESERVES the stored constraint', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await post(t)
+    await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t, FENCE, { id: created.id })
+
+    const res = await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t,
+      { rateLimit: { windowSec: 30, max: 5 } }, { id: created.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ constraintJson: FENCE.constraintJson })
+
+    const [row] = await db.select().from(fence).where(eq(fence.paddockId, created.id))
+    expect(row.constraintJson).toMatchObject(FENCE.constraintJson)
+    expect(row.rateLimit).toMatchObject({ windowSec: 30, max: 5 })
+  })
+
+  test('PUT omitting rateLimit CLEARS it', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await post(t)
+    await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t,
+      { ...FENCE, rateLimit: { windowSec: 60, max: 30 }, quota: [{ dim: 'tokens_out', max: 1000, period: 'day' }] },
+      { id: created.id })
+
+    const res = await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t, FENCE, { id: created.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ rateLimit: null, quota: null })
+
+    const [row] = await db.select().from(fence).where(eq(fence.paddockId, created.id))
+    expect(row.rateLimit).toBeNull()
+    expect(row.quota).toBeNull()
   })
 })
 

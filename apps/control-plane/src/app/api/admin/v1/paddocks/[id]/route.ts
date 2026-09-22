@@ -10,28 +10,29 @@ export const GET = withAdmin(async ({ actor, params }) =>
  * PUT is a full replace, because `savePaddock` does `set(values)`. There is deliberately no PATCH:
  * a partial merge would have to read-modify-write outside the service's transaction, where it races.
  *
- * `status` is the ONE exception, and it is not a merge: it is READ-ONLY on this endpoint. Spec §3
- * makes status a PUT sub-resource routed at `setPaddockStatus`, "not a field of the main PUT" —
- * but `savePaddockInput` defaults it to 'active', so a replace that simply leaves it out would
- * write 'active' and silently re-enable a paddock an operator disabled on purpose. A rename must
- * not flip the kill switch back on. So the current status is read here and carried through,
- * overriding whatever the body says.
+ * `status` is the ONE exception, and it is READ-ONLY here rather than merged. Spec §3 makes status
+ * a PUT sub-resource routed at `setPaddockStatus`, "not a field of the main PUT" — a rename must
+ * not flip a deliberately-thrown kill switch back on. So the field is dropped from the body before
+ * the service sees it, and `savePaddock` leaves the column out of its `set()` entirely. Untouched
+ * INSIDE the service's transaction, not read here and re-asserted after: a read-modify-write across
+ * two transactions would lose a concurrent PUT /{id}/status, which is the same re-enable narrowed
+ * to a race window rather than removed.
  *
- * Preserve-and-ignore rather than 422-on-`status`: `GET` returns the field, so rejecting it would
+ * Drop-and-ignore rather than 422-on-`status`: `GET` returns the field, so rejecting it would
  * break the natural GET → change one field → PUT round trip on a field the client never touched.
  */
 export const PUT = withAdmin(async ({ actor, req, params }) => {
   const body = await readJsonObject(req)
+  // `status` is read-only on this endpoint (spec §3): dropped before the service ever sees it,
+  // so an omitted status and a supplied one take exactly the same path.
+  delete body.status
   const db = getDb()
   // A TENANCY GUARD, not a convenience. `savePaddock` happens to throw NotFoundError when its
   // org-scoped UPDATE matches no row, but a service whose save UPSERTS would instead CREATE a row
   // under this actor's org from another org's id. This read is the only thing that stops that.
-  // Do not remove it when copying this module to another resource. It also supplies the status.
-  const current = await getPaddock(db, actor, params.id)
-  // `status` LAST: it must win over the body, not be defaulted by its absence.
-  return Response.json(await savePaddock(db, actor, {
-    ...body, id: params.id, status: current.status,
-  }))
+  // Do not remove it when copying this module to another resource.
+  await getPaddock(db, actor, params.id)
+  return Response.json(await savePaddock(db, actor, { ...body, id: params.id }))
 })
 
 export const DELETE = withAdmin(async ({ actor, params }) => {

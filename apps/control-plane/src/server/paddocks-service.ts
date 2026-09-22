@@ -55,12 +55,20 @@ export async function savePaddock(db: Db, actor: Actor, input: unknown): Promise
     const clash = await tx.select({ id: paddock.id }).from(paddock).where(eq(paddock.slug, data.slug)).limit(1)
     if (clash[0] && clash[0].id !== data.id) throw new SlugTakenError(data.slug)
 
+    // `status` is present ONLY when the caller sent one. The key is genuinely absent otherwise,
+    // not set to `undefined`: on UPDATE that leaves the column out of the `set()` list, so a
+    // caller who does not mention status cannot move it — which is what lets the admin API's
+    // item PUT be status-safe INSIDE this transaction rather than by reading the row first and
+    // re-asserting it afterwards, a read-modify-write that would lose a concurrent
+    // `setPaddockStatus`. On INSERT the column's own notNull().default('active') fills it in.
+    // (Measured: drizzle also drops an explicitly-`undefined` key from both `set()` and
+    // `values()`, so this is belt-and-braces rather than a workaround.)
     const values = {
       flockId: data.flockId,
       name: data.name,
       slug: data.slug,
-      status: data.status,
       theme: data.theme as PaddockTheme,
+      ...(data.status !== undefined ? { status: data.status } : {}),
     }
 
     if (data.id) {
