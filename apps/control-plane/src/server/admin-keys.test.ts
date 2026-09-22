@@ -134,6 +134,10 @@ describe('/api/admin/v1/keys', () => {
     // hand back row two again and loop a client forever — which a shape-only assertion on the
     // header cannot see, and which is the one line every collection route copies verbatim.
     const next = new URL(link!.slice(1, link!.indexOf('>')))
+    // The path as well as the cursor: only `next.search` is carried into the follow-up call below
+    // (the `url()` helper re-prefixes the rest), so without this a `linkHeader` emitting the wrong
+    // path would send every real client somewhere else and this test would never notice.
+    expect(next.pathname).toBe('/api/admin/v1/keys')
     const page2 = await call(keys, 'GET', `/keys${next.search}`, t)
     expect((await page2.json() as { id: string }[]).map((k) => k.id)).toEqual([ordered[2].id])
     expect(page2.headers.get('Link')).toBeNull()
@@ -149,6 +153,12 @@ describe('/api/admin/v1/keys', () => {
     // representation ever grew a `plaintext` (or a `hash`, which is the secret's only preimage),
     // every operator with `read` would hold every key in the org.
     const listed = await (await call(keys, 'GET', '/keys', t)).text()
+    // The POSITIVE anchor, and the reason the three negatives below mean anything. Every one of
+    // them passes against `[]`, against a problem body, against the empty string — i.e. against a
+    // listing that never contained this key at all, which would report the secret safely absent
+    // from a response that was never the one under test. This is the most security-sensitive claim
+    // in the suite; it must fail when the listing stops listing.
+    expect(listed).toContain(created.id)
     expect(listed).not.toContain(created.plaintext)
     expect(listed).not.toContain('plaintext')
     const [row] = await db.select().from(apiKey).where(eq(apiKey.id, created.id))
@@ -323,7 +333,7 @@ describe('/api/admin/v1/paddocks/{id}/templates', () => {
     expect(arr[0].cost).toBe(9)
   })
 
-  test('DELETE of an unknown template id is still 204 and leaves the rest alone', async () => {
+  test('DELETE of an unknown template id is 204, audits anyway, and leaves the rest alone', async () => {
     const t = await tok.mint({ sub: adminUserId })
     await call(templates, 'POST', `/paddocks/${comfyPaddockId}/templates`, t, draft('txt2img'), { id: comfyPaddockId })
     const res = await call(templateItem, 'DELETE', `/paddocks/${comfyPaddockId}/templates/nope`, t,
@@ -331,6 +341,13 @@ describe('/api/admin/v1/paddocks/{id}/templates', () => {
     expect(res.status).toBe(204)
     const after = await call(templates, 'GET', `/paddocks/${comfyPaddockId}/templates`, t, undefined, { id: comfyPaddockId })
     expect((await after.json() as { id: string }[]).map((x) => x.id)).toEqual(['txt2img'])
+
+    // `deleteTemplate` filters and rewrites the column, then audits UNCONDITIONALLY — a no-op
+    // delete still leaves a `template.delete` row naming an id that was never there. The route
+    // comment asserts this in prose; asserted here so the prose cannot rot into a lie.
+    const audits = await db.select().from(auditLog).where(eq(auditLog.action, 'template.delete'))
+    expect(audits).toHaveLength(1)
+    expect(audits[0].detail).toMatchObject({ templateId: 'nope' })
   })
 
   // Every mutating handler in this resource crossed with every body shape `readJsonObject` exists
