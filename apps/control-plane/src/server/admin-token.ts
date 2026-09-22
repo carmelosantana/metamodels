@@ -12,9 +12,10 @@ const JWKS_COOLDOWN_MS = 30 * 1000
 /**
  * The presented token was judged and refused. The caller answers 401.
  *
- * `reason` is deliberately coarse and carries nothing an attacker could use as an oracle for *why*
- * a token failed; `cause`, when present, holds the underlying error for server-side logging and
- * must never reach the client.
+ * `reason` and `cause` are for server-side logging ONLY and must never reach the client. `reason`
+ * is NOT safe to echo: `'subject is not an active user'` separates a valid, correctly-signed token
+ * for a deactivated account from a bad token, which is an account-enumeration oracle. `problem.ts`
+ * answers every `TokenError` with one fixed 401 detail for exactly this reason.
  */
 export class TokenError extends Error {
   readonly reason: string

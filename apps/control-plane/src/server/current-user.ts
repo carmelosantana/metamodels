@@ -1,11 +1,11 @@
 import { cookies } from 'next/headers'
 import { OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
-import { signSession, verifySession } from '../auth/session'
+import { SESSION_COOKIE, signSession, verifySession } from '../auth/session'
 import { type Actor } from '../auth/authorize'
 import { loadActiveActor } from './actor'
 import { getDb } from './db'
 
-export const SESSION_COOKIE = 'mm_session'
+export { SESSION_COOKIE } from '../auth/session'
 export const SESSION_TTL_MS = OPERATOR_SESSION_TTL_MS
 
 export function sessionSecret(): string {
