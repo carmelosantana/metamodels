@@ -24,6 +24,15 @@ incident-response). Work through the "Open" items at your pace.
   in a real browser against the running stack: zero CSP violations across login, dashboard,
   paddocks + client-side modal, usage charts, fence editor, and the 404 page. See
   docs/DEPLOY.md § Security headers.
+- **Uniform 401s on the proxy (added 2026-09-22):** `/p/:slug` answered `invalid api key` and
+  `expired api key` as distinct bodies, grading a `mm_live_` guess by telling the caller whether
+  the key it presented had ever existed and whether it had merely lapsed. Both now answer with one
+  byte-identical body, built in `apps/data-plane/src/unauthorized.ts` along with the
+  `WWW-Authenticate: Bearer` challenge RFC 9110 §15.5.2 requires on any 401 and which all three
+  responses lacked. A request carrying *no* key stays distinguishable on purpose — it describes
+  the caller's own request shape, not server state about any key. The precise reason goes to the
+  operator log instead. Same treatment the admin API applies to every rejected token
+  (`apps/control-plane/src/server/problem.ts`) and the auth service to a bad login.
 - **No persistence backdoors present:** no `.vscode/tasks.json`, `.vscode/setup.mjs`,
   `.claude/setup.mjs`, or committed `.claude/settings*.json`; no `execution.js`/`router_init.js`
   worm-blob signatures anywhere in the tree.

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { createApp } from '../src/app.js'
 import { buildRegistry } from '../src/breeds.js'
 import { DrizzleConfigStore } from '../src/config/config-store.js'
@@ -6,15 +6,24 @@ import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
 import { seal, type SealBinding } from '@metamodels/schema/sealed'
-import { makeDb, seedFixture, TEST_RING, testRing, type Fixture } from './helpers/seed.js'
+import { makeDb, seedFixture, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
+import * as schema from '@metamodels/schema'
+import { hashApiKey } from '@metamodels/schema'
 
+let db: TestDb
 let fx: Fixture
 let sink: InMemoryMeterSink
 let app: ReturnType<typeof createApp>['app']
 let drainMeters: () => Promise<void>
 
+// Refusing a presented key logs its reason by design (`unauthorized.ts`); that belongs in an
+// operator's log, not in this run's stderr. The logging itself is asserted in unauthorized.test.ts.
+let warn: ReturnType<typeof vi.spyOn>
+afterEach(() => { warn.mockRestore() })
+
 beforeEach(async () => {
-  const db = await makeDb()
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  db = await makeDb()
   fx = await seedFixture(db)
   sink = new InMemoryMeterSink()
   const fake = createFakeOllama()
@@ -40,6 +49,17 @@ const chat = (model: string) => ({
   body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }] }),
 })
 
+/** An `active` key whose `expires_at` is in the past — the only arm the fixture cannot express. */
+async function seedExpiredKey(): Promise<string> {
+  const plaintext = `mm_live_expired_${crypto.randomUUID()}`
+  const [key] = await db.insert(schema.apiKey).values({
+    orgId: fx.orgId, name: 'expired', prefix: plaintext.slice(0, 12), hash: hashApiKey(plaintext),
+    status: 'active', expiresAt: new Date(Date.now() - 60_000),
+  }).returning()
+  await db.insert(schema.keyPaddock).values({ keyId: key!.id, paddockId: fx.paddockId })
+  return plaintext
+}
+
 describe('data-plane /p/:slug', () => {
   test('401 without a key', async () => {
     const res = await call('/p/small/api/chat', { ...chat('llama3.2:1b') }, '')
@@ -49,6 +69,38 @@ describe('data-plane /p/:slug', () => {
   test('401 with an unknown key', async () => {
     const res = await call('/p/small/api/chat', chat('llama3.2:1b'), 'mm_live_wrong')
     expect(res.status).toBe(401)
+  })
+
+  // RFC 9110 §15.5.2: WWW-Authenticate is a MUST on every 401. `Bearer` because that is the
+  // scheme `extractKey` reads; bare, because an `error=` parameter would regrade the 401s that
+  // the test below deliberately flattens.
+  test('every 401 from the proxy carries a bare Bearer challenge', async () => {
+    const [missing, unknown, expired] = await Promise.all([
+      call('/p/small/api/chat', { ...chat('llama3.2:1b') }, ''),
+      call('/p/small/api/chat', chat('llama3.2:1b'), 'mm_live_wrong'),
+      call('/p/small/api/chat', chat('llama3.2:1b'), await seedExpiredKey()),
+    ])
+    for (const res of [missing, unknown, expired]) {
+      expect(res.status).toBe(401)
+      expect(res.headers.get('www-authenticate')).toBe('Bearer')
+      expect(res.headers.get('www-authenticate')).not.toContain('error')
+    }
+  })
+
+  // An expired key is a key that existed; an unknown one never did. Telling them apart over the
+  // wire grades a `mm_live_` guess, so both answer identically. A REVOKED key already collapsed
+  // into the unknown body (`resolveKeyByHash` returns null for any non-active status) — expiry
+  // was the one arm still leaking.
+  test('an expired key is byte-identical to an unknown key, end to end', async () => {
+    const expiredPlaintext = await seedExpiredKey()
+    const [unknown, expired] = await Promise.all([
+      call('/p/small/api/chat', chat('llama3.2:1b'), 'mm_live_wrong'),
+      call('/p/small/api/chat', chat('llama3.2:1b'), expiredPlaintext),
+    ])
+    expect(expired.status).toBe(unknown.status)
+    const [a, b] = [await unknown.text(), await expired.text()]
+    expect(b).toBe(a)
+    expect(b).not.toContain('expired')
   })
 
   test('404 for an unknown paddock slug', async () => {
