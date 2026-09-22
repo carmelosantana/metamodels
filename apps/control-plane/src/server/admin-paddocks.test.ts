@@ -207,17 +207,45 @@ describe('/api/admin/v1/paddocks', () => {
     expect(await res.json()).toMatchObject({ id: created.id, name: 'renamed', slug: 'renamed-slug', theme: 'metaboy' })
   })
 
-  // PUT is a full replace and `savePaddockInput` defaults `status` to 'active', so a replace that
-  // omits it RE-ENABLES a disabled paddock. Documented and pinned rather than special-cased:
-  // silently preserving one field would make this PUT a partial merge for that field alone.
-  test('PUT /{id} without a status re-enables a disabled paddock (full-replace semantics)', async () => {
+  // Spec §3: status is a PUT SUB-RESOURCE, not a field of the main PUT. `savePaddockInput` defaults
+  // `status` to 'active', so a full replace that leaves it out would write 'active' and silently
+  // re-enable a paddock somebody disabled on purpose — a rename flipping the kill switch back on.
+  // The item PUT therefore carries the CURRENT status through, and ignores whatever the body says.
+  test('PUT /{id} omitting status leaves a disabled paddock disabled', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await post(t)
     await call(statusRoute, 'PUT', `/paddocks/${created.id}/status`, t, { status: 'disabled' }, { id: created.id })
     const res = await call(item, 'PUT', `/paddocks/${created.id}`, t,
       { ...PADDOCK(), name: 'renamed' }, { id: created.id })
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ status: 'active' })
+    expect(await res.json()).toMatchObject({ name: 'renamed', status: 'disabled' })
+    const [row] = await db.select().from(paddock).where(eq(paddock.id, created.id))
+    expect(row.status).toBe('disabled')
+  })
+
+  // Ignored, not merely defaulted: `status` in the body must not be a second route to the switch.
+  test('PUT /{id} sending status: active does NOT re-enable a disabled paddock', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await post(t)
+    await call(statusRoute, 'PUT', `/paddocks/${created.id}/status`, t, { status: 'disabled' }, { id: created.id })
+    const res = await call(item, 'PUT', `/paddocks/${created.id}`, t,
+      { ...PADDOCK(), name: 'renamed', status: 'active' }, { id: created.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ status: 'disabled' })
+    const [row] = await db.select().from(paddock).where(eq(paddock.id, created.id))
+    expect(row.status).toBe('disabled')
+  })
+
+  // The other direction, so preserving never becomes "always disabled".
+  test('PUT /{id} leaves an active paddock active, even when the body says disabled', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await post(t)
+    const res = await call(item, 'PUT', `/paddocks/${created.id}`, t,
+      { ...PADDOCK(), name: 'renamed', status: 'disabled' }, { id: created.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ name: 'renamed', status: 'active' })
+    const [row] = await db.select().from(paddock).where(eq(paddock.id, created.id))
+    expect(row.status).toBe('active')
   })
 
   test('PUT /{id} of another org 404s before it writes anything', async () => {
