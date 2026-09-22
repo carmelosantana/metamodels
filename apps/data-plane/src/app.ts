@@ -20,6 +20,7 @@ import type { MeterSink, MeterEventRecord } from './meter/meter-sink.js'
 import { quotaSchema } from './config/quota.js'
 import type { UsageReader } from './meter/usage-reader.js'
 import { proxyToUpstream, rawToUpstream, type FetchImpl } from './proxy/proxy.js'
+import { unauthorizedKey } from './unauthorized.js'
 
 export interface AppDeps {
   configStore: ConfigStore
@@ -95,12 +96,15 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     c: Context,
     slug: string,
   ): Promise<{ ok: true; scope: Scope } | { ok: false; res: Response }> {
+    // Every arm below goes through `unauthorizedKey`: it attaches the challenge RFC 9110 §15.5.2
+    // requires, and collapses the two refused-key reasons into one body so a 401 cannot grade a
+    // `mm_live_` guess. See `unauthorized.ts`.
     const plaintext = extractKey(c.req.header('authorization'), c.req.header('x-api-key'))
-    if (!plaintext) return { ok: false, res: c.json({ error: 'missing api key' }, 401) }
+    if (!plaintext) return { ok: false, res: unauthorizedKey('no key presented') }
     const resolvedKey = await deps.configStore.resolveKeyByHash(hashApiKey(plaintext))
-    if (!resolvedKey) return { ok: false, res: c.json({ error: 'invalid api key' }, 401) }
+    if (!resolvedKey) return { ok: false, res: unauthorizedKey('no key matches the presented hash') }
     if (resolvedKey.expiresAt && resolvedKey.expiresAt.getTime() < Date.now()) {
-      return { ok: false, res: c.json({ error: 'expired api key' }, 401) }
+      return { ok: false, res: unauthorizedKey('the presented key has expired') }
     }
 
     const paddock = await deps.configStore.getPaddockBySlug(slug)

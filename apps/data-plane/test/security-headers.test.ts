@@ -42,6 +42,16 @@ describe('security headers', () => {
     expect(res.headers.get('Strict-Transport-Security')).toBe('max-age=63072000')
   })
 
+  // `unauthorizedKey` builds a raw `Response` rather than going through `c.json`, so this pins
+  // that the middleware still decorates it — and that decorating it does not drop the challenge.
+  test('sets them on a 401, without dropping the WWW-Authenticate challenge', async () => {
+    const res = await make().request('/p/any/api/chat', { method: 'POST', body: '{}' })
+    expect(res.status).toBe(401)
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(res.headers.get('Strict-Transport-Security')).toBe('max-age=63072000')
+    expect(res.headers.get('www-authenticate')).toBe('Bearer')
+  })
+
   test('sets them on unmatched routes', async () => {
     const res = await make().request('/definitely-not-a-route')
     expect(res.status).toBe(404)
