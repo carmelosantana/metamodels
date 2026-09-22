@@ -116,7 +116,7 @@ minimal deploy only needs seven secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.4.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.4.1 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
@@ -167,7 +167,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.4.0` | Image tag. The git tag `v0.4.0` publishes images as `0.4.0` — the `v` is stripped |
+| `TAG` | `0.4.1` | Image tag. The git tag `v0.4.1` publishes images as `0.4.1` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -270,7 +270,7 @@ database, its operators and its secrets; it only gains a service and five variab
    (`AUTH_HOST_PORT`, default `3100`) alongside the console's, e.g.
    `ssh -L 3200:127.0.0.1:3200 -L 3100:127.0.0.1:3100 <host>`, or route it through the same
    proxy or tunnel. The browser must reach it at exactly `OIDC_ISSUER`.
-4. **Set `TAG` to `0.4.0`** if your stack pins it, and redeploy.
+4. **Set `TAG` to `0.4.1`** if your stack pins it, and redeploy.
 
 What changes for operators:
 
