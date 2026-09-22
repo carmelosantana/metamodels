@@ -218,10 +218,15 @@ describe('/api/admin/v1/paddocks', () => {
     expect(await res.json()).toMatchObject({ id: created.id, name: 'renamed', slug: 'renamed-slug', theme: 'metaboy' })
   })
 
-  // Spec §3: status is a PUT SUB-RESOURCE, not a field of the main PUT. `savePaddockInput` defaults
-  // `status` to 'active', so a full replace that leaves it out would write 'active' and silently
-  // re-enable a paddock somebody disabled on purpose — a rename flipping the kill switch back on.
-  // The item PUT therefore carries the CURRENT status through, and ignores whatever the body says.
+  // Spec §3: status is a PUT SUB-RESOURCE, not a field of the main PUT — a rename must not flip a
+  // deliberately-thrown kill switch back on.
+  //
+  // The item PUT does NOT read the current status and carry it through. It `delete`s the field from
+  // the body and `savePaddock` leaves the column out of its `set()` entirely, so the stored value is
+  // untouched INSIDE the service's transaction. Do not "restore" a read-modify-write here: across
+  // two transactions it would lose a concurrent PUT /{id}/status, which is the same re-enable
+  // narrowed to a race window rather than removed. (`paddock-schema.ts:23` makes `status` optional
+  // on `savePaddockInput` for the same reason — it no longer defaults to 'active'.)
   test('PUT /{id} omitting status leaves a disabled paddock disabled', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await post(t)
@@ -420,9 +425,17 @@ describe('/api/admin/v1/paddocks/{id}/fence', () => {
   test('PUT omitting rateLimit CLEARS it', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await post(t)
-    await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t,
+    // Asserted, not fired and forgotten. If this body ever stops validating, the setup 422s and no
+    // fence row exists — the second PUT then CREATES one with rateLimit/quota already null, and
+    // every assertion below passes VACUOUSLY without either field ever having been cleared.
+    const setup = await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t,
       { ...FENCE, rateLimit: { windowSec: 60, max: 30 }, quota: [{ dim: 'tokens_out', max: 1000, period: 'day' }] },
       { id: created.id })
+    expect(setup.status).toBe(200)
+    expect(await setup.json()).toMatchObject({
+      rateLimit: { windowSec: 60, max: 30 },
+      quota: [{ dim: 'tokens_out', max: 1000, period: 'day' }],
+    })
 
     const res = await call(fenceRoute, 'PUT', `/paddocks/${created.id}/fence`, t, FENCE, { id: created.id })
     expect(res.status).toBe(200)
