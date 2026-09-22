@@ -11,7 +11,7 @@ import type { Actor } from '../auth/authorize'
 
 const SECRET = 'entitlement-test-secret-16chars-min'
 const NOW = 1_800_000_000_000
-const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin' })
+const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin', credential: 'session' })
 
 describe('entitlement-service', () => {
   test('saveEntitlement encrypts the key (never plaintext), stores last4, and audits', async () => {

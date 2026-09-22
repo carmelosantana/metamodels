@@ -4,7 +4,7 @@ import { completeSignIn, logSignInFailure, type SignInDeps } from './sign-in'
 
 const ISSUER = 'https://auth.example.test'
 const TX = { state: 'st-1', nonce: 'n-1', codeVerifier: 'v'.repeat(43) }
-const ACTOR: Actor = { id: 'u-1', orgId: 'o-1', email: 'op@x.io', role: 'admin' }
+const ACTOR: Actor = { id: 'u-1', orgId: 'o-1', email: 'op@x.io', role: 'admin', credential: 'session' }
 
 function deps(over: Partial<SignInDeps> = {}): SignInDeps {
   return {

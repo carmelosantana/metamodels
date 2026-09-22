@@ -7,7 +7,7 @@ import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: Awaited<ReturnType<typeof freshDb>>, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
-  return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role }
+  return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
 }
 
 describe('flocks-service', () => {

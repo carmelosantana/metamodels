@@ -11,7 +11,7 @@ const NOW = 1_800_000_000_000
 
 async function seedAdminUser(db: TestDb, orgId: string): Promise<Actor> {
   const [u] = await db.insert(schema.user).values({ orgId, email: 'admin@x.io', passwordHash: 'scrypt$x$y', role: 'admin', status: 'active' }).returning()
-  return { id: u.id, orgId, email: u.email, role: 'admin' }
+  return { id: u.id, orgId, email: u.email, role: 'admin', credential: 'session' }
 }
 
 describe('invites-service', () => {

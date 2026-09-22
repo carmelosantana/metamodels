@@ -9,7 +9,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 async function actorFor(db: Awaited<ReturnType<typeof freshDb>>): Promise<Actor> {
   const o = await seedOrg(db)
-  return { id: 'u1', orgId: o.id, email: 'admin@x.io', role: 'admin' }
+  return { id: 'u1', orgId: o.id, email: 'admin@x.io', role: 'admin', credential: 'session' }
 }
 
 describe('testFlockConnection', () => {
@@ -56,7 +56,7 @@ describe('listFlockModels', () => {
     const db = await freshDb()
     const mine = await actorFor(db)
     const otherOrg = await seedOrg(db)
-    const stranger: Actor = { id: 'u2', orgId: otherOrg.id, email: 'x@y.io', role: 'admin' }
+    const stranger: Actor = { id: 'u2', orgId: otherOrg.id, email: 'x@y.io', role: 'admin', credential: 'session' }
     const f = await saveFlock(db, stranger, { breed: 'ollama', name: 'theirs', baseUrl: 'http://o', tlsTrust: false })
     const r = await listFlockModels(registry, db, mine, f.id)
     expect(r.ok).toBe(false)

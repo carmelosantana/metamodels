@@ -144,6 +144,7 @@ export async function acceptInvite(db: Db, token: string, password: string, nowM
       target: `user:${u.id}`, detail: { role, invite: inv.id },
     })
 
-    return { id: u.id, orgId: u.orgId, email: u.email, role }
+    // Accepting an invite is a console-path action; the new user is sent through the OP to sign in.
+    return { id: u.id, orgId: u.orgId, email: u.email, role, credential: 'session' }
   })
 }

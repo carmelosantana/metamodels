@@ -20,7 +20,7 @@ export async function getCurrentActor(): Promise<Actor | null> {
   const payload = verifySession(token, sessionSecret(), Date.now())
   if (!payload) return null
   // Re-load the user so a deactivated/role-changed user loses access immediately.
-  return loadActiveActor(getDb(), payload.uid)
+  return loadActiveActor(getDb(), payload.uid, 'session')
 }
 
 export async function setSessionCookie(actor: Actor): Promise<void> {

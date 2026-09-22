@@ -17,7 +17,7 @@ async function comfyPaddock(db: TDb, role: Actor['role'] = 'admin') {
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
   const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
-  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role }
+  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
   return { o, f, p, actor }
 }
 
@@ -82,7 +82,7 @@ describe('templates-service', () => {
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
-    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin' }
+    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin', credential: 'session' }
     await expect(saveTemplate(db, actor, { paddockId: p.id, draft: draft('x') })).rejects.toThrow(NotFoundError)
   })
 
@@ -90,7 +90,7 @@ describe('templates-service', () => {
     const db = await freshDb()
     const { p } = await comfyPaddock(db)
     const other = await seedOrg(db)
-    const actor: Actor = { id: 'u2', orgId: other.id, email: 'b@x.io', role: 'admin' }
+    const actor: Actor = { id: 'u2', orgId: other.id, email: 'b@x.io', role: 'admin', credential: 'session' }
     await expect(saveTemplate(db, actor, { paddockId: p.id, draft: draft('x') })).rejects.toThrow(NotFoundError)
   })
 

@@ -8,7 +8,7 @@ import type { Actor } from '../auth/authorize'
 
 const SECRET = 'license-service-secret-16chars-min'
 const NOW = 1_800_000_000_000
-const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin' })
+const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin', credential: 'session' })
 
 /** A fake LS built from a per-endpoint script (throw to simulate a transport error). */
 function fakeLs(script: { activate?: LsResult; validate?: LsResult | (() => never); deactivate?: { deactivated: boolean } | (() => never) }): LemonSqueezyClient {

@@ -18,13 +18,13 @@ describe('requireCapabilityOr403', () => {
   })
 
   test('calls notFound() when the actor lacks the capability', async () => {
-    actorRef.current = { id: 'u', orgId: 'o', email: 'm@x.io', role: 'member' }
+    actorRef.current = { id: 'u', orgId: 'o', email: 'm@x.io', role: 'member', credential: 'session' }
     await expect(requireCapabilityOr403('user.manage')).rejects.toThrow('NEXT_NOT_FOUND')
     expect(notFound).toHaveBeenCalledOnce()
   })
 
   test('returns the actor when authorized', async () => {
-    actorRef.current = { id: 'u', orgId: 'o', email: 'a@x.io', role: 'admin' }
+    actorRef.current = { id: 'u', orgId: 'o', email: 'a@x.io', role: 'admin', credential: 'session' }
     const actor = await requireCapabilityOr403('user.manage')
     expect(actor.email).toBe('a@x.io')
     expect(notFound).not.toHaveBeenCalled()

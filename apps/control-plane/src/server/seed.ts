@@ -21,7 +21,7 @@ export async function seedAdmin(db: Db, opts: SeedOpts): Promise<SeedResult> {
   if (existing[0]) {
     const u = existing[0]
     if (u.role !== 'admin') throw new NotAdminError(u.email, u.role)
-    return { created: false, actor: { id: u.id, orgId: u.orgId, email: u.email, role: u.role } }
+    return { created: false, actor: { id: u.id, orgId: u.orgId, email: u.email, role: u.role, credential: 'session' } }
   }
   // Reuse an existing org (single-org instance) or create one.
   const orgs = await db.select().from(org).limit(1)
@@ -30,5 +30,5 @@ export async function seedAdmin(db: Db, opts: SeedOpts): Promise<SeedResult> {
   const [u] = await db.insert(user).values({
     orgId, email: opts.email, passwordHash, role: 'admin', status: 'active',
   }).returning()
-  return { created: true, actor: { id: u.id, orgId: u.orgId, email: u.email, role: 'admin' } }
+  return { created: true, actor: { id: u.id, orgId: u.orgId, email: u.email, role: 'admin', credential: 'session' } }
 }

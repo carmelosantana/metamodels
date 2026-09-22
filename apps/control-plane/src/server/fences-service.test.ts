@@ -14,7 +14,7 @@ async function orgFlockPaddock(db: TDb, breed = 'ollama', role: Actor['role'] = 
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed, name: 'f', baseUrl: 'http://x' }).returning()
   const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
-  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role }
+  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
   return { o, f, p, actor }
 }
 
@@ -87,7 +87,7 @@ describe('fences-service', () => {
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
-    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin' }
+    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin', credential: 'session' }
     // Seed a fence that already has a template.
     await db.insert(schema.fence).values({
       orgId: o.id, paddockId: p.id,
@@ -105,7 +105,7 @@ describe('fences-service', () => {
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
-    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin' }
+    const actor: Actor = { id: 'u1', orgId: o.id, email: 'a@x.io', role: 'admin', credential: 'session' }
     const saved = await saveFence(db, actor, registry, { paddockId: p.id, rateLimit: { windowSec: 60, max: 3 } })
     expect((saved.constraintJson as { templates: unknown[] }).templates).toEqual([])
   })

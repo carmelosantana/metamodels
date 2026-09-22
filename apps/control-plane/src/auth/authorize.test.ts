@@ -10,7 +10,11 @@ import {
   type Capability,
 } from './authorize'
 
-const actor = (role: Role): Actor => ({ id: 'u1', orgId: 'o1', email: 'a@b.c', role })
+const actor = (role: Role, grants?: string[]): Actor => ({
+  id: 'u', orgId: 'o', email: 'e@x.test', role,
+  grants: grants ? new Set(grants as Capability[]) : undefined,
+  credential: 'session',
+})
 
 describe('authorize role/capability matrix', () => {
   test('every schema USER_ROLES value is a known Role in the matrix', () => {
@@ -58,5 +62,36 @@ describe('authorize role/capability matrix', () => {
     expect(isRole('owner')).toBe(false)
     expect(isRole('root')).toBe(false)
     expect(isRole(null)).toBe(false)
+  })
+})
+
+describe('authorize — C3 intersection', () => {
+  test('undefined grants means role-only (the console cookie path is unchanged)', () => {
+    expect(authorize(actor('admin'), 'user.manage')).toBe(true)
+    expect(authorize(actor('viewer'), 'resource.write')).toBe(false)
+  })
+
+  test('an empty grant set denies everything, whatever the role', () => {
+    expect(authorize(actor('admin', []), 'read')).toBe(false)
+    expect(authorize(actor('admin', []), 'user.manage')).toBe(false)
+  })
+
+  test('a grant cannot exceed the role', () => {
+    expect(authorize(actor('viewer', ['resource.write']), 'resource.write')).toBe(false)
+  })
+
+  test('the role cannot exceed the grants', () => {
+    expect(authorize(actor('admin', ['read']), 'user.manage')).toBe(false)
+    expect(authorize(actor('admin', ['read']), 'read')).toBe(true)
+  })
+
+  test('requireCapability throws ForbiddenError naming the capability', () => {
+    expect(() => requireCapability(actor('admin', ['read']), 'user.manage'))
+      .toThrow(ForbiddenError)
+    try {
+      requireCapability(actor('admin', ['read']), 'user.manage')
+    } catch (e) {
+      expect((e as ForbiddenError).capability).toBe('user.manage')
+    }
   })
 })

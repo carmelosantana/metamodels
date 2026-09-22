@@ -24,7 +24,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const result = await completeSignIn(req.nextUrl.searchParams, tx, {
     issuer: client.cfg.issuer,
     exchangeCode: (code, t) => client.exchangeCode(code, t),
-    loadActor: (sub) => loadActiveActor(getDb(), sub),
+    loadActor: (sub) => loadActiveActor(getDb(), sub, 'session'),
     log: console.error,
   })
   // Absolute URLs from CONSOLE_URL: behind a proxy or tunnel, req.url is the container's own address.
