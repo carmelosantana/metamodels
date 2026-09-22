@@ -2,6 +2,7 @@ import { ZodError } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
 import { KeySetUnavailableError, TokenError } from './admin-token'
 import { NotFoundError } from './flocks-service'
+import { SlugTakenError } from './paddocks-service'
 
 /**
  * How long a client should wait before retrying an unreachable OP. 30s is not a guess: jose holds a
@@ -24,6 +25,20 @@ export function problem(
     status,
     headers: { 'content-type': 'application/problem+json', ...headers },
   })
+}
+
+/**
+ * A 401 carrying the challenge RFC 9110 §15.5.2 makes MANDATORY on every 401 response — an HTTP
+ * conformance rule, not an OAuth nicety.
+ *
+ * The bare scheme and nothing else. RFC 6750 §3 would let us add `error="invalid_token"` versus
+ * `error="invalid_request"`, but that would restate in a header precisely the distinction the
+ * `TokenError` arm's fixed `detail` refuses to make in the body, reopening the enumeration oracle.
+ * Every 401 this API emits is built here, so the challenge cannot be forgotten on a new 401 and a
+ * parameter cannot creep in on an old one.
+ */
+export function unauthorized(detail: string): Response {
+  return problem(401, 'Unauthorized', detail, undefined, { 'www-authenticate': 'Bearer' })
 }
 
 /**
@@ -54,11 +69,16 @@ export function problemForError(e: unknown): Response {
       { 'retry-after': KEY_SET_RETRY_AFTER_SECONDS },
     )
   }
-  if (e instanceof TokenError) return problem(401, 'Unauthorized', 'the presented access token was rejected')
+  if (e instanceof TokenError) return unauthorized('the presented access token was rejected')
+  if (e instanceof SlugTakenError) return problem(409, 'Conflict', e.message)
   if (e instanceof ZodError) {
     return problem(422, 'Unprocessable Content', 'request body failed validation', {
       errors: e.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     })
   }
+  // An unmapped service error silently becomes an opaque 500 with no detail — unfixable by the
+  // caller and indistinguishable from a real outage. `users-service`'s LastAdminError /
+  // SelfActionError / SeatLimitError, the invite errors and NotAdminError are unmapped because no
+  // route in M2 reaches them. Exposing users or invites means adding their arms above, first.
   return problem(500, 'Internal Server Error')
 }

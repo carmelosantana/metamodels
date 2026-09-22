@@ -59,6 +59,26 @@ describe('withAdmin — authentication triage', () => {
     expect(actorFromToken).not.toHaveBeenCalled()
   })
 
+  // RFC 9110 §11.1: the auth scheme token is case-insensitive. A conforming SDK sending a
+  // lowercase scheme must not be turned away from this API's only authentication surface.
+  test('the Bearer scheme is matched case-insensitively', async () => {
+    const res = await call({ authorization: 'bearer x.y.z' })
+    expect(res.status).toBe(200)
+    expect(actorFromToken).toHaveBeenCalledWith(expect.anything(), 'x.y.z')
+  })
+
+  test('extra whitespace after the scheme is not captured into the token', async () => {
+    const res = await call({ authorization: 'Bearer   x.y.z' })
+    expect(res.status).toBe(200)
+    expect(actorFromToken).toHaveBeenCalledWith(expect.anything(), 'x.y.z')
+  })
+
+  test('the no-credential 401 carries a bare Bearer challenge', async () => {
+    const res = await call({})
+    expect(res.headers.get('www-authenticate')).toBe('Bearer')
+    expect(res.headers.get('www-authenticate')).not.toContain('error')
+  })
+
   test('a valid bearer with no cookie reaches the handler with the actor and params', async () => {
     const handler = vi.fn(async (_ctx: AdminContext) => new Response('ok'))
     const res = await call({ authorization: 'Bearer x.y.z' }, handler, { id: 'f1' })

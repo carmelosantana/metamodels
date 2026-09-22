@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
 import { KeySetUnavailableError, TokenError } from './admin-token'
 import { NotFoundError } from './flocks-service'
+import { SlugTakenError } from './paddocks-service'
 import { problem, problemForError } from './problem'
 
 describe('problem', () => {
@@ -65,6 +66,24 @@ describe('problemForError', () => {
     expect(body).toContain('"title":"Service Unavailable"')
     expect(body).not.toContain('key set')
     expect(body).not.toContain('ECONNREFUSED')
+  })
+
+  test('a SlugTakenError becomes 409 and names the clashing slug', async () => {
+    const res = problemForError(new SlugTakenError('north-field'))
+    expect(res.status).toBe(409)
+    await expect(res.json()).resolves.toMatchObject({
+      status: 409, title: 'Conflict', detail: expect.stringContaining('north-field'),
+    })
+  })
+
+  // RFC 9110 §15.5.2 makes WWW-Authenticate a MUST on a 401 — an HTTP conformance rule, not an
+  // OAuth nicety. The bare scheme and nothing else: an `error="invalid_token"` parameter would
+  // reopen the very enumeration oracle the fixed 401 detail closes.
+  test('the 401 carries a bare Bearer challenge with no error parameter', async () => {
+    const res = problemForError(new TokenError('subject is not an active user'))
+    expect(res.status).toBe(401)
+    expect(res.headers.get('www-authenticate')).toBe('Bearer')
+    expect(res.headers.get('www-authenticate')).not.toContain('error')
   })
 
   test('an unknown error becomes 500 and leaks no message', async () => {

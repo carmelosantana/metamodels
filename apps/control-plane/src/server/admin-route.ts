@@ -2,7 +2,7 @@ import type { Actor } from '../auth/authorize'
 import { SESSION_COOKIE } from '../auth/session'
 import { actorFromToken } from './admin-token'
 import { getDb } from './db'
-import { problem, problemForError } from './problem'
+import { problem, problemForError, unauthorized } from './problem'
 
 export interface AdminContext {
   actor: Actor
@@ -11,10 +11,18 @@ export interface AdminContext {
 }
 export type AdminHandler = (ctx: AdminContext) => Promise<Response>
 
+/**
+ * RFC 9110 §11.1: the auth scheme token is case-INsensitive, so a conforming client sending
+ * `bearer <jwt>` must be admitted. `+` rather than a single space because the whitespace after the
+ * scheme is also grammar, not part of the credential — capturing it would send a mangled token to
+ * be verified, which then fails for entirely the wrong reason.
+ */
+const BEARER = /^Bearer +(.+)$/i
+
 function bearerOf(req: Request): string | null {
   const h = req.headers.get('authorization')
   if (!h) return null
-  const m = /^Bearer (.+)$/.exec(h)
+  const m = BEARER.exec(h)
   return m ? m[1]! : null
 }
 
@@ -40,7 +48,7 @@ export function withAdmin(handler: AdminHandler) {
         'a request may present a bearer token or a session cookie, never both')
     }
     if (!bearer) {
-      return problem(401, 'Unauthorized',
+      return unauthorized(
         'the admin API requires a bearer access token; it does not accept a console session')
     }
 
