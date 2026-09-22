@@ -138,6 +138,12 @@ export const auditLog = pgTable('audit_log', {
   action: text('action').notNull(),
   target: text('target').notNull(),
   detail: jsonb('detail'),
+  /**
+   * Which credential class performed the mutation: `session` for the console cookie path,
+   * `token:<client_id>:<jti>` for an admin-API bearer. Nullable with no backfill — rows written
+   * before M2 predate the concept, and null says exactly that. New code never writes null.
+   */
+  changedBy: text('changed_by'),
   createdAt: createdAt(),
 })
 

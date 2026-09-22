@@ -100,6 +100,8 @@ describe('invites-service acceptInvite', () => {
 
     const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'user.accept'))
     expect(audits.length).toBe(1)
+    // No acting operator exists here: the new user is their own audit actor, on the session path.
+    expect(audits[0]).toMatchObject({ orgId: o.id, actor: 'new@x.io', changedBy: 'session' })
   })
 
   test('rejects invalid, expired, and already-accepted tokens', async () => {

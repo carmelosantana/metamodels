@@ -52,16 +52,16 @@ export async function savePaddock(db: Db, actor: Actor, input: unknown): Promise
         .where(and(eq(paddock.id, id), eq(paddock.orgId, actor.orgId)))
         .returning()
       if (!updated) throw new NotFoundError(`paddock ${id}`)
-      await writeAudit(tx, {
-        orgId: actor.orgId, actor: actor.email, action: 'paddock.update',
+      await writeAudit(tx, actor, {
+        action: 'paddock.update',
         target: `paddock:${updated.id}`, detail: { slug: updated.slug },
       })
       return updated
     }
 
     const [created] = await tx.insert(paddock).values({ orgId: actor.orgId, ...values }).returning()
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'paddock.create',
+    await writeAudit(tx, actor, {
+      action: 'paddock.create',
       target: `paddock:${created.id}`, detail: { slug: created.slug, flockId: created.flockId },
     })
     return created
@@ -79,8 +79,8 @@ export async function setPaddockStatus(
       .where(and(eq(paddock.id, id), eq(paddock.orgId, actor.orgId)))
       .returning()
     if (!updated) throw new NotFoundError(`paddock ${id}`)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'paddock.status',
+    await writeAudit(tx, actor, {
+      action: 'paddock.status',
       target: `paddock:${id}`, detail: { status },
     })
     return updated
@@ -95,8 +95,8 @@ export async function deletePaddock(db: Db, actor: Actor, id: string): Promise<v
       .where(and(eq(paddock.id, id), eq(paddock.orgId, actor.orgId)))
       .returning()
     if (!deleted) throw new NotFoundError(`paddock ${id}`)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'paddock.delete', target: `paddock:${id}`,
+    await writeAudit(tx, actor, {
+      action: 'paddock.delete', target: `paddock:${id}`,
     })
   })
 }

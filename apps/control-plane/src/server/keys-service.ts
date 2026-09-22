@@ -85,8 +85,8 @@ export async function createKey(db: Db, actor: Actor, input: unknown): Promise<C
 
     await tx.insert(keyPaddock).values(ids.map((pid) => ({ keyId: created.id, paddockId: pid })))
 
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'key.create',
+    await writeAudit(tx, actor, {
+      action: 'key.create',
       target: `key:${created.id}`, detail: { name: created.name, paddocks: ids.length },
     })
 
@@ -103,8 +103,8 @@ export async function revokeKey(db: Db, actor: Actor, id: string): Promise<void>
       .where(and(eq(apiKey.id, id), eq(apiKey.orgId, actor.orgId)))
       .returning()
     if (!revoked) throw new NotFoundError(`key ${id}`)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'key.revoke', target: `key:${id}`,
+    await writeAudit(tx, actor, {
+      action: 'key.revoke', target: `key:${id}`,
     })
   })
 }

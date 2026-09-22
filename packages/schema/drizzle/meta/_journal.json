@@ -50,6 +50,13 @@
       "when": 1789513638971,
       "tag": "0006_foamy_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790093024486,
+      "tag": "0007_dazzling_oracle",
+      "breakpoints": true
     }
   ]
 }

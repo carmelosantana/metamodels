@@ -90,8 +90,8 @@ export async function saveEntitlement(
         seats: input.seats, tier: input.tier, lastValidatedAt: input.lastValidatedAt, graceUntil: input.graceUntil,
       },
     })
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'license.activate',
+    await writeAudit(tx, actor, {
+      action: 'license.activate',
       target: `entitlement:${actor.orgId}`, detail: { tier: input.tier, seats: input.seats, last4 },
     })
   })
@@ -116,8 +116,8 @@ export async function clearEntitlement(db: Db, actor: Actor): Promise<void> {
   requireCapability(actor, 'license.manage')
   await db.transaction(async (tx) => {
     await tx.delete(entitlement).where(eq(entitlement.orgId, actor.orgId))
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'license.deactivate', target: `entitlement:${actor.orgId}`,
+    await writeAudit(tx, actor, {
+      action: 'license.deactivate', target: `entitlement:${actor.orgId}`,
     })
   })
 }

@@ -37,8 +37,8 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
         .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
         .returning()
       if (!updated) throw new NotFoundError(`flock ${id}`)
-      await writeAudit(tx, {
-        orgId: actor.orgId, actor: actor.email, action: 'flock.update',
+      await writeAudit(tx, actor, {
+        action: 'flock.update',
         target: `flock:${updated.id}`, detail: { name: updated.name },
       })
       return updated
@@ -47,8 +47,8 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
 
   return db.transaction(async (tx) => {
     const [created] = await tx.insert(flock).values({ orgId: actor.orgId, ...values }).returning()
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'flock.create',
+    await writeAudit(tx, actor, {
+      action: 'flock.create',
       target: `flock:${created.id}`, detail: { name: created.name, breed: created.breed },
     })
     return created
@@ -63,8 +63,8 @@ export async function deleteFlock(db: Db, actor: Actor, id: string): Promise<voi
       .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
       .returning()
     if (!deleted) throw new NotFoundError(`flock ${id}`)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'flock.delete', target: `flock:${id}`,
+    await writeAudit(tx, actor, {
+      action: 'flock.delete', target: `flock:${id}`,
     })
   })
 }

@@ -73,8 +73,8 @@ export async function inviteUser(
       expiresAt: new Date(nowMs + INVITE_TTL_MS),
     }).returning()
 
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'user.invite',
+    await writeAudit(tx, actor, {
+      action: 'user.invite',
       target: `invite:${row.id}`, detail: { email: data.email, role: data.role },
     })
 
@@ -99,8 +99,8 @@ export async function revokeInvite(db: Db, actor: Actor, id: string): Promise<vo
       .where(and(eq(invite.id, id), eq(invite.orgId, actor.orgId), isNull(invite.acceptedAt)))
       .returning()
     if (!deleted) throw new NotFoundError(`invite ${id}`)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'invite.revoke', target: `invite:${id}`,
+    await writeAudit(tx, actor, {
+      action: 'invite.revoke', target: `invite:${id}`,
     })
   })
 }
@@ -139,12 +139,16 @@ export async function acceptInvite(db: Db, token: string, password: string, nowM
 
     await tx.update(invite).set({ acceptedAt: new Date(nowMs) }).where(eq(invite.id, inv.id))
 
-    await writeAudit(tx, {
-      orgId: inv.orgId, actor: u.email, action: 'user.accept',
+    // Accepting an invite is a console-path action; the new user is sent through the OP to sign in.
+    // There is no other identity in scope, so the new user is their own audit actor — which is what
+    // this row has always recorded.
+    const actor: Actor = { id: u.id, orgId: u.orgId, email: u.email, role, credential: 'session' }
+
+    await writeAudit(tx, actor, {
+      action: 'user.accept',
       target: `user:${u.id}`, detail: { role, invite: inv.id },
     })
 
-    // Accepting an invite is a console-path action; the new user is sent through the OP to sign in.
-    return { id: u.id, orgId: u.orgId, email: u.email, role, credential: 'session' }
+    return actor
   })
 }
