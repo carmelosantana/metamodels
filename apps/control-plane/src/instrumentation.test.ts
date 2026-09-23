@@ -25,7 +25,7 @@ async function bootInChild(env: Record<string, string>) {
   try {
     const { stdout, stderr } = await promisify(execFile)(
       process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code],
-      { cwd: appDir, env: { PATH: process.env.PATH ?? '', NEXT_RUNTIME: 'nodejs', ...env }, timeout: 20_000 },
+      { cwd: appDir, env: { ...process.env, NEXT_RUNTIME: 'nodejs', UPSTREAM_AUTH_PREVIOUS_KEYS: '', ...env }, timeout: 20_000 },
     )
     return { exitCode: 0, stdout, stderr }
   } catch (e) {
