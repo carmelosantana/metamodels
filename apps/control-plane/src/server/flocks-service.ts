@@ -26,7 +26,7 @@ export type FlockView = Omit<Flock, 'upstreamAuthEnc'> & { hasUpstreamAuth: bool
 
 // An allowlist, not the table's columns minus one: a secret column added later stays out of every
 // response until someone deliberately adds it here.
-const view = {
+export const flockView = {
   id: flock.id,
   orgId: flock.orgId,
   breed: flock.breed,
@@ -44,7 +44,7 @@ export async function listFlocks(db: Db, actor: Actor, opts?: PageOpts): Promise
   // `!== undefined`, not truthiness: an empty cursor is malformed input to reject, not a
   // silent fall back to page one.
   if (opts?.cursor !== undefined) conds.push(gt(flock.id, decodeCursor(opts.cursor)))
-  const q = db.select(view).from(flock).where(and(...conds)).orderBy(asc(flock.id))
+  const q = db.select(flockView).from(flock).where(and(...conds)).orderBy(asc(flock.id))
   // No `opts` means no pagination at all: the console's pages call this bare and must keep
   // receiving every row.
   return opts ? q.limit(opts.limit) : q
@@ -53,7 +53,7 @@ export async function listFlocks(db: Db, actor: Actor, opts?: PageOpts): Promise
 /** The single by-id read. In the service, not the handler, so org scoping lives in one place. */
 export async function getFlock(db: Db, actor: Actor, id: string): Promise<FlockView> {
   requireCapability(actor, 'read')
-  const rows = await db.select(view).from(flock)
+  const rows = await db.select(flockView).from(flock)
     .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId))).limit(1)
   const row = rows[0]
   // Another org's row is "not found", never a 403: whether it exists is itself the leak.
@@ -124,7 +124,7 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
         .update(flock)
         .set(values)
         .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
-        .returning(view)
+        .returning(flockView)
       if (!updated) throw new NotFoundError(`flock ${id}`)
       await writeAudit(tx, actor, {
         action: 'flock.update',
@@ -135,7 +135,7 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
   }
 
   return db.transaction(async (tx) => {
-    const [created] = await tx.insert(flock).values({ orgId: actor.orgId, ...values }).returning(view)
+    const [created] = await tx.insert(flock).values({ orgId: actor.orgId, ...values }).returning(flockView)
     await writeAudit(tx, actor, {
       action: 'flock.create',
       target: `flock:${created.id}`, detail: { name: created.name, breed: created.breed, ...credentialAudit },
