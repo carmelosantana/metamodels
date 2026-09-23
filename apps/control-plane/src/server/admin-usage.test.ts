@@ -1,19 +1,21 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { apiKey, flock, org, paddock, usageRollup, user } from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { seedOrg, sharedDb, type TestDb } from '../test/db'
 import { bearer, tokenFixture, type TokenFixture } from './test-token'
 import * as matrix from '../app/api/admin/v1/usage/matrix/route'
 import * as daily from '../app/api/admin/v1/usage/daily/route'
 import * as topKeysRoute from '../app/api/admin/v1/usage/top-keys/route'
 
 // All three route modules import `getDb` from this very module id, so one mock covers them all. The
-// handlers resolve it per request, which is what lets a fresh PGlite be swapped in before each test.
+// handlers resolve it per request, which is what lets the file's PGlite be swapped in under them.
 const held = vi.hoisted(() => ({ db: undefined as unknown }))
 vi.mock('./db', () => ({ getDb: () => held.db }))
 
 let tok: TokenFixture
 beforeAll(async () => { tok = await tokenFixture() })
 afterAll(async () => { await tok.close() })
+// One database for the file, emptied before each case (see sharedDb).
+const testDb = sharedDb()
 
 const url = (p: string) => `https://console.test/api/admin/v1${p}`
 
@@ -59,7 +61,7 @@ async function seedRollup(
 }
 
 beforeEach(async () => {
-  db = await freshDb()
+  db = testDb()
   held.db = db
   const mine = await seedOrg(db)
   const [other] = await db.insert(org).values({ name: 'other' }).returning()

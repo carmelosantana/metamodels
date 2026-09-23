@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { flock, org, paddock, user } from '@metamodels/schema'
-import { freshDb, resetDb, seedOrg, type TestDb } from '../test/db'
+import { seedOrg, sharedDb, type TestDb } from '../test/db'
 import { bearer, tokenFixture, type TokenFixture } from './test-token'
 import * as flocks from '../app/api/admin/v1/flocks/route'
 import * as flockItem from '../app/api/admin/v1/flocks/[id]/route'
@@ -22,18 +22,12 @@ const publish = vi.hoisted(() => vi.fn(async (_reason: string) => {}))
 vi.mock('./config-publisher', () => ({ publishConfigInvalidation: publish }))
 
 let tok: TokenFixture
-let db: TestDb
+beforeAll(async () => { tok = await tokenFixture() })
+afterAll(async () => { await tok.close() })
 // One database for the file, emptied before each case: a PGlite cold boot per case, times the
 // cases below, is what pushed a `beforeEach` past vitest's hook timeout on a loaded machine.
-beforeAll(async () => {
-  tok = await tokenFixture()
-  db = await freshDb()
-  held.db = db
-})
-afterAll(async () => {
-  await tok.close()
-  await db.$client.close()
-})
+const testDb = sharedDb()
+let db: TestDb
 
 type Mod = Record<string, unknown>
 type Method = 'POST' | 'PUT' | 'DELETE'
@@ -77,7 +71,8 @@ async function flockAndPaddock(orgId: string, breed: string, slug: string) {
 
 beforeEach(async () => {
   publish.mockClear()
-  await resetDb(db)
+  db = testDb()
+  held.db = db
   const mine = await seedOrg(db)
   myOrgId = mine.id
   const [other] = await db.insert(org).values({ name: 'other' }).returning()

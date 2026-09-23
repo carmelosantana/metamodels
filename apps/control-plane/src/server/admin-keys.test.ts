@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { apiKey, auditLog, fence, flock, org, paddock, user } from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { seedOrg, sharedDb, type TestDb } from '../test/db'
 import { bearer, tokenFixture, type TokenFixture } from './test-token'
 import * as keys from '../app/api/admin/v1/keys/route'
 import * as keyItem from '../app/api/admin/v1/keys/[id]/route'
@@ -10,13 +10,15 @@ import * as templates from '../app/api/admin/v1/paddocks/[id]/templates/route'
 import * as templateItem from '../app/api/admin/v1/paddocks/[id]/templates/[tid]/route'
 
 // All five route modules import `getDb` from this very module id, so one mock covers them all. The
-// handlers resolve it per request, which is what lets a fresh PGlite be swapped in before each test.
+// handlers resolve it per request, which is what lets the file's PGlite be swapped in under them.
 const held = vi.hoisted(() => ({ db: undefined as unknown }))
 vi.mock('./db', () => ({ getDb: () => held.db }))
 
 let tok: TokenFixture
 beforeAll(async () => { tok = await tokenFixture() })
 afterAll(async () => { await tok.close() })
+// One database for the file, emptied before each case (see sharedDb).
+const testDb = sharedDb()
 
 const url = (p: string) => `https://console.test/api/admin/v1${p}`
 
@@ -89,7 +91,7 @@ async function paddockIn(orgId: string, breed: string, slug: string): Promise<st
 }
 
 beforeEach(async () => {
-  db = await freshDb()
+  db = testDb()
   held.db = db
   const mine = await seedOrg(db)
   const [other] = await db.insert(org).values({ name: 'other' }).returning()
