@@ -109,24 +109,38 @@ has no way to pick out that one machine's sign-in from the user's others. Cut of
 instead:
 
 1. In the console, open **Team** and **Deactivate** the user. This takes effect at once, on every
-   machine. The admin API reads the user again on every request, so each of their access tokens
-   gets `401` from the next request on. The sign-in service reads the user again on every renewal,
-   so each of their refresh tokens is refused.
-2. **Before you reactivate the user**, delete their CLI sign-ins. A renewal refused because the
-   user is deactivated does not use up the refresh token, so without this step a copy of the lost
-   machine's refresh token works again the moment the user is active again:
+   machine. The console and the admin API read the user again on every request, so their console
+   sessions and each of their access tokens are refused from the next request on (the admin API
+   answers `401`). The sign-in service reads the user again on every renewal and every sign-in, so
+   each of their refresh tokens is refused, and a browser signed in to the sign-in service is not
+   signed back in to the console.
+2. **Before you reactivate the user**, delete their CLI sign-ins and their sign-in service sessions.
+   Deactivation deletes neither: a renewal refused because the user is deactivated does not use up
+   the refresh token, and the session rows stay. So without this step, a copy of the lost machine's
+   refresh token works again the moment the user is active again, and so does a browser there that
+   was signed in to the sign-in service, which signs back in to the console with no password:
 
    ```sql
-   DELETE FROM oidc_payload WHERE model IN ('RefreshToken', 'Grant') AND payload->>'accountId' = '<user-id>';
+   DELETE FROM oidc_payload WHERE model IN ('Session', 'RefreshToken', 'Grant') AND payload->>'accountId' = '<user-id>';
    ```
 
    `<user-id>` is the user's id: `SELECT id FROM "user" WHERE email = '<email>';`
-3. Reactivate the user in **Team**, and have them run `mm login` again on each machine they still
+3. Deal with the **console session cookie**, which the statement above cannot reach. A browser on
+   the lost machine that was signed in to the console holds a cookie signed with `SESSION_SECRET`,
+   and the server stores no copy of it to delete. The console refuses it while the user is
+   deactivated, but accepts it again once they are reactivated, until it expires 12 hours after the
+   sign-in that set it. Choose one:
+   - **Wait.** Keep the user deactivated for 12 hours. A deactivated user cannot sign in, so every
+     cookie they hold was set before the deactivation, and 12 hours after it every one has expired.
+   - **Rotate `SESSION_SECRET`.** This ends the cookie at once, but it signs **every** operator out
+     of the console, not only this user. See step 1 of
+     [Forcing everyone to sign in again](DEPLOY.md#forcing-everyone-to-sign-in-again).
+4. Reactivate the user in **Team**, and have them run `mm login` again on each machine they still
    have.
 
-The cost falls on that user alone: every one of their machines is signed out, not only the lost
-one, and while deactivated they cannot use the console or the admin API either. Other users are not
-affected.
+The cost falls on that user alone, unless you rotated `SESSION_SECRET`: every one of their machines
+is signed out of `mm` and of the sign-in service, not only the lost one, and while deactivated they
+cannot use the console or the admin API either. Other users are not affected.
 
 ### Commands
 
