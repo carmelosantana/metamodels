@@ -149,7 +149,7 @@ are not lost.
 | D6 migration | No DDL. Background boot pass in the control plane. Plaintext stays readable for one release | Column rename, NOT VALID CHECK, re-encryption in `migrate`. Plaintext is never read after the upgrade | **Kept.** No window where plaintext is read, and the database refuses new unsealed writes. |
 | D6 rollback | `rewrap --to-plaintext` required before a downgrade | Downgrade only by restoring a database backup, as documented | **Kept.** A tool that decrypts everything is a footgun, and nothing has been released that anyone would downgrade to. |
 | D7 `info.version` | 2.0.0 if M2 is in a release tag, otherwise 1.0.0 | 1.0.0 | **Same outcome.** The latest tag, v0.4.1, predates M2. |
-| D8 auth contract | Store the bare token. One helper sends `Bearer` on every path, including both health checks and ComfyUI `upstreamRaw`. Reject a scheme prefix, whitespace and CR/LF. Strip a legacy `Bearer ` | Not in this PR | **Separate PR** ("Unify how upstreamAuth is sent upstream"). Values are encrypted now, so it must strip `Bearer ` inside the reseal pass: open, normalise, encrypt again. |
+| D8 auth contract | Store the bare token. One helper sends `Bearer` on every path. Reject a scheme prefix, whitespace and CR/LF. The migration strips a legacy `Bearer ` | Done in PR #21, stacked on this PR, with one ruling that departs from that spec: **the legacy `Bearer ` prefix is dropped at send time by `upstreamAuthHeaders()`, not in reseal.** Reseal encrypts legacy values unchanged | **Changed.** New writes are validated as bare tokens, so no new prefixed value can arrive, and normalising a second time inside reseal would duplicate the helper. This section, not 5fc652e, is the source of truth; 5fc652e stays unedited as the historical record. |
 | Proof | A real-Postgres test that resumes after a crash, plus an e2e on an isolated compose stack | PGlite unit tests, manual runs on Postgres 16, and `scripts/smoke.sh` | **Follow-up** before the first release tag (§4). |
 
 ## 4. Not in this milestone
@@ -161,4 +161,4 @@ are not lost.
     then, recovering a single credential goes through `PUT /api/admin/v1/flocks/{id}`.
   - A real-Postgres test that resumes the reseal after a crash, and an e2e on an isolated compose
     stack (scoping spec proof).
-  - The D8 auth contract, in its own PR.
+  - The D8 auth contract: PR #21.
