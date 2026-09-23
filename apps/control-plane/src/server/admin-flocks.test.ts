@@ -244,6 +244,9 @@ describe('/api/admin/v1/flocks', () => {
 
   test('a token with no capability scopes is 403, not 200', async () => {
     const t = await tok.mint({ sub: adminUserId, scopes: [] })
-    expect((await call(collection, 'GET', '/flocks', t)).status).toBe(403)
+    const res = await call(collection, 'GET', '/flocks', t)
+    expect(res.status).toBe(403)
+    // The problem names the capability the token lacks, as M2 spec §7 asks of an unscoped token.
+    expect(await res.json()).toMatchObject({ capability: 'read' })
   })
 })
