@@ -20,6 +20,8 @@ const EXCLUDED = new Set([
   'E2E_PROXY_URL',
   'E2E_AUTH_URL',
   'E2E_SCREENSHOT_DIR',
+  'E2E_VIEWER_EMAIL',
+  'E2E_VIEWER_PASSWORD',
 ])
 
 // Dependency and build-output dirs are not "the code": skip them. This also
