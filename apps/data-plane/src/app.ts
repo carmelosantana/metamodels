@@ -109,6 +109,12 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     if (!resolvedKey.paddockSlugs.includes(slug)) {
       return { ok: false, res: c.json({ error: 'key not scoped to paddock' }, 403) }
     }
+    // Fail closed, and only now: behind the key and scope gates, so only a caller entitled to this
+    // paddock learns its credential is broken. Forwarding without it would turn a key problem into
+    // an upstream 401 that points everyone at the wrong system.
+    if (paddock.upstreamAuthError) {
+      return { ok: false, res: c.json({ error: 'upstream credential unavailable' }, 503) }
+    }
 
     return { ok: true, scope: { resolvedKey, paddock, breed: deps.registry.get(paddock.breedId) } }
   }

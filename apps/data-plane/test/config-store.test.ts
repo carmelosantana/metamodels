@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'vitest'
 import { DrizzleConfigStore } from '../src/config/config-store.js'
-import { makeDb, seedFixture, type Fixture, type TestDb } from './helpers/seed.js'
+import { seal } from '@metamodels/schema/sealed'
+import { makeDb, seedFixture, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
 
 let db: TestDb
 let fx: Fixture
@@ -9,7 +10,7 @@ let store: DrizzleConfigStore
 beforeAll(async () => {
   db = await makeDb()
   fx = await seedFixture(db)
-  store = new DrizzleConfigStore(db)
+  store = new DrizzleConfigStore(db, TEST_RING)
 })
 
 describe('DrizzleConfigStore', () => {
@@ -36,5 +37,30 @@ describe('DrizzleConfigStore', () => {
 
   test('returns null for an unknown slug', async () => {
     expect(await store.getPaddockBySlug('nope')).toBeNull()
+  })
+
+  test('a flock with no credential resolves with none and no error', async () => {
+    const p = await store.getPaddockBySlug('small')
+    expect(p!.flock.upstreamAuth).toBeNull()
+    expect(p!.upstreamAuthError).toBeUndefined()
+  })
+})
+
+describe('DrizzleConfigStore — the sealed upstream credential', () => {
+  test('opens it, so the proxy holds plaintext only in memory', async () => {
+    const db = await makeDb()
+    await seedFixture(db, { upstreamAuthEnc: seal('tok-123', TEST_RING) })
+    const p = await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('small')
+    expect(p!.flock.upstreamAuth).toBe('tok-123')
+    expect(p!.upstreamAuthError).toBeUndefined()
+  })
+
+  test('one it cannot open resolves the paddock with the reason and NO credential, rather than throwing', async () => {
+    const db = await makeDb()
+    await seedFixture(db, { upstreamAuthEnc: seal('tok-123', testRing()) })
+    const p = await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('small')
+    expect(p!.upstreamAuthError).toBe('unknown-key')
+    expect(p!.flock.upstreamAuth).toBeNull()
+    expect(JSON.stringify(p)).not.toContain('sealed:v1:')
   })
 })

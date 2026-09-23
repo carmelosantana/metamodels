@@ -1,3 +1,4 @@
+import type { UnsealReason } from '@metamodels/schema/sealed'
 export interface RateLimit {
   windowSec: number
   max: number
@@ -22,6 +23,9 @@ export interface ResolvedPaddock {
   slug: string
   status: string
   breedId: string
+  /** `upstreamAuth` is the OPENED credential, plaintext — held in memory only, never stored as such. */
   flock: { baseUrl: string; upstreamAuth: string | null; tlsTrust: boolean }
   fence: { constraintJson: unknown; rateLimit: RateLimit | null; quota: unknown }
+  /** Set when the flock has a credential that no held key opens; the paddock must then fail closed. */
+  upstreamAuthError?: UnsealReason
 }

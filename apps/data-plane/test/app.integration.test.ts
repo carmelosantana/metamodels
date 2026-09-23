@@ -5,7 +5,8 @@ import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
-import { makeDb, seedFixture, type Fixture } from './helpers/seed.js'
+import { seal } from '@metamodels/schema/sealed'
+import { makeDb, seedFixture, TEST_RING, testRing, type Fixture } from './helpers/seed.js'
 
 let fx: Fixture
 let sink: InMemoryMeterSink
@@ -18,7 +19,7 @@ beforeEach(async () => {
   sink = new InMemoryMeterSink()
   const fake = createFakeOllama()
   const built = createApp({
-    configStore: new DrizzleConfigStore(db),
+    configStore: new DrizzleConfigStore(db, TEST_RING),
     rateLimiter: new InMemoryRateLimiter(),
     meterSink: sink,
     registry: buildRegistry(),
@@ -88,5 +89,49 @@ describe('data-plane /p/:slug', () => {
     expect(limited.status).toBe(429)
     expect(limited.headers.get('retry-after')).toBeTruthy()
     await drainMeters()
+  })
+})
+
+describe('data-plane /p/:slug — the sealed upstream credential', () => {
+  async function appWith(upstreamAuthEnc: string) {
+    const db = await makeDb()
+    const f = await seedFixture(db, { upstreamAuthEnc })
+    const seen: (string | null)[] = []
+    const fake = createFakeOllama()
+    const { app } = createApp({
+      configStore: new DrizzleConfigStore(db, TEST_RING),
+      rateLimiter: new InMemoryRateLimiter(),
+      meterSink: new InMemoryMeterSink(),
+      registry: buildRegistry(),
+      fetchImpl: (url, init) => {
+        seen.push(new Headers(init?.headers).get('authorization'))
+        return fake.request(url, init)
+      },
+    })
+    const req = (key: string, slug = 'small') => app.request(`http://dp.local/p/${slug}/api/chat`, {
+      ...chat('llama3.2:1b'), headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    })
+    return { f, seen, req }
+  }
+
+  test('sends the opened credential upstream', async () => {
+    const { f, seen, req } = await appWith(seal('upstream-tok', TEST_RING))
+    const res = await req(f.keyPlaintext)
+    expect(res.status).toBe(200)
+    expect(seen).toEqual(['Bearer upstream-tok'])
+  })
+
+  test('fails closed with a 503 when the credential cannot be opened, and never calls upstream', async () => {
+    const { f, seen, req } = await appWith(seal('upstream-tok', testRing()))
+    const res = await req(f.keyPlaintext)
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ error: 'upstream credential unavailable' })
+    expect(seen).toEqual([])
+  })
+
+  test('the 503 comes after the key check, so an unauthenticated caller cannot probe for it', async () => {
+    const { seen, req } = await appWith(seal('upstream-tok', testRing()))
+    expect((await req('mm_live_wrong')).status).toBe(401)
+    expect(seen).toEqual([])
   })
 })

@@ -8,7 +8,7 @@ import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { InMemoryJobStore } from '../src/jobs/job-store.js'
 import { DrizzleUsageReader } from '../src/meter/usage-reader.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
-import { makeDb, seedFixture } from './helpers/seed.js'
+import { makeDb, seedFixture, TEST_RING } from './helpers/seed.js'
 import * as schema from '@metamodels/schema'
 import { periodBucket } from '@metamodels/schema'
 
@@ -19,7 +19,7 @@ async function appWithQuota(quota: unknown) {
   await db.update(schema.fence).set({ quota }).where(eq(schema.fence.paddockId, fx.paddockId))
   const fake = createFakeOllama()
   const { app, drainMeters } = createApp({
-    configStore: new DrizzleConfigStore(db),
+    configStore: new DrizzleConfigStore(db, TEST_RING),
     rateLimiter: new InMemoryRateLimiter(),
     meterSink: new InMemoryMeterSink(),
     registry: buildRegistry(),

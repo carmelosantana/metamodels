@@ -5,6 +5,12 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as schema from '@metamodels/schema'
 import { hashApiKey } from '@metamodels/schema'
+import { randomBytes } from 'node:crypto'
+import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
+
+/** A keyring for tests: fresh per process, so nothing sealed here can open anywhere else. */
+export const testRing = (): SealKeyring => loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+export const TEST_RING = testRing()
 
 export type TestDb = ReturnType<typeof drizzle<typeof schema>>
 
@@ -23,10 +29,11 @@ export interface Fixture {
   keyPlaintext: string; keyHash: string; slug: string
 }
 
-export async function seedFixture(db: TestDb): Promise<Fixture> {
+export async function seedFixture(db: TestDb, opts: { upstreamAuthEnc?: string } = {}): Promise<Fixture> {
   const [org] = await db.insert(schema.org).values({ name: 'default' }).returning()
   const [flock] = await db.insert(schema.flock).values({
     orgId: org.id, breed: 'ollama', name: 'local', baseUrl: 'http://fake.ollama',
+    upstreamAuthEnc: opts.upstreamAuthEnc ?? null,
   }).returning()
   const [paddock] = await db.insert(schema.paddock).values({
     orgId: org.id, flockId: flock.id, slug: 'small', name: 'Small models',
