@@ -35,7 +35,8 @@ const refusal = missing.length
   : null
 
 // In CI a skip would pass silently, so a CI job that meant to run this and forgot a variable fails.
-if (refusal !== null && process.env.CI) throw new Error(`${refusal} (CI is set, so this is an error, not a skip)`)
+// Only `CI=true` or `CI=1` (any case) counts: `CI=0` or `CI=false` is a local run that opted out.
+if (refusal !== null && /^(true|1)$/i.test(process.env.CI ?? '')) throw new Error(`${refusal} (CI is true, so this is an error, not a skip)`)
 test.skip(refusal !== null, refusal ?? '')
 test.describe.configure({ mode: 'serial' })
 

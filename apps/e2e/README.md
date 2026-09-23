@@ -71,8 +71,9 @@ stack, not one with real data.
 
 The walkthrough specs read `E2E_BASE_URL` and `E2E_AUTH_URL` too, so a shell that has them set for
 the walkthrough is already halfway there. **The viewer variables are what really opts this spec
-in**: set them only when the URLs name a throwaway stack. When `CI` is set and any of the four is
-missing, the spec throws instead of skipping, so a CI job cannot skip it without anyone noticing.
+in**: set them only when the URLs name a throwaway stack. When `CI` is `true` or `1` (any case) and
+any of the four is missing, the spec throws instead of skipping, so a CI job cannot skip it without
+anyone noticing. `CI=0` or `CI=false` skips, as an unset `CI` does.
 
 The viewer is a second user, seeded the same way as the operator. The spec demotes it to `viewer`
 on the console's Team page:
