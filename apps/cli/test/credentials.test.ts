@@ -76,7 +76,7 @@ describe('the store', () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))
     expect(readCredentials(p, 'https://a.test')!.accessToken).toBe('t')
-    vi.spyOn(process, 'getuid').mockReturnValue(statSync(p).uid + 1)
+    vi.spyOn(process as Required<NodeJS.Process>, 'getuid').mockReturnValue(statSync(p).uid + 1)
     expect(() => readCredentials(p, 'https://a.test')).toThrow(/owned by/)
   })
 
