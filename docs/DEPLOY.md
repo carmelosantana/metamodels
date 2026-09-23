@@ -43,6 +43,8 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
 | `DATA_PLANE_PORT` | compose | Host port for the proxy. Default `8787`. |
 | `AUTH_HOST_PORT` | compose | Host port for the sign-in service. Default `3100`. |
+| `METAMODELS_ISSUER` | admin CLI (operator's machine) | Not read by any service. The sign-in service `mm` signs in against: exactly the deployment's `OIDC_ISSUER`. `--issuer` overrides. No default. |
+| `METAMODELS_CONSOLE_URL` | admin CLI (operator's machine) | Not read by any service. The console whose admin API `mm` calls: exactly the deployment's `CONSOLE_URL`, since the CLI's tokens are bound to the resource derived from it. `--console` overrides. No default. |
 
 ## Security headers
 
