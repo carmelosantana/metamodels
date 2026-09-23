@@ -1,8 +1,8 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
-import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { adminApiResource, user } from '@metamodels/schema'
 import { authorize } from '../auth/authorize'
 import { freshDb, seedOrg } from '../test/db'
@@ -12,8 +12,10 @@ import {
   grantsFromScope,
   KeySetUnavailableError,
   resetAdminJwks,
+  TokenError,
   verifyAdminToken,
 } from './admin-token'
+import { problemForError } from './problem'
 
 describe('grantsFromScope', () => {
   test('returns a concrete set even for an absent scope (never undefined)', () => {
@@ -45,7 +47,8 @@ describe('credentialOf', () => {
 // ---------------------------------------------------------------------------
 // Round trip against a real signed RFC 9068 token and a real JWKS over HTTP.
 // Two keys are published under different `kid`s so that key resolution is
-// actually exercised rather than assumed.
+// actually exercised rather than assumed. The rotation tests change what is published
+// (`published`) and count the fetches (`jwksRequests`).
 // `test-token.ts` is the shared fixture the admin ROUTE suites use. This setup was not folded into
 // it and deliberately stays here: it publishes two `kid`s, which is what makes key resolution
 // testable, and `test-token.ts` publishes one because no route test needs the second.
@@ -53,8 +56,18 @@ describe('credentialOf', () => {
 
 const KID_A = 'test-key-1'
 const KID_B = 'test-key-2'
+/** A signer the stub does not publish until a test says so: the brand-new key of a rotation. */
+const KID_C = 'test-key-3'
 let keyA: CryptoKey
 let keyB: CryptoKey
+let keyC: CryptoKey
+let jwkA: JWK
+let jwkB: JWK
+let jwkC: JWK
+/** What the stub publishes right now. `beforeEach` resets it to A and B. */
+let published: JWK[] = []
+/** Every `GET /jwks` the stub has answered: the anchor for "exactly one refetch". */
+let jwksRequests = 0
 let jwksServer: Server
 let issuer: string
 /** A port nothing listens on — bound then released, so a connection there is refused. */
@@ -62,22 +75,26 @@ let deadOrigin: string
 
 const CONSOLE_URL = 'https://console.example.test'
 const SUBJECT = '11111111-1111-4111-8111-111111111111'
+/** `JWKS_COOLDOWN_MS` in admin-token.ts, plus a second. */
+const PAST_COOLDOWN_MS = 31 * 1000
+/** `JWKS_CACHE_MAX_AGE_MS` in admin-token.ts, plus a second. */
+const PAST_CACHE_MAX_AGE_MS = 10 * 60 * 1000 + 1000
 
 beforeAll(async () => {
   const a = await generateKeyPair('RS256')
   const b = await generateKeyPair('RS256')
+  const c = await generateKeyPair('RS256')
   keyA = a.privateKey
   keyB = b.privateKey
-  const body = JSON.stringify({
-    keys: [
-      { ...(await exportJWK(a.publicKey)), kid: KID_A, alg: 'RS256', use: 'sig' },
-      { ...(await exportJWK(b.publicKey)), kid: KID_B, alg: 'RS256', use: 'sig' },
-    ],
-  })
+  keyC = c.privateKey
+  jwkA = { ...(await exportJWK(a.publicKey)), kid: KID_A, alg: 'RS256', use: 'sig' }
+  jwkB = { ...(await exportJWK(b.publicKey)), kid: KID_B, alg: 'RS256', use: 'sig' }
+  jwkC = { ...(await exportJWK(c.publicKey)), kid: KID_C, alg: 'RS256', use: 'sig' }
 
   jwksServer = createServer((req, res) => {
     if (req.url === '/jwks') {
-      res.writeHead(200, { 'content-type': 'application/jwk-set+json' }).end(body)
+      jwksRequests++
+      res.writeHead(200, { 'content-type': 'application/jwk-set+json' }).end(JSON.stringify({ keys: published }))
       return
     }
     res.writeHead(404).end()
@@ -102,7 +119,26 @@ afterAll(async () => {
   await new Promise<void>((done, fail) => jwksServer.close((e) => (e ? fail(e) : done())))
 })
 
-beforeEach(() => resetAdminJwks())
+beforeEach(() => {
+  resetAdminJwks()
+  published = [jwkA, jwkB]
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+/**
+ * Only `Date` is faked: jose's cache and cooldown read `Date.now()`, while the fetch and the stub
+ * keep real timers. `setSystemTime` then moves the verifier's clock without waiting.
+ */
+function fakeClock(): void {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() })
+}
+function advanceClock(ms: number): void {
+  vi.setSystemTime(Date.now() + ms)
+}
 
 interface MintOptions {
   /** Signing key. Defaults to the SECOND published key, so the happy path must resolve by `kid`. */
@@ -163,13 +199,77 @@ describe('verifyAdminToken', () => {
     await expect(verifyAdminToken(foreign)).rejects.toMatchObject({ name: 'TokenError' })
   })
 
-  test('treats a `kid` the JWKS does not publish as a key-set failure, not a token rejection', async () => {
-    // Deliberate, and the one debatable arm of the split: a `kid` absent from the published set is
-    // what a live rotation looks like from inside jose's cooldown window, where the token is fine and
-    // refreshing it cannot help. The cost is that a forged `kid` also lands here, so this arm answers
-    // 503 for a request an attacker controls — noisy in availability metrics, but harmless to others.
-    const unknownKid = await mint({ aud: adminApiResource(CONSOLE_URL) }, { kid: 'never-published' })
-    await expect(verifyAdminToken(unknownKid)).rejects.toBeInstanceOf(KeySetUnavailableError)
+  test('rejects a `kid` missing from a key set fetched during this call, after exactly one refetch', async () => {
+    // Not cooling down, so jose refetches once on the miss; the fresh set still lacks the `kid`, so the
+    // key is retired or forged and the answer is 401. A client refreshes on a 401, which is what gets
+    // an idle CLI past a completed rotation. Spec §4.3: at most one refetch per cooldown.
+    const aud = adminApiResource(CONSOLE_URL)
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    expect(jwksRequests).toBeGreaterThan(0)
+    advanceClock(PAST_COOLDOWN_MS)
+
+    const before = jwksRequests
+    const unknownKid = await mint({ aud }, { kid: 'never-published' })
+    await expect(verifyAdminToken(unknownKid)).rejects.toBeInstanceOf(TokenError)
+    expect(jwksRequests - before).toBe(1)
+
+    // A process with no key set yet: the one fetch that loads it is the refetch; there is no second.
+    resetAdminJwks()
+    const fresh = jwksRequests
+    await expect(verifyAdminToken(unknownKid)).rejects.toBeInstanceOf(TokenError)
+    expect(jwksRequests - fresh).toBe(1)
+  })
+
+  test('a new signer\'s `kid` inside the cooldown is 503, and verifies once the cooldown has passed', async () => {
+    // The set was fetched moments ago, so jose may not refetch: the `kid` could belong to a key the
+    // OP started publishing since, and the token may be fine. Only here does an unknown `kid` stay 503.
+    const aud = adminApiResource(CONSOLE_URL)
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    const primed = jwksRequests
+
+    published = [jwkC, jwkA, jwkB]
+    const newSigner = await mint({ aud }, { key: keyC, kid: KID_C })
+    await expect(verifyAdminToken(newSigner)).rejects.toBeInstanceOf(KeySetUnavailableError)
+    expect(jwksRequests).toBe(primed)
+
+    advanceClock(PAST_COOLDOWN_MS)
+    expect((await verifyAdminToken(newSigner)).sub).toBe(SUBJECT)
+    expect(jwksRequests - primed).toBe(1)
+  })
+
+  test('an EXPIRED token signed by a retired key is 401, although jose resolves the key before `exp`', async () => {
+    // A retired key leaves the verifier only when its cached set is refetched. Here the cache ages out
+    // (`cacheMaxAge`), so jose reloads at the start of the call, and that one fetch lacks key A.
+    const aud = adminApiResource(CONSOLE_URL)
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    published = [jwkB]
+    advanceClock(PAST_CACHE_MAX_AGE_MS)
+
+    const before = jwksRequests
+    const expiredRetired = await mint({ aud }, { key: keyA, kid: KID_A, exp: nowSeconds() - 3600 })
+    await expect(verifyAdminToken(expiredRetired)).rejects.toBeInstanceOf(TokenError)
+    expect(jwksRequests - before).toBe(1)
+  })
+
+  test('a 503 is logged with its reason and cause, and never the token', async () => {
+    const aud = adminApiResource(CONSOLE_URL)
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    published = [jwkC, jwkA, jwkB]
+    const newSigner = await mint({ aud }, { key: keyC, kid: KID_C })
+    const err = await verifyAdminToken(newSigner).then(() => undefined, (e: unknown) => e)
+    expect(err).toBeInstanceOf(KeySetUnavailableError)
+
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(problemForError(err).status).toBe(503)
+    expect(log).toHaveBeenCalledTimes(1)
+    const line = log.mock.calls[0]!.map(String).join(' ')
+    expect(line).toContain((err as KeySetUnavailableError).reason)
+    expect(line).toContain('JWKSNoMatchingKey')
+    for (const part of [newSigner, ...newSigner.split('.')]) expect(line).not.toContain(part)
   })
 
   test('rejects an ID token replayed as an access token — `typ` must be at+jwt', async () => {

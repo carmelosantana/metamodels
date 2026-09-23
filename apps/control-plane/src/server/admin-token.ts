@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, errors as joseErrors, jwtVerify, type JWTVerifyGetKey } from 'jose'
+import { createRemoteJWKSet, errors as joseErrors, jwtVerify, type RemoteJWKSet } from 'jose'
 import { adminApiResource, CAPABILITIES, type Capability } from '@metamodels/schema'
 import { loadOidcClientConfig, onOrigin } from '../auth/oidc-client'
 import type { Actor, Credential } from '../auth/authorize'
@@ -27,12 +27,14 @@ export class TokenError extends Error {
 }
 
 /**
- * The OP's key set could not be obtained, so the token was never judged at all.
+ * The token could not be judged against a current key set: the OP's key set could not be obtained,
+ * or the token names a `kid` missing from a set fetched too recently for jose to refetch it (see
+ * `verifyAdminToken`).
  *
- * Distinct from `TokenError` on purpose: the token may be perfectly valid and the fault is ours.
- * The caller must answer 503, not 401 — a client that "fixes" a 401 by refreshing would only hit
- * the same unreachable OP, and an operator watching a wave of 401s would never learn the OP was
- * down. As with `TokenError`, `reason` and `cause` are for server-side logging only.
+ * Distinct from `TokenError` on purpose: the token may be perfectly valid. The caller must answer
+ * 503, not 401 — a client that "fixes" a 401 by refreshing would only hit the same unreachable OP,
+ * and an operator watching a wave of 401s would never learn the OP was down. As with `TokenError`,
+ * `reason` and `cause` are for server-side logging only.
  */
 export class KeySetUnavailableError extends Error {
   readonly reason: string
@@ -69,7 +71,7 @@ export function credentialOf(claims: { client_id?: string; jti?: string }): Cred
   return `token:${claims.client_id ?? 'unknown'}:${claims.jti ?? 'unknown'}`
 }
 
-let jwks: JWTVerifyGetKey | undefined
+let jwks: RemoteJWKSet | undefined
 
 /**
  * One process-wide remote key set, mirroring how oidc-client.ts serves the console: the published
@@ -77,7 +79,7 @@ let jwks: JWTVerifyGetKey | undefined
  * `jwks_uri`. `kid` is resolved from the published JWKS and never pinned, so an
  * OIDC_PREVIOUS_SIGNING_KEYS overlap works here without a redeploy.
  */
-export function adminJwks(): JWTVerifyGetKey {
+export function adminJwks(): RemoteJWKSet {
   if (jwks) return jwks
   const cfg = loadOidcClientConfig()
   jwks = createRemoteJWKSet(new URL(onOrigin(`${cfg.issuer}/jwks`, cfg.internalUrl)), {
@@ -93,13 +95,13 @@ export function resetAdminJwks(): void {
 }
 
 /**
- * Why the *key set* — rather than the token — is at fault, or `undefined` when this is a token
- * defect. Deliberately an allowlist: anything unrecognised stays a token rejection, which is the
- * conservative answer, so a jose release that adds an error class cannot turn a bad token into a 503.
+ * Why the *key set* could not be obtained, or `undefined` when this is a token defect. Deliberately
+ * an allowlist: anything unrecognised stays a token rejection, which is the conservative answer, so
+ * a jose release that adds an error class cannot turn a bad token into a 503. An unmatched `kid`
+ * (`JWKSNoMatchingKey`) is not decided here: `verifyAdminToken` decides it before calling this.
  */
 function keySetFailure(e: unknown): string | undefined {
   if (e instanceof joseErrors.JWKSTimeout) return 'timed out fetching the key set'
-  if (e instanceof joseErrors.JWKSNoMatchingKey) return 'no published key matches the token `kid`'
   if (e instanceof joseErrors.JWKSInvalid) return 'the published key set is malformed'
   if (e instanceof joseErrors.JOSEError) {
     // The base class itself is what jose throws for a non-200 or unparseable JWKS response; every
@@ -113,10 +115,13 @@ function keySetFailure(e: unknown): string | undefined {
 
 export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
   const cfg = loadOidcClientConfig()
+  const keySet = adminJwks()
+  // Read BEFORE verifying: a fetch during the call restarts the cooldown. See the catch below.
+  const wasCoolingDown = keySet.coolingDown
   let payload: Record<string, unknown>
   let header: Record<string, unknown>
   try {
-    const res = await jwtVerify(jwt, adminJwks(), {
+    const res = await jwtVerify(jwt, keySet, {
       issuer: cfg.issuer,
       algorithms: ['RS256'],
       typ: 'at+jwt',
@@ -128,6 +133,31 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
     payload = res.payload as Record<string, unknown>
     header = res.protectedHeader as unknown as Record<string, unknown>
   } catch (e) {
+    /**
+     * No key in the set matches the token's `kid`. jose (`jwks/remote.js`) reloads the set at the
+     * start of a call when it has none or it is older than `cacheMaxAge`, and on a miss reloads once
+     * more only when the set is past `cooldownDuration`. A reload already in flight from a
+     * concurrent verification is awaited, not repeated. So:
+     *
+     * - Not cooling down at the start → 401. Whichever reload ran, the set was loaded during this
+     *   call (or by a concurrent verification's load, requested moments before it) and the `kid` was
+     *   looked up in it: the key is retired or forged, and the client should refresh.
+     * - Cooling down → 503. The set was fetched under `JWKS_COOLDOWN_MS` ago and jose refetched
+     *   nothing, so the `kid` may belong to a signer the OP began publishing since. The cooldown ends
+     *   within the 30 s `Retry-After`, and the retry refetches.
+     *
+     * Two races, each within one turn of the event loop. If the cooldown ends between the read above
+     * and jose's check, jose refetches and the answer is still 503. If a concurrent verification's
+     * load lands between jose's miss and its check, jose skips its own reload without consulting the
+     * new set, and the answer is 401.
+     */
+    if (e instanceof joseErrors.JWKSNoMatchingKey) {
+      if (wasCoolingDown) {
+        throw new KeySetUnavailableError(
+          'the token `kid` is not in a key set fetched too recently to refetch', { cause: e })
+      }
+      throw new TokenError('the token `kid` is not in a key set fetched during this verification', { cause: e })
+    }
     const unavailable = keySetFailure(e)
     if (unavailable) throw new KeySetUnavailableError(unavailable, { cause: e })
     throw new TokenError('signature, issuer, typ or expiry rejected', { cause: e })

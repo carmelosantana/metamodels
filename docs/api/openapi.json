@@ -2902,7 +2902,7 @@
         }
       },
       "KeySetUnavailable": {
-        "description": "The OpenID Provider's key set could not be fetched, so the token was never judged. 503 rather than 401 on purpose: the fault is the server's, and a 401 would send the client off to refresh a token that is probably fine.",
+        "description": "The token could not be judged against a current key set: the OpenID Provider's key set could not be fetched, or the token names a signing key missing from a key set fetched less than 30 seconds ago, too recently to fetch again (a key the provider may have just begun publishing). 503 rather than 401 on purpose: a 401 would send the client off to refresh a token that may be fine. A signing key missing from a key set fetched for this request is a 401.",
         "content": {
           "application/json": {
             "schema": {
@@ -2912,7 +2912,7 @@
         },
         "headers": {
           "Retry-After": {
-            "description": "Seconds. Matches the JWKS fetch cooldown, so every retry inside the window would be answered from the same cached failure.",
+            "description": "Seconds. The key-set fetch cooldown: for a signing key missing from a recently fetched key set, the retry is allowed to fetch the key set again.",
             "schema": {
               "type": "integer"
             }

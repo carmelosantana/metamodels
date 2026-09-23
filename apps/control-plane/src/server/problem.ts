@@ -5,9 +5,10 @@ import { NotFoundError } from './flocks-service'
 import { SlugTakenError } from './paddocks-service'
 
 /**
- * How long a client should wait before retrying an unreachable OP. 30s is not a guess: jose holds a
- * `JWKS_COOLDOWN_MS = 30_000` cooldown after a failed key-set fetch (`admin-token.ts`), so every
- * retry inside that window is answered from the same cached failure. Retrying sooner cannot succeed.
+ * How long a client should wait before retrying a 503. 30 s is `JWKS_COOLDOWN_MS` (`admin-token.ts`).
+ * For a `kid` missing from a set that is still cooling down, the cooldown ends within 30 s and the
+ * retry refetches. A failed fetch starts no cooldown (jose records the fetch time only on success),
+ * so for an unreachable OP every request fetches again and 30 s only paces the client.
  */
 const KEY_SET_RETRY_AFTER_SECONDS = '30'
 
@@ -42,6 +43,19 @@ export function unauthorized(detail: string): Response {
 }
 
 /**
+ * The server-side record of every admin-API 503: `KeySetUnavailableError` is thrown only by token
+ * verification and answered only by `problemForError`, so it is logged here, once. Strings only,
+ * as `logSignInFailure` does: the reason and the cause's name and message, never an error object
+ * (jose errors can carry token claims) and never the token. CR and LF are replaced so a message
+ * cannot forge a second log line.
+ */
+function logKeySetUnavailable(e: KeySetUnavailableError): void {
+  const cause = e.cause === undefined ? 'no cause'
+    : e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)
+  console.error('[admin-api] 503, key set unavailable:', e.reason, cause.replace(/[\r\n]/g, ' '))
+}
+
+/**
  * The service layer's error vocabulary as HTTP. An unrecognised error is 500 with NO detail —
  * service errors can carry connection strings and upstream URLs, and this surface is reachable by
  * anything holding a token.
@@ -57,10 +71,10 @@ export function problemForError(e: unknown): Response {
     return problem(403, 'Forbidden', e.message, { capability: e.capability })
   }
   if (e instanceof NotFoundError) return problem(404, 'Not Found', e.message)
-  // Before the TokenError arm on purpose. The token was never judged — the fault is ours, and
-  // answering 401 would send a client off to refresh a token that is probably fine, against an OP
-  // that is down.
+  // Before the TokenError arm on purpose. The token was not judged against a current key set, and
+  // answering 401 would send a client off to refresh a token that may be fine.
   if (e instanceof KeySetUnavailableError) {
+    logKeySetUnavailable(e)
     return problem(
       503,
       'Service Unavailable',

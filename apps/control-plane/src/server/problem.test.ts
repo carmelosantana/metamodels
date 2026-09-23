@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
 import { KeySetUnavailableError, TokenError } from './admin-token'
@@ -138,6 +138,32 @@ describe('problemForError', () => {
     expect(body).toContain('"title":"Service Unavailable"')
     expect(body).not.toContain('key set')
     expect(body).not.toContain('ECONNREFUSED')
+  })
+
+  describe('the 503 log', () => {
+    afterEach(() => vi.restoreAllMocks())
+
+    test('each 503 is logged once, as strings: reason, then the cause\'s name and message on one line', () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const cause = new TypeError('fetch failed\r\nforged: line')
+      problemForError(new KeySetUnavailableError('the key set endpoint could not be reached', { cause }))
+      expect(log).toHaveBeenCalledTimes(1)
+      const args = log.mock.calls[0]!
+      for (const a of args) expect(typeof a).toBe('string')
+      expect(args).toEqual([
+        '[admin-api] 503, key set unavailable:',
+        'the key set endpoint could not be reached',
+        'TypeError: fetch failed  forged: line',
+      ])
+    })
+
+    test('a cause-less 503 says so, and a 401 is not logged at all', () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      problemForError(new KeySetUnavailableError('timed out fetching the key set'))
+      expect(log.mock.calls[0]![2]).toBe('no cause')
+      problemForError(new TokenError('expired'))
+      expect(log).toHaveBeenCalledTimes(1)
+    })
   })
 
   test('a SlugTakenError becomes 409 and names the clashing slug', async () => {
