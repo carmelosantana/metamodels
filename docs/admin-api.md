@@ -252,8 +252,9 @@ Every successful create, replace, delete, status change and revocation through t
 same "configuration changed" message through Redis that the console sends for the same change, and
 each node drops its copy when that message reaches it. So a revoked key, a disabled paddock or a
 changed fence takes effect at the proxy as soon as the message arrives, whichever of the two made
-the change. The message is sent once and not retried. If it is lost (Redis was unreachable when it
-was sent), the change reaches each node when that node's copy expires, within 30 seconds. A refused
+the change. The message is sent once and not retried. If a node misses it (Redis was unreachable,
+or that node's connection to Redis was down), the change reaches the node when its copy expires,
+within 30 seconds. A refused
 request sends nothing. Without Redis, the data plane keeps no copy and reads the database on every
 request.
 
