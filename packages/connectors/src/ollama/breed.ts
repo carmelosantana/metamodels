@@ -3,6 +3,7 @@ import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent, ModelL
 import { ollamaConstraint, routeGroup } from './constraint.js'
 import type { OllamaConstraint } from './constraint.js'
 import { ollamaToMcp } from './mcp.js'
+import { upstreamAuthHeaders } from '../upstream-auth.js'
 
 // Bound upstream calls so a hung Ollama never ties up the caller indefinitely.
 const UPSTREAM_TIMEOUT_MS = 10_000
@@ -75,6 +76,7 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
   async health(flock) {
     try {
       const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/version`, {
+        headers: upstreamAuthHeaders(flock),
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       })
       return { ok: res.ok }
@@ -85,10 +87,8 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
 
   async listModels(flock): Promise<ModelListResult> {
     try {
-      const headers: Record<string, string> = {}
-      if (flock.upstreamAuth) headers['Authorization'] = flock.upstreamAuth
       const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/api/tags`, {
-        headers,
+        headers: upstreamAuthHeaders(flock),
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       })
       if (!res.ok) return { ok: false, models: [], detail: `upstream returned HTTP ${res.status}` }

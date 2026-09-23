@@ -1,5 +1,6 @@
 export * from './breed.js'
 export * from './mcp.js'
 export * from './registry.js'
+export * from './upstream-auth.js'
 export * from './ollama/index.js'
 export * from './comfyui/index.js'
