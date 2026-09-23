@@ -269,6 +269,9 @@ describe('verifyAdminToken', () => {
     const line = log.mock.calls[0]!.map(String).join(' ')
     expect(line).toContain((err as KeySetUnavailableError).reason)
     expect(line).toContain('JWKSNoMatchingKey')
+    // A production build minifies jose's class names (the live stack logged `l`), so its `code`,
+    // a string literal, is what identifies the cause there.
+    expect(line).toContain('ERR_JWKS_NO_MATCHING_KEY')
     for (const part of [newSigner, ...newSigner.split('.')]) expect(line).not.toContain(part)
   })
 

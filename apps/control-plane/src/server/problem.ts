@@ -45,13 +45,17 @@ export function unauthorized(detail: string): Response {
 /**
  * The server-side record of every admin-API 503: `KeySetUnavailableError` is thrown only by token
  * verification and answered only by `problemForError`, so it is logged here, once. Strings only,
- * as `logSignInFailure` does: the reason and the cause's name and message, never an error object
- * (jose errors can carry token claims) and never the token. CR and LF are replaced so a message
- * cannot forge a second log line.
+ * as `logSignInFailure` does: the reason and the cause's name, `code` and message, never an error
+ * object (jose errors can carry token claims) and never the token. The `code` is there because a
+ * production build minifies jose's class names, so `name` alone can read `l`. CR and LF are replaced
+ * so a message cannot forge a second log line.
  */
 function logKeySetUnavailable(e: KeySetUnavailableError): void {
-  const cause = e.cause === undefined ? 'no cause'
-    : e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)
+  const c = e.cause
+  const rawCode = c instanceof Error ? (c as Error & { code?: unknown }).code : undefined
+  const code = typeof rawCode === 'string' ? ` [${rawCode}]` : ''
+  const cause = c === undefined ? 'no cause'
+    : c instanceof Error ? `${c.name}${code}: ${c.message}` : String(c)
   console.error('[admin-api] 503, key set unavailable:', e.reason, cause.replace(/[\r\n]/g, ' '))
 }
 
