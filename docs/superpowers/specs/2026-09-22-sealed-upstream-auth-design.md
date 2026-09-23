@@ -36,6 +36,7 @@ Three changes are needed, and each depends on the one before:
 | S5 | Response shape | An **allowlist projection** in the service, `flockView`, with `hasUpstreamAuth: boolean` in place of the credential. |
 | S6 | PUT | `upstreamAuth` is **tri-state**. Omitted leaves it untouched, `null` clears it, and a string replaces it. |
 | S7 | Unreadable credential | **Fail closed, per flock.** The data plane returns 503 after its key and scope gates. `migrate` warns and names the flock but never fails the run. |
+| S8 | Writers | An update that omits the credential may not change `baseUrl` or turn `tlsTrust` on while a credential is stored. The admin API answers **409**. |
 
 ### 2.1 Why not reuse `license-crypto.ts` (S1, S2)
 
@@ -69,6 +70,10 @@ refusing every new unsealed write. `resealUpstreamAuth` then, in one transaction
 - reports, and leaves untouched, any row no held key can open;
 - runs `VALIDATE CONSTRAINT`.
 
+If the pass sealed any plaintext, a `VACUUM FULL "flock"` follows, so the old row versions do not
+stay in the table's data files. The WAL and earlier backups are out of its reach, and `DEPLOY.md`
+says so.
+
 The same pass is the one-time upgrade and the second half of every rotation. `migrate` loads the
 key before it touches the database, so a missing key stops the deploy before a half-applied
 upgrade.
@@ -95,6 +100,13 @@ is never defaulted. `saveFlock` leaves an omitted credential out of `values` wit
 spread, so the UPDATE never names the column. That keeps the fix inside the service's transaction,
 where a read-modify-write would race. The console's form omits a blank field instead of sending
 `null`.
+
+Omit-keeps has one consequence that write-only has to guard against (S8). If a kept credential
+followed a changed `baseUrl`, a `resource.write` token could point the flock at its own server and
+have the next model listing or paddock request deliver the credential there. So `saveFlock`
+compares the new `baseUrl` and `tlsTrust` against the stored row, inside the same transaction and
+`FOR UPDATE`. If either change would carry a stored credential somewhere new, it refuses the write
+with `CredentialRebindError`, unless the request re-sends `upstreamAuth` or `null`.
 
 ### 2.5 Why an unreadable credential fails closed (S7)
 
