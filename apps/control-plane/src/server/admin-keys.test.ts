@@ -245,14 +245,16 @@ describe('/api/admin/v1/keys/{id}/revoke', () => {
     expect(audits[0].changedBy).toBe('token:metamodels-cli:jti-rev')
   })
 
-  // ⚠ FINDING, pinned rather than fixed (out of scope for this task). `revokeKey`'s UPDATE matches
-  // on `(id, orgId)` with NO `status <> 'revoked'` predicate, so the second call still matches the
-  // row, `.returning()` still yields it, and a SECOND `key.revoke` audit row is written for a call
-  // that changed nothing. The HTTP contract is idempotent — 204 both times — but the audit trail is
-  // not: replaying a revoke inflates the log with events that never happened. This test asserts the
-  // REAL behaviour so the day `revokeKey` narrows its predicate, this line fails loudly and is
-  // updated deliberately rather than a service change slipping past a wishful assertion.
-  test('revoking an already-revoked key is 204 again — but writes a SECOND audit row', async () => {
+  // Spec §3 (design doc line 194): "Revoking an already-revoked key is idempotent: 204, no second
+  // audit entry." Both halves are asserted here because they are separable and were separately
+  // wrong: the HTTP contract was already idempotent, the audit trail was not, and a replayed revoke
+  // inflated the log with events that never happened.
+  //
+  // The 204 is the load-bearing half of this test now. `revokeKey` test-and-sets on
+  // `status = 'active'`, so the second call matches no row — the shape that means 404 everywhere
+  // else in this service. It must NOT mean 404 here: the key is revoked, which is exactly what the
+  // caller asked for, and a 404 would send a client hunting for a key it just successfully retired.
+  test('revoking an already-revoked key is 204 again and writes NO second audit row', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await postKey(t)
     const first = await call(revokeRoute, 'POST', `/keys/${created.id}/revoke`, t, undefined, { id: created.id })
@@ -262,7 +264,19 @@ describe('/api/admin/v1/keys/{id}/revoke', () => {
 
     const [row] = await db.select().from(apiKey).where(eq(apiKey.id, created.id))
     expect(row.status).toBe('revoked')
-    expect(await db.select().from(auditLog).where(eq(auditLog.action, 'key.revoke'))).toHaveLength(2)
+    expect(await db.select().from(auditLog).where(eq(auditLog.action, 'key.revoke'))).toHaveLength(1)
+  })
+
+  // The no-op branch must not swallow the two cases a 404 exists for. Narrowing the UPDATE's
+  // predicate makes "matched no row" ambiguous — already revoked, not ours, or never existed — and
+  // collapsing those into one answer would let a caller probe another org's key ids by status.
+  test('POST for a key id that never existed is 404, not a silent 204', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const ghost = crypto.randomUUID()
+    const res = await call(revokeRoute, 'POST', `/keys/${ghost}/revoke`, t, undefined, { id: ghost })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+    expect(await db.select().from(auditLog).where(eq(auditLog.action, 'key.revoke'))).toHaveLength(0)
   })
 
   test('POST for another org\'s key is 404 and leaves it active', async () => {

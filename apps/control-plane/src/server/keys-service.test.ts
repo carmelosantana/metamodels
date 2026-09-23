@@ -131,6 +131,36 @@ describe('keys-service revokeKey', () => {
     expect(audits[0].target).toBe(`key:${created.id}`)
   })
 
+  // Spec §3. The UPDATE test-and-sets on `status = 'active'`, so the second call matches nothing
+  // and returns quietly. It does NOT throw: an already-revoked key is the state the caller asked
+  // for, and NotFoundError here would become a 404 on a key the caller just retired.
+  test('a second revoke is a silent no-op — still revoked, still exactly one audit row', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const pid = await paddockIn(db, actor.orgId, 'p1')
+    const created = await createKey(db, actor, { name: 'k', paddockIds: [pid] })
+
+    await revokeKey(db, actor, created.id)
+    await expect(revokeKey(db, actor, created.id)).resolves.toBeUndefined()
+
+    const [row] = await db.select().from(schema.apiKey).where(eq(schema.apiKey.id, created.id))
+    expect(row.status).toBe('revoked')
+    const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.revoke'))
+    expect(audits).toHaveLength(1)
+    // The positive anchor: one row, and it is THIS key's. A count alone would pass against an
+    // audit written for something else entirely.
+    expect(audits[0].target).toBe(`key:${created.id}`)
+  })
+
+  // "Matched no row" now means three different things. Already-revoked is a no-op; the other two
+  // are still 404, and must not be blurred into it by the fix.
+  test('a key id that never existed is still NotFoundError', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    await expect(revokeKey(db, actor, crypto.randomUUID())).rejects.toThrow(NotFoundError)
+    expect(await db.select().from(schema.auditLog)).toHaveLength(0)
+  })
+
   test('cannot revoke a key in another org', async () => {
     const db = await freshDb()
     const mine = await actorFor(db, 'admin')
@@ -142,6 +172,10 @@ describe('keys-service revokeKey', () => {
     await expect(revokeKey(db, mine, foreign.id)).rejects.toThrow(NotFoundError)
     const [still] = await db.select().from(schema.apiKey).where(eq(schema.apiKey.id, foreign.id))
     expect(still.status).toBe('active')
+    // And a foreign key that is ALREADY revoked is still 404, not the silent no-op: the org check
+    // has to be decided before the status is, or the no-op branch becomes a cross-org oracle.
+    await db.update(schema.apiKey).set({ status: 'revoked' }).where(eq(schema.apiKey.id, foreign.id))
+    await expect(revokeKey(db, mine, foreign.id)).rejects.toThrow(NotFoundError)
   })
 
   test('viewer cannot revoke', async () => {

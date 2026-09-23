@@ -106,15 +106,45 @@ export async function createKey(db: Db, actor: Actor, input: unknown): Promise<C
   })
 }
 
+/**
+ * Retires a key. Idempotent in both halves spec §3 asks for: 204 on a replay, and NO second
+ * `key.revoke` audit row for a call that changed nothing.
+ *
+ * The `status = 'active'` predicate is a TEST-AND-SET, and that is the whole mechanism — not a
+ * tidier way to spell a pre-read. Postgres evaluates it while holding the row lock, so of two
+ * concurrent revokes exactly one UPDATE matches and exactly one audit row is written. Reading the
+ * status first and branching in TypeScript would look equivalent and would not be: both readers
+ * could see 'active' and both would audit, which is the duplicate this fix removes, narrowed to a
+ * race window rather than removed.
+ *
+ * Matching no row is therefore ambiguous — already revoked, another org's, or never existed — and
+ * the three must not be collapsed. The follow-up SELECT is org-scoped, so:
+ *
+ *   - the key exists in THIS org → it was already revoked. Return quietly: the key is in the state
+ *     the caller asked for, and throwing here would 404 a key they just successfully retired.
+ *   - anything else → `NotFoundError`. A foreign key is indistinguishable from a nonexistent one,
+ *     deliberately: were an already-revoked foreign key to take the quiet branch, the response
+ *     would leak another org's key status.
+ *
+ * It costs one extra SELECT only on the path where nothing was written.
+ */
 export async function revokeKey(db: Db, actor: Actor, id: string): Promise<void> {
   requireCapability(actor, 'resource.write')
   await db.transaction(async (tx) => {
     const [revoked] = await tx
       .update(apiKey)
       .set({ status: 'revoked' })
-      .where(and(eq(apiKey.id, id), eq(apiKey.orgId, actor.orgId)))
+      .where(and(eq(apiKey.id, id), eq(apiKey.orgId, actor.orgId), eq(apiKey.status, 'active')))
       .returning()
-    if (!revoked) throw new NotFoundError(`key ${id}`)
+    if (!revoked) {
+      const [mine] = await tx
+        .select({ id: apiKey.id })
+        .from(apiKey)
+        .where(and(eq(apiKey.id, id), eq(apiKey.orgId, actor.orgId)))
+        .limit(1)
+      if (!mine) throw new NotFoundError(`key ${id}`)
+      return // already revoked: nothing changed, so there is nothing to audit
+    }
     await writeAudit(tx, actor, {
       action: 'key.revoke', target: `key:${id}`,
     })
