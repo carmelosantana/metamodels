@@ -1,7 +1,7 @@
 import { BreedRegistry, comfyuiBreed, ollamaBreed, type ModelListResult } from '@metamodels/connectors'
 import type { Db } from './db'
 import type { Actor } from '../auth/authorize'
-import { listFlocks } from './flocks-service'
+import { getFlockConnection, NotFoundError } from './flocks-service'
 import { flockConnectionInput } from '../lib/flock-schema'
 
 export function buildBreedRegistry(): BreedRegistry {
@@ -30,9 +30,17 @@ export async function listFlockModels(
   actor: Actor,
   flockId: string,
 ): Promise<ModelListResult> {
-  const f = (await listFlocks(db, actor)).find((x) => x.id === flockId)
-  if (!f) return { ok: false, models: [], detail: 'flock not found' }
+  let f
+  try {
+    f = await getFlockConnection(db, actor, flockId)
+  } catch (e) {
+    if (e instanceof NotFoundError) return { ok: false, models: [], detail: 'flock not found' }
+    throw e
+  }
   const breed = registry.get(f.breed)
   if (!breed.listModels) return { ok: false, models: [], detail: 'unsupported' }
+  // Fail closed, like the data plane: asking without the credential would come back as the
+  // upstream's 401 and send the operator looking at the wrong system.
+  if (f.upstreamAuthError) return { ok: false, models: [], detail: 'upstream credential unavailable' }
   return breed.listModels({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust })
 }
