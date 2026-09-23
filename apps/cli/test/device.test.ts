@@ -341,3 +341,69 @@ describe('plain http in discovery', () => {
     expect(cred.accessToken).toBe('at-1')
   })
 })
+
+// The CLI sends nothing to the verification URI, but it sends the operator there to type their
+// password: the same rule as for the endpoints that receive a credential.
+describe('plain http in the device authorization response', () => {
+  const ISSUER = 'https://op.lan.test'
+
+  function viaStub(s: Stub): typeof fetch {
+    return (input, init) => fetch(String(input).replace(/^https?:\/\/op\.lan\.test/, s.url), init)
+  }
+
+  async function lanDeviceOp(device: Record<string, unknown>): Promise<Stub> {
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 200,
+      json: { issuer: ISSUER, token_endpoint: `${ISSUER}/token`, device_authorization_endpoint: `${ISSUER}/device/auth` },
+    }))
+    stub.on('POST /device/auth', () => ({
+      status: 200,
+      json: {
+        device_code: 'dc-1', user_code: 'BCDF-GHJK', verification_uri: `${ISSUER}/device`,
+        verification_uri_complete: `${ISSUER}/device?user_code=BCDF-GHJK`, expires_in: 600, interval: 3, ...device,
+      },
+    }))
+    stub.on('POST /token', () => granted)
+    return stub
+  }
+
+  test.each([
+    ['verification_uri, with no verification_uri_complete', 'verification_uri',
+      { verification_uri: 'http://op.lan.test/device', verification_uri_complete: undefined }],
+    ['verification_uri, beside an https verification_uri_complete', 'verification_uri',
+      { verification_uri: 'http://op.lan.test/device' }],
+    ['verification_uri_complete', 'verification_uri_complete',
+      { verification_uri_complete: 'http://op.lan.test/device?user_code=BCDF-GHJK' }],
+  ])('an https issuer answering with a plain-http %s is refused before the operator is sent there', async (_name, field, device) => {
+    const s = await lanDeviceOp(device)
+    const deps = fakeDeps()
+    const err = await deviceLogin({ issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s) })
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toContain(`the OP's ${field} http://op.lan.test/device`)
+    expect((err as Error).message).toMatch(/password/)
+    expect((err as Error).message).toMatch(/--allow-insecure-http/)
+    // Nothing invites the operator to open it, and no poll starts.
+    expect(deps.printed).toEqual([])
+    expect(s.requests.some((r) => r.path === '/token')).toBe(false)
+  })
+
+  test('with the opt-in, the plain-http verification URI is printed and the flow completes', async () => {
+    const s = await lanDeviceOp({ verification_uri: 'http://op.lan.test/device', verification_uri_complete: undefined })
+    const deps = fakeDeps()
+    const cred = await deviceLogin(
+      { issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s), allowInsecureHttp: true },
+    )
+    expect(cred.accessToken).toBe('at-1')
+    expect(deps.printed.join('\n')).toContain('open http://op.lan.test/device in a browser')
+  })
+
+  test('an https verification URI needs no opt-in', async () => {
+    const s = await lanDeviceOp({})
+    const deps = fakeDeps()
+    const cred = await deviceLogin({ issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s) })
+    expect(cred.accessToken).toBe('at-1')
+    expect(deps.printed.join('\n')).toContain(`${ISSUER}/device?user_code=BCDF-GHJK`)
+  })
+})

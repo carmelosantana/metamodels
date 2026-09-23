@@ -20,11 +20,14 @@ function isLoopback(hostname: string): boolean {
 }
 
 /**
- * Refuses a URL the CLI would send a credential to (the bearer token, the refresh token, the
- * device code) unless it is https, or plain http to a loopback host, or plain http with the opt-in.
- * Plain http anywhere else puts the tokens on the network in clear text.
+ * Refuses a URL a credential would travel to — one the CLI sends a token or device code to, or one
+ * it sends the operator to, to type their password — unless it is https, or plain http to a
+ * loopback host, or plain http with the opt-in. Plain http anywhere else puts that credential on the
+ * network in clear text. `exposed` names it in the refusal.
  */
-export function requireSecureTransport(url: string, what: string, allowInsecureHttp: boolean): void {
+export function requireSecureTransport(
+  url: string, what: string, allowInsecureHttp: boolean, exposed = 'tokens sent to it',
+): void {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -35,7 +38,7 @@ export function requireSecureTransport(url: string, what: string, allowInsecureH
   if (parsed.protocol !== 'http:') throw new Error(`${what} must be an http(s) URL, got ${JSON.stringify(url)}`)
   if (isLoopback(parsed.hostname) || allowInsecureHttp) return
   throw new Error(
-    `${what} ${url} is plain http to a host that is not loopback: tokens sent to it could be read on the ` +
+    `${what} ${url} is plain http to a host that is not loopback: ${exposed} could be read on the ` +
     `network. Use https, or pass ${INSECURE_HTTP_FLAG} (or set ${INSECURE_HTTP_ENV}=1) to allow it.`,
   )
 }

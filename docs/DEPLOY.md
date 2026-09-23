@@ -45,7 +45,7 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `AUTH_HOST_PORT` | compose | Host port for the sign-in service. Default `3100`. |
 | `METAMODELS_ISSUER` | admin CLI (operator's machine) | Not read by any service. The sign-in service `mm` signs in against: exactly the deployment's `OIDC_ISSUER`. `--issuer` overrides. No default. |
 | `METAMODELS_CONSOLE_URL` | admin CLI (operator's machine) | Not read by any service. The console whose admin API `mm` calls: exactly the deployment's `CONSOLE_URL`, since the CLI's tokens are bound to the resource derived from it. `--console` overrides. No default. |
-| `METAMODELS_ALLOW_INSECURE_HTTP` | admin CLI (operator's machine) | Not read by any service. `mm` refuses plain `http://` to a host that is not loopback (`localhost`, `127.0.0.0/8`, `::1`) for the issuer, the console and the endpoints the sign-in service advertises, since it sends tokens to them. `1` (or `--allow-insecure-http`) allows it, with a warning on stderr on every run. Default off. |
+| `METAMODELS_ALLOW_INSECURE_HTTP` | admin CLI (operator's machine) | Not read by any service. `mm` refuses plain `http://` to a host that is not loopback (`localhost`, `127.0.0.0/8`, `::1`) for the issuer, the console and the endpoints the sign-in service advertises, since it sends tokens to them, and for the page `mm login` sends the operator to, since they type their password there. `1` (or `--allow-insecure-http`) allows it, with a warning on stderr on every run. Default off. |
 
 ## Security headers
 

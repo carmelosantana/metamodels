@@ -16,7 +16,7 @@ export interface OpDeps {
   now?: () => number
   /** Where operator-facing lines go (stderr in the CLI). */
   print?: (line: string) => void
-  /** Accept plain-http OP endpoints on hosts that are not loopback (`--allow-insecure-http`). */
+  /** Accept plain-http OP endpoints and verification URIs on hosts that are not loopback (`--allow-insecure-http`). */
   allowInsecureHttp?: boolean
 }
 
@@ -182,6 +182,14 @@ export async function deviceLogin(
   const expiresIn = start.json.expires_in
   if (typeof deviceCode !== 'string' || typeof userCode !== 'string' || typeof uri !== 'string' || typeof expiresIn !== 'number') {
     throw new Error('the sign-in could not start: the device authorization response is incomplete')
+  }
+  // Nothing is sent to these, but the operator is sent to them to type their password: held to the
+  // same rule as the endpoints, before either is printed.
+  const allow = od.allowInsecureHttp ?? false
+  const typedThere = 'the password typed into it'
+  requireSecureTransport(uri, `the OP's verification_uri`, allow, typedThere)
+  if (typeof complete === 'string') {
+    requireSecureTransport(complete, `the OP's verification_uri_complete`, allow, typedThere)
   }
 
   if (typeof complete === 'string') {

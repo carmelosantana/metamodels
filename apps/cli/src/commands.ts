@@ -149,9 +149,9 @@ export function helpText(): string {
     '',
     `Every command takes --issuer URL (or ${ISSUER_ENV}), the sign-in service, and all but`,
     `logout take --console URL (or ${CONSOLE_ENV}), the console the admin API lives on.`,
-    'Both, and the endpoints the sign-in service advertises, must be https, or plain http to a',
-    `loopback host. ${INSECURE_HTTP_FLAG} (or ${INSECURE_HTTP_ENV}=1) allows plain http`,
-    'to any host, with a warning on every run.',
+    'Both, and the endpoints and sign-in page the sign-in service names, must be https, or plain',
+    `http to a loopback host. ${INSECURE_HTTP_FLAG} (or ${INSECURE_HTTP_ENV}=1) allows plain`,
+    'http to any host, with a warning on every run.',
     'Output is JSON on stdout; errors go to stderr with a non-zero exit code (2 for usage errors).',
     '--file - reads a JSON body from stdin.',
     '',
@@ -343,7 +343,7 @@ export async function main(argv: string[], io: MainIo): Promise<number> {
   if (insecure) {
     io.stderr(
       `mm: warning: plain http to hosts that are not loopback is allowed (${INSECURE_HTTP_FLAG} / ${INSECURE_HTTP_ENV}=1); ` +
-      'tokens sent over it can be read on the network\n',
+      'tokens sent over it, and a password typed into a sign-in page served over it, can be read on the network\n',
     )
   }
   try {
