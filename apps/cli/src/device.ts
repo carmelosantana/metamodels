@@ -125,9 +125,11 @@ export async function discover(issuer: string, o: OpDeps = {}): Promise<OpMetada
 }
 
 /**
- * RFC 6750 §2.1 `b64token`: the characters an `Authorization: Bearer` value may hold. A token outside
- * it could not be sent anyway, and `fetch` would quote it in the error it throws, so it is refused
- * here, before it is stored — and the refusal does not quote it either.
+ * RFC 6750 §2.1 `b64token`, the syntax of a Bearer credential. The access token goes into a header,
+ * where a CR, LF or NUL makes `fetch` throw an error quoting the whole value, so a token outside
+ * this set is refused here, before it is stored, and the refusal does not quote it. The refresh
+ * token is held to the same set, which is stricter than RFC 6749's (any printable ASCII); this
+ * OP's refresh tokens are base64url.
  */
 const B64TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/
 

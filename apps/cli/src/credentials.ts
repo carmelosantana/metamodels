@@ -37,9 +37,9 @@ export function credentialsPath(env: NodeJS.ProcessEnv): string {
 /**
  * Refuses a store directory that someone else could swap the file in: one other users can write to
  * (they could rename their own file over ours, or plant the lock), one another user owns, or a
- * symlink (judged as itself, by lstat — its target is not what the 0700 was set on). `mkdirSync`'s
- * mode only applies when it creates the directory, so an existing one is checked on every read.
- * False when the directory does not exist.
+ * symlink (judged as itself, by lstat: where it points is not checked, so it is not trusted).
+ * `mkdirSync`'s mode only applies when it creates the directory, so an existing one is checked on
+ * every read and before the lock is taken. False when the directory does not exist.
  */
 function checkDir(dir: string): boolean {
   let st: Stats
@@ -49,7 +49,7 @@ function checkDir(dir: string): boolean {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw e
   }
-  if (!st.isDirectory()) throw new Error(`${dir} is not a directory; it must be a 0700 directory you own`)
+  if (!st.isDirectory()) throw new Error(`${dir} is not a directory; it must be a directory you own that only you can write to`)
   if ((st.mode & 0o022) !== 0) {
     throw new Error(
       `${dir} is writable by other users (mode ${(st.mode & 0o777).toString(8)}); run \`chmod 700 ${dir}\``,
@@ -147,9 +147,9 @@ export function deleteCredentials(path: string, issuer: string): void {
 export interface LockOptions {
   /**
    * A lock older than this is presumed left by a crashed process and taken over (sooner when the
-   * pid it records no longer exists: see `holderExited`). It must exceed the
-   * longest a holder can legitimately keep it: every OP request made under the lock carries a
-   * timeout well inside this (see `device.ts`).
+   * pid it records no longer exists: see `holderExited`). It must exceed the longest a holder can
+   * legitimately keep it: every OP request made under the lock carries a timeout well inside this
+   * (see `device.ts`).
    */
   staleMs?: number
   pollMs?: number
@@ -167,10 +167,10 @@ export const LOCK_STALE_MS = 60_000
  * True when the lock records the pid of a process that no longer exists — a holder stopped by
  * Ctrl-C or a crash, which never ran its release. Its lock is stale whatever its age.
  *
- * Only ESRCH counts: EPERM is a live process of another user, and a lock with no pid yet (taken a
- * moment ago, not yet written) or any other content falls back to the age check. A holder in another
- * PID namespace, or on another host sharing this directory, reads as exited: best effort, like the
- * age check.
+ * Only ESRCH counts: EPERM is a live process of another user. A lock with no pid yet (taken a
+ * moment ago, not yet written) or any other content, and a pid since reused by a live process, fall
+ * back to the age check. A holder in another PID namespace, or on another host sharing this
+ * directory, reads as exited and loses its lock early: best effort, like the age check.
  */
 function holderExited(lock: string): boolean {
   let text: string
@@ -196,8 +196,9 @@ function sameLock(a: Stats, b: Stats): boolean {
  * refresh token would present it twice, and the second presentation is a reuse that revokes the
  * whole grant.
  *
- * A lock is identified by its inode AND its mtime: a new lock always has a fresh mtime, so a lock
- * created at a reused inode does not pass for the one it replaced.
+ * A lock is identified by its inode AND its mtime: a lock created later at a reused inode carries a
+ * later mtime, so it does not pass for the one it replaced — unless both were created within one
+ * tick of the filesystem's timestamps.
  *
  * Stale-lock takeover is still best effort. The re-check and the unlink are two system calls, so a
  * lock created between them is removed as if it were the stale one, and two waiters can then both

@@ -108,7 +108,7 @@ export async function callApi(
     } catch (e) {
       // A header `fetch` refuses is quoted in the message it throws, and one of these headers holds
       // the access token. So none of the thrown text is passed on — only the system error code of a
-      // network failure (ECONNREFUSED, ENOTFOUND…), which is never a header value.
+      // network failure (ECONNREFUSED, ENOTFOUND…), which names the failure, not a header.
       throw new Error(`could not send the request to ${url.origin}${networkCode(e)}`)
     }
   }
