@@ -7,7 +7,9 @@
 # It checks that every `docker compose` call carries exactly `-p mm-m2-e2e` and no other project flag,
 # whatever the caller passes; that a container in another project aborts the run before any request
 # carries the token; that COMPOSE_PROJECT_NAME, in the caller's environment or in the env file,
-# changes no argument; and that the token reaches curl on stdin only. It also feeds the script
+# changes no argument; and that the token reaches curl on stdin only: it is in no child's argv or
+# environment, nor in the kernel's copy of the environment of the script or of any `$(…)` subshell
+# that starts a child (each fake dumps /proc/$PPID/environ). It also feeds the script
 # flag-shaped, injected and out-of-range arguments, which must be refused before any docker or curl
 # call, and runs the real curl once, against a stub server, with a ~/.curlrc that turns on `verbose`.
 #
@@ -35,6 +37,9 @@ cat >"$work/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 { printf 'docker'; printf ' %q' "$@"; printf '\n'; } >>"$FAKE_LOG/calls.log"
 env >>"$FAKE_LOG/child-env.log"
+# The parent's environment as the kernel shows it (`ps e`): the script, or a subshell of it.
+echo "$PPID" >>"$FAKE_LOG/parent-pids.log"
+tr '\0' '\n' <"/proc/$PPID/environ" >>"$FAKE_LOG/parent-env.log"
 case $1 in
   compose)
     [[ ${FAKE_RUN_FAIL:-0} == 1 ]] && {
@@ -53,6 +58,9 @@ cat >"$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 { printf 'curl'; printf ' %q' "$@"; printf '\n'; } >>"$FAKE_LOG/calls.log"
 env >>"$FAKE_LOG/child-env.log"
+# The parent's environment as the kernel shows it (`ps e`): the script, or a subshell of it.
+echo "$PPID" >>"$FAKE_LOG/parent-pids.log"
+tr '\0' '\n' <"/proc/$PPID/environ" >>"$FAKE_LOG/parent-env.log"
 url=${!#}
 for a in "$@"; do [[ $a == '@-' ]] && cat >>"$FAKE_LOG/curl-stdin.log"; done
 case $url in
@@ -103,6 +111,7 @@ run_case() {
   log="$work/log-$case_name"
   rm -rf "$log"; mkdir -p "$log"
   : >"$log/calls.log"; : >"$log/child-env.log"; : >"$log/curl-stdin.log"
+  : >"$log/parent-env.log"; : >"$log/parent-pids.log"
   tr ' ' '\n' <<<"$statuses" >"$log/statuses"
   set +e
   (cd "$work/cwd" && env PATH="${case_bin:-$work/bin}:$PATH" FAKE_LOG="$log" FAKE_LABEL="$label" \
@@ -148,6 +157,14 @@ check_no_token_leak() {
   else
     ok "the token is in no child's argv or environment"
   fi
+  # Each parent is the script or one of its `$(…)` subshells; more than one pid means both were seen.
+  local parents; parents=$(sort -u "$log/parent-pids.log" | wc -l)
+  if grep -qF "$TOKEN" "$log/parent-env.log"; then
+    fail "the token is in the environment of a parent of docker or curl ($parents distinct parents)"
+  else
+    ok "the token is in no parent's environment ($parents distinct parents: the script and its subshells)"
+  fi
+  ((parents > 1)) || fail "only $parents parent pid seen, so no subshell was checked"
   grep -q '^COMPOSE_PROJECT_NAME=' "$log/child-env.log" \
     && fail "COMPOSE_PROJECT_NAME reached a child" || ok "COMPOSE_PROJECT_NAME reached no child"
 }

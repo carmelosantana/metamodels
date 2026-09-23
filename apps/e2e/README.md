@@ -143,11 +143,14 @@ takes no wrapper and no compose flags, and it runs only in the throwaway compose
   is not this run's. The same goes for an interrupt before `run` returns, which can leave a container
   behind; check what it is before removing it by hand. The name `mm-m2-e2e-aud` is reserved for this
   script.
-- It reads the token from `AUD_ACCESS_TOKEN` into an unexported variable and unsets
-  `AUD_ACCESS_TOKEN` before starting any process, so the token is in no argument list and no child
-  environment. It reaches `curl` on stdin. The script's own process keeps the environment it was
-  started with, so `ps e` on that one PID still shows it. The script prints status codes only, never
-  the token. Do not run it under `bash -x`.
+- It takes the token from `AUD_ACCESS_TOKEN`, and its first act is to re-execute itself without that
+  variable, passing the token on file descriptor 3 (a pipe on bash 5.1 and later; a temporary file
+  before). Unsetting the variable would not be enough: the kernel keeps the environment a process
+  was started with, which `ps e` shows, and every `$(…)` subshell is a fork that shows the same one.
+  Until the re-exec, `ps e` on the script's PID shows the token. After it, the token is in the
+  environment of neither the script's process, nor its subshells, nor `docker` or `curl`, and it is
+  in no argument list. It reaches `curl` on stdin. The script prints status codes only, never the
+  token. Do not run it under `bash -x`.
 - Every `curl` call starts `curl -q -g`. `-q` has to be the first argument to stop curl reading a
   `~/.curlrc`, where `verbose` would print the `Authorization` header. `-g` turns off URL globbing,
   so a URL cannot expand into several and send the token to each.

@@ -18,18 +18,36 @@
 # token is sent, the script reads the started container's `com.docker.compose.project` label and
 # aborts unless it is exactly `mm-m2-e2e`.
 #
-# The token is read from AUD_ACCESS_TOKEN into an unexported variable, and AUD_ACCESS_TOKEN is unset
-# before any child process starts, so the token is in no argument list and no child environment. It
-# reaches curl on stdin and is never printed. This script's own process keeps the environment it was
-# started with (`ps e` on its PID). Do not run this under `bash -x`: that would print it.
+# The token comes from AUD_ACCESS_TOKEN. The script's first act is to re-execute itself without that
+# variable, passing the token on file descriptor 3. Until then, `ps e` on the script's PID shows the
+# token, as it would for any process started with it in its environment. After that, the token is in
+# the environment of neither the script's process, nor its `$(…)` subshells, nor the processes it
+# starts (docker, curl), and it is in no argument list. It reaches curl on stdin and is never
+# printed. Do not run this under `bash -x`: that would print it.
 #
 # See apps/e2e/README.md.
 set -euo pipefail
 
-# First, before any child process: take the token out of the environment.
-aud_token=${AUD_ACCESS_TOKEN:-}
+# First, before anything else: take the token out of this process's environment. `unset` is not
+# enough. The kernel keeps the environment a process was started with (`ps e`, /proc/<pid>/environ),
+# and every `$(…)` subshell is a fork that shows the same one. So the script re-executes itself
+# without AUD_ACCESS_TOKEN and passes the token on file descriptor 3, from a here-string. Bash 5.1
+# and later make that a pipe when it fits in the pipe buffer, as an access token does; older bash
+# uses a temporary file.
+if [[ -v AUD_ACCESS_TOKEN ]]; then
+  aud_token=$AUD_ACCESS_TOKEN
+  unset AUD_ACCESS_TOKEN
+  export -n aud_token
+  export AUD_ISOLATION_TOKEN_ON_FD3=1
+  exec "$BASH" -- "${BASH_SOURCE[0]}" "$@" 3<<<"$aud_token"
+fi
+aud_token=''
+if [[ ${AUD_ISOLATION_TOKEN_ON_FD3:-} == 1 ]]; then
+  IFS= read -r aud_token <&3 || true
+  exec 3<&-
+fi
 export -n aud_token
-unset AUD_ACCESS_TOKEN
+unset AUD_ISOLATION_TOKEN_ON_FD3
 unset COMPOSE_PROJECT_NAME
 
 readonly CONTAINER='mm-m2-e2e-aud'
