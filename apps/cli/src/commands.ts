@@ -20,13 +20,25 @@ export interface CommandSpec {
   action: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string
-  /** OpenAPI query-parameter names; each is the flag `--kebab-case-name`. */
-  query: readonly string[]
+  /** The OpenAPI query parameters it may send; each `name` is the flag `--kebab-case-name`. */
+  query: readonly QueryParam[]
   /** `json`: from --data or --file. `{field}`: one more positional, sent as `{[field]: value}`. */
   body: 'none' | 'json' | { field: string; values: string }
 }
 
-const PAGE = ['limit', 'cursor'] as const
+/**
+ * A query parameter. `required` mirrors the operation's `required` (the parity test holds them
+ * equal) and only shapes `--help`: a missing one is left for the API's 422 to name.
+ */
+export interface QueryParam {
+  name: string
+  required: boolean
+}
+
+const opt = (...names: string[]): QueryParam[] => names.map((name) => ({ name, required: false }))
+const req = (...names: string[]): QueryParam[] => names.map((name) => ({ name, required: true }))
+
+const PAGE = opt('limit', 'cursor')
 
 /**
  * Exactly the routes that exist (spec §3). There is deliberately no `keys delete`: `DELETE /keys/{id}`
@@ -58,21 +70,21 @@ export const COMMANDS: readonly CommandSpec[] = [
   { group: 'keys', action: 'revoke', method: 'POST', path: '/keys/{id}/revoke', query: [], body: 'none' },
   {
     group: 'usage', action: 'matrix', method: 'GET', path: '/usage/matrix',
-    query: ['startBucket', 'endBucket', 'keyId', 'paddockId'], body: 'none',
+    query: [...req('startBucket', 'endBucket'), ...opt('keyId', 'paddockId')], body: 'none',
   },
   {
     group: 'usage', action: 'daily', method: 'GET', path: '/usage/daily',
-    query: ['dim', 'startBucket', 'endBucket', 'keyId', 'paddockId'], body: 'none',
+    query: [...req('dim', 'startBucket', 'endBucket'), ...opt('keyId', 'paddockId')], body: 'none',
   },
   {
     group: 'usage', action: 'top-keys', method: 'GET', path: '/usage/top-keys',
-    query: ['dim', 'startBucket', 'endBucket', 'limit'], body: 'none',
+    query: [...req('dim', 'startBucket', 'endBucket'), ...opt('limit')], body: 'none',
   },
 ]
 
 const kebab = (name: string) => name.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)
 
-const QUERY_FLAGS = [...new Set(COMMANDS.flatMap((c) => c.query))].map((q) => [kebab(q), q] as const)
+const QUERY_FLAGS = [...new Set(COMMANDS.flatMap((c) => c.query.map((q) => q.name)))].map(kebab)
 
 const OPTIONS: ParseArgsOptionsConfig = {
   issuer: { type: 'string' },
@@ -81,7 +93,7 @@ const OPTIONS: ParseArgsOptionsConfig = {
   data: { type: 'string' },
   file: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
-  ...Object.fromEntries(QUERY_FLAGS.map(([flag]) => [flag, { type: 'string' }])),
+  ...Object.fromEntries(QUERY_FLAGS.map((flag) => [flag, { type: 'string' }])),
 }
 
 type Values = Record<string, string | boolean | undefined>
@@ -119,7 +131,7 @@ function usageLine(spec: CommandSpec): string {
   const parts = [`mm ${spec.group} ${spec.action}`, ...pathParams(spec).map((p) => argLabel(spec, p))]
   if (spec.body === 'json') parts.push('(--data JSON | --file PATH)')
   else if (typeof spec.body === 'object') parts.push(`<${spec.body.values}>`)
-  for (const q of spec.query) parts.push(`[--${kebab(q)} VALUE]`)
+  for (const q of spec.query) parts.push(q.required ? `--${kebab(q.name)} VALUE` : `[--${kebab(q.name)} VALUE]`)
   return parts.join(' ')
 }
 
@@ -187,15 +199,15 @@ async function runApi(spec: CommandSpec, rest: string[], values: Values, io: Mai
   const expected = params.length + (typeof spec.body === 'object' ? 1 : 0)
   if (rest.length !== expected) throw new UsageError(`usage: ${usageLine(spec)}`)
   allowOnly(values, [
-    'issuer', 'console', ...(spec.body === 'json' ? ['data', 'file'] : []), ...spec.query.map(kebab),
+    'issuer', 'console', ...(spec.body === 'json' ? ['data', 'file'] : []), ...spec.query.map((q) => kebab(q.name)),
   ], command)
 
   let path = spec.path
   params.forEach((p, i) => { path = path.replace(`{${p}}`, encodeURIComponent(rest[i])) })
   const query: Record<string, string> = {}
-  for (const q of spec.query) {
-    const v = values[kebab(q)]
-    if (typeof v === 'string') query[q] = v
+  for (const { name } of spec.query) {
+    const v = values[kebab(name)]
+    if (typeof v === 'string') query[name] = v
   }
   let body: unknown
   if (spec.body === 'json') body = await readJsonBody(values, io, command)

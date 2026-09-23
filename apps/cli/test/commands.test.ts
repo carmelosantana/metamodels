@@ -244,6 +244,17 @@ describe('main: usage errors exit 2 and send nothing', () => {
     expect(w.stdout()).toContain('mm keys revoke <id>')
     expect(w.stdout()).not.toContain('keys delete')
   })
+
+  test('--help shows required flags without brackets, and optional ones in them', async () => {
+    const w = await world()
+    expect(await w.run('--help')).toBe(0)
+    expect(w.stdout()).toContain(
+      'mm usage daily --dim VALUE --start-bucket VALUE --end-bucket VALUE [--key-id VALUE] [--paddock-id VALUE]\n',
+    )
+    expect(w.stdout()).toContain('mm usage matrix --start-bucket VALUE --end-bucket VALUE [--key-id VALUE] [--paddock-id VALUE]\n')
+    expect(w.stdout()).toContain('mm usage top-keys --dim VALUE --start-bucket VALUE --end-bucket VALUE [--limit VALUE]\n')
+    expect(w.stdout()).toContain('mm flocks list [--limit VALUE] [--cursor VALUE]\n')
+  })
 })
 
 describe('main: login', () => {

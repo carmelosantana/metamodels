@@ -8,7 +8,7 @@ import { COMMANDS } from '../src/commands.js'
  * routes and CI fails when it is stale, so a command that drifts from the API fails here.
  */
 
-interface Operation { operationId: string; parameters?: Array<{ name: string; in: string }>; requestBody?: unknown }
+interface Operation { operationId: string; parameters?: Array<{ name: string; in: string; required?: boolean }>; requestBody?: unknown }
 const doc = JSON.parse(readFileSync(fileURLToPath(new URL('../../../docs/api/openapi.json', import.meta.url)), 'utf8')) as {
   paths: Record<string, Record<string, Operation>>
 }
@@ -26,7 +26,7 @@ describe('CLI commands against docs/api/openapi.json', () => {
     expect(operation('POST', '/keys/{id}/revoke')?.operationId).toBe('revokeKey')
   })
 
-  test.each(COMMANDS.map((c) => [`${c.group} ${c.action}`, c] as const))('%s maps to an operation that exists', (_name, c) => {
+  test.each(COMMANDS.map((c) => [`${c.group} ${c.action}`, c] as const))('%s matches its operation: path, parameters, required flags and body', (_name, c) => {
     const op = operation(c.method, c.path)
     expect(op, `${c.method} ${c.path} is not in the OpenAPI document`).toBeDefined()
     expect(NOT_COMMANDS.has(op!.operationId)).toBe(false)
@@ -36,9 +36,17 @@ describe('CLI commands against docs/api/openapi.json', () => {
     expect(params.filter((p) => p.in === 'path').map((p) => p.name).sort()).toEqual(templated)
     // Every query parameter the command can send is declared.
     const declared = params.filter((p) => p.in === 'query').map((p) => p.name)
-    for (const q of c.query) expect(declared, `${c.group} ${c.action} --${q}`).toContain(q)
+    for (const q of c.query) expect(declared, `${c.group} ${c.action} --${q.name}`).toContain(q.name)
+    // The flags --help shows as required are exactly the operation's required query parameters.
+    const required = params.filter((p) => p.in === 'query' && p.required === true).map((p) => p.name).sort()
+    expect(c.query.filter((q) => q.required).map((q) => q.name).sort(), `${c.group} ${c.action} required`).toEqual(required)
     // A command sends a body exactly when the operation takes one.
     expect(c.body !== 'none', `${c.group} ${c.action} body`).toBe(op!.requestBody !== undefined)
+  })
+
+  test('the document does mark some query parameters required, so the check above can fail', () => {
+    expect(operation('GET', '/usage/daily')!.parameters!.filter((p) => p.required).map((p) => p.name).sort())
+      .toEqual(['dim', 'endBucket', 'startBucket'])
   })
 
   test('no command reaches a DELETE on the keys path', () => {
