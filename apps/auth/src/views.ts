@@ -21,6 +21,7 @@ input{width:100%;margin-bottom:16px;padding:8px 10px;border:1px solid #3a2f28;bo
 button{width:100%;padding:9px 12px;border:0;border-radius:7px;background:#acb965;color:#23260f;font:600 14px ui-sans-serif,system-ui,sans-serif;cursor:pointer}
 button.secondary{margin-top:8px;background:transparent;color:#9a8b7c;border:1px solid #2e2620}
 .code{font:600 22px ui-monospace,monospace;letter-spacing:2px;color:#ece4d6;text-align:center}
+.device{font-size:13px;overflow-wrap:anywhere}
 .error{color:#cf5f4b}
 `
 

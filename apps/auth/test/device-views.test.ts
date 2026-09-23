@@ -72,9 +72,33 @@ describe('renderUserCodePage', () => {
   })
 })
 
+const CLI_DEVICE = { ip: '203.0.113.9', ua: 'metamodels-cli/0.1 (linux; x64)' }
+
 describe('renderDeviceConfirmPage', () => {
+  test('shows where the device request came from, and tells the operator to cancel if it is not theirs', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE)
+    expect(html).toContain('IP address: <strong>203.0.113.9</strong>')
+    expect(html).toContain('User agent: <strong>metamodels-cli/0.1 (linux; x64)</strong>')
+    expect(html).toContain('If this is not your machine, or you did not just start this sign-in yourself, press Cancel.')
+  })
+
+  test('escapes a hostile user agent and IP: the device side is attacker-controlled', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', {
+      ip: '"><img src=x>', ua: '<script>alert(1)</script>',
+    })
+    expect(html).toContain('IP address: <strong>&quot;&gt;&lt;img src=x&gt;</strong>')
+    expect(html).toContain('User agent: <strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong>')
+    expect(html).not.toMatch(/<script|<img/i)
+  })
+
+  test('says so when the device sent no user agent, or the info is not text', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', { ip: 42, ua: undefined })
+    expect(html).toContain('IP address: <strong>unknown</strong>')
+    expect(html).toContain('User agent: <strong>unknown</strong>')
+  })
+
   test('names the client, shows the code, and approves through the provider form', () => {
-    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK')
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE)
     expect(html).toContain(CONFIRM_FORM)
     expect(html).toContain('<strong>MetaModels admin CLI</strong>')
     expect(html).toContain('<p class="code">BCDF-GHJK</p>')
@@ -83,7 +107,7 @@ describe('renderDeviceConfirmPage', () => {
   })
 
   test('escapes a hostile client name and user code', () => {
-    const html = renderDeviceConfirmPage(CONFIRM_FORM, '<img src=x>', '"><script>x</script>')
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, '<img src=x>', '"><script>x</script>', CLI_DEVICE)
     expect(html).toContain('<strong>&lt;img src=x&gt;</strong>')
     expect(html).toContain('<p class="code">&quot;&gt;&lt;script&gt;x&lt;/script&gt;</p>')
     expect(html).not.toContain('<img')
@@ -112,7 +136,7 @@ describe('CSP compatibility', () => {
   const pages = [
     renderUserCodePage(INPUT_FORM),
     renderUserCodePage(INPUT_FORM, { name: 'NotFoundError' }),
-    renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK'),
+    renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE),
     renderSwitchAccountPage('/session/end/confirm', 'abc123'),
   ]
 

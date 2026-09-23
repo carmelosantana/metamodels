@@ -124,6 +124,34 @@ describe('device grant, end to end', () => {
     expect(replay.json.error).toBe('invalid_grant')
   }, T)
 
+  test('the confirm page shows the CLI machine\'s address and user agent, not the approving browser\'s', async () => {
+    op = await startTestOp()
+    // Behind the tunnel: the client's address is the first X-Forwarded-For hop, the proxy's follows.
+    const cli = { 'x-forwarded-for': '203.0.113.9, 10.0.0.2', 'user-agent': 'metamodels-cli/0.1 (linux; x64)' }
+    const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN }, CLI_CLIENT_ID, cli)
+    const da = auth.json as unknown as DeviceAuthorization
+
+    // The browser: another address (the loopback socket, no forwarding header) and undici's own UA.
+    const pages = await approveDevice(op, da)
+    expect(pages.confirm.body).toContain('IP address: <strong>203.0.113.9</strong>')
+    expect(pages.confirm.body).toContain('User agent: <strong>metamodels-cli/0.1 (linux; x64)</strong>')
+    // (The issuer, and so the form action, is on 127.0.0.1 too — hence matching the field itself.)
+    expect(pages.confirm.body).not.toMatch(/<strong>[^<]*127\.0\.0\.1[^<]*<\/strong>/)
+    expect(pages.confirm.body).not.toContain('10.0.0.2')
+    expect(pages.confirm.body).not.toContain('<strong>node</strong>')
+    expect(pages.confirm.body).toContain('press Cancel.')
+  }, T)
+
+  test('a hostile CLI user agent is shown escaped on the confirm page', async () => {
+    op = await startTestOp()
+    const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN }, CLI_CLIENT_ID, {
+      'user-agent': '"><script>alert(1)</script>',
+    })
+    const pages = await approveDevice(op, auth.json as unknown as DeviceAuthorization)
+    expect(pages.confirm.body).toContain('User agent: <strong>&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;</strong>')
+    expect(pages.confirm.body).not.toMatch(/<script/i)
+  }, T)
+
   test('Cancel on the confirm page denies the device: the CLI\'s poll gets access_denied', async () => {
     op = await startTestOp()
     const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN })

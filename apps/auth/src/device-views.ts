@@ -66,13 +66,32 @@ ${error}${withPrefilledCode(withoutInlineHandlers(form), prefill)}
 }
 
 /**
- * `features.deviceFlow.userCodeConfirmSource`: the operator checks the code matches their terminal
- * and approves. Approving continues to sign-in; Cancel marks the device code denied.
+ * Where the device authorization request came from — the machine running the CLI, not the browser
+ * approving it. oidc-provider's default `features.deviceFlow.deviceInfo` records these at
+ * `/device/auth`: `ctx.ip` (with `provider.proxy = true`, the first X-Forwarded-For hop) and the
+ * User-Agent header. Both are sent by the requester, so neither is trusted or proof of anything.
  */
-export function renderDeviceConfirmPage(form: string, clientName: string, userCode: string): string {
+export interface DeviceInfo {
+  ip?: unknown
+  ua?: unknown
+}
+
+function shown(value: unknown): string {
+  return typeof value === 'string' && value !== '' ? escapeHtml(value) : 'unknown'
+}
+
+/**
+ * `features.deviceFlow.userCodeConfirmSource`: the operator checks the code matches their terminal
+ * and where the request came from, then approves. Approving continues to sign-in; Cancel marks the
+ * device code denied.
+ */
+export function renderDeviceConfirmPage(form: string, clientName: string, userCode: string, device: DeviceInfo): string {
   return page('Approve sign-in', `<h1>Approve this sign-in?</h1>
 <p><strong>${escapeHtml(clientName)}</strong> is asking to act as you. Approve only if this code matches the one in your terminal:</p>
 <p class="code">${escapeHtml(userCode)}</p>
+<p>The request came from:</p>
+<p class="device">IP address: <strong>${shown(device.ip)}</strong><br>User agent: <strong>${shown(device.ua)}</strong></p>
+<p>If this is not your machine, or you did not just start this sign-in yourself, press Cancel. Someone may be trying to get into your account.</p>
 ${withoutInlineHandlers(form)}
 <button autofocus type="submit" form="op.deviceConfirmForm">Approve</button>
 <button class="secondary" type="submit" form="op.deviceConfirmForm" name="abort" value="yes">Cancel</button>`)

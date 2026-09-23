@@ -120,9 +120,10 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
           ctx.type = 'html'
           ctx.body = renderUserCodePage(form, err, prefilledUserCode(ctx))
         },
-        userCodeConfirmSource: (ctx, form, client, _deviceInfo, userCode) => {
+        // deviceInfo is the library default: the CLI's ip and user agent, taken at /device/auth.
+        userCodeConfirmSource: (ctx, form, client, deviceInfo, userCode) => {
           ctx.type = 'html'
-          ctx.body = renderDeviceConfirmPage(form, client.clientName ?? client.clientId, userCode)
+          ctx.body = renderDeviceConfirmPage(form, client.clientName ?? client.clientId, userCode, deviceInfo)
         },
         successSource: (ctx) => {
           ctx.type = 'html'
