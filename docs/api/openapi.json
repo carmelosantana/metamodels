@@ -158,14 +158,15 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
                       },
                       {
                         "type": "null"
                       }
                     ],
                     "writeOnly": true,
-                    "description": "The credential to send upstream. **Write-only**: sealed at rest and never returned — responses carry `hasUpstreamAuth` instead. Omit it, or send `null`, for a flock that needs none."
+                    "description": "The credential to send upstream. A **bare token**: every call MetaModels makes to the flock sends it as `Authorization: Bearer <token>`. Send `abc`, not `Bearer abc`; a value with a scheme, whitespace or a control character is a 422. **Write-only**: sealed at rest and never returned — responses carry `hasUpstreamAuth` instead. Omit it, or send `null`, for a flock that needs none."
                   },
                   "tlsTrust": {
                     "type": "boolean"
@@ -326,14 +327,15 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
                       },
                       {
                         "type": "null"
                       }
                     ],
                     "writeOnly": true,
-                    "description": "The credential to send upstream. **Write-only**: sealed at rest and never returned. Omitted, the stored credential is left alone — unlike every other field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a string replaces it. Omitting it while changing `baseUrl` or enabling `tlsTrust` is a 409."
+                    "description": "The credential to send upstream. A **bare token**: every call MetaModels makes to the flock sends it as `Authorization: Bearer <token>`. Send `abc`, not `Bearer abc`; a value with a scheme, whitespace or a control character is a 422. **Write-only**: sealed at rest and never returned. Omitted, the stored credential is left alone — unlike every other field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a string replaces it. Omitting it while changing `baseUrl` or enabling `tlsTrust` is a 409."
                   },
                   "tlsTrust": {
                     "type": "boolean"

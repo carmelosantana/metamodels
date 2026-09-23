@@ -256,6 +256,11 @@ is sealed at rest and no response returns it; a flock carries `hasUpstreamAuth` 
 string replaces it. Changing `baseUrl`, or turning `tlsTrust` on, while a credential is stored and
 `upstreamAuth` is omitted is a `409`: send the credential again, or `null`, in the same request.
 
+`upstreamAuth` is a bare token. Every call MetaModels makes to your AI server sends it as
+`Authorization: Bearer <token>`, so send `abc`, not `Bearer abc`. A value with a scheme, whitespace or
+a control character is a `422`. A credential stored before this rule with a `Bearer ` prefix still
+works: the prefix is dropped before sending, so it goes upstream once.
+
 ### Why keys are revoked, not deleted
 
 An API key's usage history, which is what you bill from, is stored against the key. Deleting the key
