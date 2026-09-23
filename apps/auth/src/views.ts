@@ -20,6 +20,7 @@ label{display:block;margin-bottom:6px;font-size:13px}
 input{width:100%;margin-bottom:16px;padding:8px 10px;border:1px solid #3a2f28;border-radius:7px;background:#141110;color:#ece4d6;font:inherit}
 button{width:100%;padding:9px 12px;border:0;border-radius:7px;background:#acb965;color:#23260f;font:600 14px ui-sans-serif,system-ui,sans-serif;cursor:pointer}
 button.secondary{margin-top:8px;background:transparent;color:#9a8b7c;border:1px solid #2e2620}
+.code{font:600 22px ui-monospace,monospace;letter-spacing:2px;color:#ece4d6;text-align:center}
 .error{color:#cf5f4b}
 `
 
@@ -43,7 +44,8 @@ export function authCsp(redirectOrigins: readonly string[]): string {
   ].join('; ')
 }
 
-function page(title: string, body: string): string {
+/** The shared page shell: the auth stylesheet, no script. `body` is inserted as-is — escape before. */
+export function page(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>

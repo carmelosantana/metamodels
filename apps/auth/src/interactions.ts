@@ -65,7 +65,7 @@ export function interactionMiddleware(deps: InteractionDeps): Middleware {
       if (err instanceof errors.SessionNotFound) {
         html(ctx, 400, renderMessagePage(
           'Sign-in expired',
-          'This sign-in attempt has expired or was already completed. Go back to the console and sign in again.',
+          'This sign-in attempt has expired or was already completed. Start the sign-in again from the console or your terminal.',
         ))
         return
       }

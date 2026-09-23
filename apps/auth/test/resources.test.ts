@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { jwtVerify } from 'jose'
-import { adminApiResource, CAPABILITIES, CONSOLE_CLIENT_ID } from '@metamodels/schema'
-import { accessTokenTtl, resourceServers } from '../src/resources.js'
+import { errors, type ResourceServer } from 'oidc-provider'
+import { adminApiResource, CAPABILITIES, CLI_CLIENT_ID, CONSOLE_CLIENT_ID } from '@metamodels/schema'
+import {
+  accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers,
+} from '../src/resources.js'
 import { seedUser } from './helpers/db.js'
 import { authorize, CONSOLE_URL, exchangeCode, opJwks, startTestOp, type TestOp } from './helpers/flow.js'
 
@@ -70,6 +73,77 @@ describe('resource servers', () => {
     const token = await exchangeCode(op!, out.url.searchParams.get('code')!, out.verifier)
     expect(token.status).toBe(200)
     expect(String(token.json.access_token).split('.')).not.toHaveLength(3)
+  }, T)
+})
+
+/**
+ * The gate. `getResourceServerInfo` is the only place oidc-provider asks "may THIS client have a
+ * token for THAT resource" — at the authorization, device-authorization and token endpoints, and on
+ * every refresh. Each denial below is paired with an allowed call of the same shape, so a gate that
+ * refuses everything cannot pass.
+ */
+describe('per-client resource gating', () => {
+  const OTHER = 'http://paddock.test/mcp'
+  const servers: ReadonlyMap<string, ResourceServer> = new Map([
+    ...resourceServers(CONSOLE_URL),
+    [OTHER, { scope: 'read', accessTokenFormat: 'jwt' }],
+  ])
+  const get = makeGetResourceServerInfo(servers, new Map([
+    [CONSOLE_CLIENT_ID, new Set([ADMIN])],
+    [CLI_CLIENT_ID, new Set([ADMIN, OTHER])],
+  ]))
+  const client = (clientId: string) => ({ clientId })
+
+  test('a known client gets a resource it is allowed', async () => {
+    await expect(get({}, ADMIN, client(CONSOLE_CLIENT_ID))).resolves.toBe(servers.get(ADMIN))
+    await expect(get({}, ADMIN, client(CLI_CLIENT_ID))).resolves.toBe(servers.get(ADMIN))
+    await expect(get({}, OTHER, client(CLI_CLIENT_ID))).resolves.toBe(servers.get(OTHER))
+  })
+
+  test('an unknown client is refused a resource a known client gets', async () => {
+    await expect(get({}, ADMIN, client(CONSOLE_CLIENT_ID))).resolves.toBeDefined()
+    await expect(get({}, ADMIN, client('someone-else'))).rejects.toThrow(errors.InvalidTarget)
+  })
+
+  test('a known client is refused a declared resource outside its own set', async () => {
+    await expect(get({}, OTHER, client(CLI_CLIENT_ID))).resolves.toBeDefined()
+    await expect(get({}, OTHER, client(CONSOLE_CLIENT_ID))).rejects.toThrow(errors.InvalidTarget)
+  })
+
+  test('an undeclared resource is refused even to a client that lists it', async () => {
+    const lax = makeGetResourceServerInfo(servers, new Map([[CLI_CLIENT_ID, new Set(['http://ghost.test/api', ADMIN])]]))
+    await expect(lax({}, ADMIN, client(CLI_CLIENT_ID))).resolves.toBeDefined()
+    await expect(lax({}, 'http://ghost.test/api', client(CLI_CLIENT_ID))).rejects.toThrow(errors.InvalidTarget)
+  })
+
+  test('the production map lets exactly the console and the CLI ask for the admin API', () => {
+    const allowed = resourcesByClient(CONSOLE_URL)
+    expect([...allowed.keys()].sort()).toEqual([CLI_CLIENT_ID, CONSOLE_CLIENT_ID].sort())
+    expect([...allowed.get(CONSOLE_CLIENT_ID)!]).toEqual([ADMIN])
+    expect([...allowed.get(CLI_CLIENT_ID)!]).toEqual([ADMIN])
+  })
+
+  test('through the real OP: a registered but ungranted client is refused the admin API', async () => {
+    op = await startTestOp({
+      extraClients: [{
+        client_id: 'third-party',
+        client_secret: 'third-party-secret-0123',
+        redirect_uris: ['http://third.test/cb'],
+        grant_types: ['authorization_code'],
+        response_types: ['code'],
+      }],
+    })
+    // Same request shape, the console: allowed — it reaches the login form rather than an error.
+    const control = await authorize(op, { scope: 'openid read', extra: { resource: ADMIN } })
+    if (control.kind !== 'page') throw new Error(`expected the console to reach login, got ${control.url.href}`)
+    expect(control.body).toContain('<form method="post"')
+
+    const out = await authorize(op, {
+      clientId: 'third-party', redirectUri: 'http://third.test/cb', scope: 'openid read', extra: { resource: ADMIN },
+    })
+    if (out.kind !== 'redirect') throw new Error(`expected an error redirect to the client, got ${out.status}`)
+    expect(out.url.searchParams.get('error')).toBe('invalid_target')
+    expect(out.url.searchParams.get('code')).toBeNull()
   }, T)
 })
 

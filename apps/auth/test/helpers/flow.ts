@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createLocalJWKSet, type JSONWebKeySet } from 'jose'
 import type { ClientMetadata } from 'oidc-provider'
 import type { AuthConfig } from '../../src/config.js'
-import { CONSOLE_CLIENT_ID } from '@metamodels/schema'
+import { CLI_CLIENT_ID, CONSOLE_CLIENT_ID } from '@metamodels/schema'
 import { createProvider } from '../../src/provider.js'
 import { makeDb, type TestDb } from './db.js'
 
@@ -166,4 +166,104 @@ export async function exchangeCode(
 
 export async function opJwks(op: TestOp) {
   return createLocalJWKSet((await (await fetch(`${op.issuer}/jwks`)).json()) as JSONWebKeySet)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The device authorization grant (RFC 8628), driven the way the admin CLI and an operator's
+// browser drive it: the CLI starts it and polls, the browser enters the code, approves and signs in.
+// ---------------------------------------------------------------------------------------------
+
+export const DEVICE_CODE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+
+export interface DeviceAuthorization {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete: string
+  expires_in: number
+  interval?: number
+}
+
+async function formPost(url: string, fields: Record<string, string>): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(fields).toString(),
+  })
+  return { status: res.status, json: (await res.json()) as Record<string, unknown> }
+}
+
+/** The CLI's first call: POST /device/auth as the public CLI client. */
+export async function deviceAuthorization(
+  op: TestOp, fields: Record<string, string>, clientId = CLI_CLIENT_ID,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  return formPost(`${op.issuer}/device/auth`, { client_id: clientId, ...fields })
+}
+
+/** The CLI's poll: the device_code grant at the token endpoint, no client authentication. */
+export function deviceToken(op: TestOp, deviceCode: string, extra: Record<string, string> = {}) {
+  return formPost(`${op.issuer}/token`, { grant_type: DEVICE_CODE_GRANT, device_code: deviceCode, client_id: CLI_CLIENT_ID, ...extra })
+}
+
+/** The CLI's refresh, as the public CLI client. */
+export function refreshGrant(op: TestOp, refreshToken: string, extra: Record<string, string> = {}) {
+  return formPost(`${op.issuer}/token`, { grant_type: 'refresh_token', refresh_token: refreshToken, client_id: CLI_CLIENT_ID, ...extra })
+}
+
+/** Every `<input type="hidden">` on a page, by name. */
+export function hiddenFields(body: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const m of body.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"\/?>/g)) out[m[1]] = m[2]
+  return out
+}
+
+export interface DevicePages {
+  input: { status: number; body: string; csp: string | null }
+  confirm: { status: number; body: string; csp: string | null }
+  final: { status: number; body: string }
+  jar: CookieJar
+}
+
+/**
+ * The browser half: open the verification page, type the user code, press Approve on the confirm
+ * page, then sign in (when `email` is given) and follow redirects to the page the flow ends on.
+ */
+export async function approveDevice(
+  op: TestOp, auth: DeviceAuthorization, o: { email?: string; password?: string; jar?: CookieJar } = {},
+): Promise<DevicePages> {
+  const jar = o.jar ?? new CookieJar()
+  const form = { 'content-type': 'application/x-www-form-urlencoded' }
+
+  const inputRes = await send(jar, auth.verification_uri)
+  const input = { status: inputRes.status, body: await inputRes.text(), csp: inputRes.headers.get('content-security-policy') }
+  const action = new URL(/<form id="op\.deviceInputForm"[^>]* action="([^"]+)"/.exec(input.body)?.[1] ?? '/device', op.issuer).href
+
+  const confirmRes = await send(jar, action, {
+    method: 'POST', headers: form,
+    body: new URLSearchParams({ xsrf: hiddenFields(input.body).xsrf ?? '', user_code: auth.user_code }).toString(),
+  })
+  const confirm = { status: confirmRes.status, body: await confirmRes.text(), csp: confirmRes.headers.get('content-security-policy') }
+
+  let res = await send(jar, action, {
+    method: 'POST', headers: form, body: new URLSearchParams(hiddenFields(confirm.body)).toString(),
+  })
+  let submitted = false
+  for (let hop = 0; hop < 12; hop++) {
+    if (res.status >= 300 && res.status < 400) {
+      res = await send(jar, new URL(res.headers.get('location')!, op.issuer).href)
+      continue
+    }
+    const body = await res.text()
+    const login = /<form method="post" action="([^"]+\/login)">/.exec(body)?.[1]
+    if (login && !submitted && o.email !== undefined) {
+      submitted = true
+      res = await send(jar, new URL(login, op.issuer).href, {
+        method: 'POST', headers: form,
+        body: new URLSearchParams({ email: o.email, password: o.password ?? '' }).toString(),
+      })
+      continue
+    }
+    return { input, confirm, final: { status: res.status, body }, jar }
+  }
+  throw new Error('approveDevice(): too many redirects')
 }
