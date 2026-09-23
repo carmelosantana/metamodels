@@ -58,9 +58,10 @@ export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.Defau
  *
  * A device approval (`DEVICE_APPROVAL_ROUTES`) skips the session's grant, so every approval starts
  * from an empty grant: the consent prompt then lists every scope the device asked for, and
- * `consentFor` saves them in a new grant. (RFC 8628: each device authorization is its own. A shared
- * grant would let revoking one machine's refresh token sign every machine approved in that browser
- * out.) The consent step's own grant is still taken: oidc-provider then records it as the session's
+ * `consentFor` saves them in a new grant. One grant per approval is this project's decision, not
+ * something RFC 8628 asks for: revoking a refresh token revokes its grant, so a grant shared by
+ * every machine approved in one browser would let signing one machine out sign them all out. The
+ * consent step's own grant is still taken: oidc-provider then records it as the session's
  * grant for the client, and binds the device code to that. The session so points at the newest
  * device grant. An older one is not revoked; it lives on for the refresh tokens issued under it.
  *
@@ -68,7 +69,7 @@ export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.Defau
  */
 export async function loadExistingGrant(ctx: KoaContextWithOIDC): Promise<Grant | undefined> {
   const grantId = ctx.oidc.result?.consent?.grantId
-    ?? (DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) ? undefined : ctx.oidc.session!.grantIdFor(ctx.oidc.client!.clientId))
+    || (DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) ? undefined : ctx.oidc.session!.grantIdFor(ctx.oidc.client!.clientId))
   return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined
 }
 
