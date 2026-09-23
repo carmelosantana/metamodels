@@ -72,6 +72,12 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
+/** `: ECONNREFUSED` for a `fetch failed` whose cause carries a system error code, else nothing. */
+function networkCode(e: unknown): string {
+  const code = e instanceof Error && e.cause instanceof Error ? (e.cause as NodeJS.ErrnoException).code : undefined
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `: ${code}` : ''
+}
+
 /**
  * One admin-API call. Authenticates with `Authorization: Bearer` and nothing else — never a cookie:
  * the API answers a bearer that arrives with a session cookie with 400, and this client keeps no
@@ -88,15 +94,22 @@ export async function callApi(
   const url = new URL(`${consoleUrl}/api/admin/v1${req.path}`)
   for (const [k, v] of Object.entries(req.query ?? {})) url.searchParams.set(k, v)
 
-  const send = (cred: StoredCredential) => {
+  const send = async (cred: StoredCredential) => {
     const headers: Record<string, string> = { authorization: `Bearer ${cred.accessToken}`, accept: 'application/json' }
     if (req.body !== undefined) headers['content-type'] = 'application/json'
-    return fetchImpl(url, {
-      method: req.method,
-      headers,
-      body: req.body === undefined ? undefined : JSON.stringify(req.body),
-      redirect: 'manual',
-    })
+    try {
+      return await fetchImpl(url, {
+        method: req.method,
+        headers,
+        body: req.body === undefined ? undefined : JSON.stringify(req.body),
+        redirect: 'manual',
+      })
+    } catch (e) {
+      // A header `fetch` refuses is quoted in the message it throws, and one of these headers holds
+      // the access token. So none of the thrown text is passed on — only the system error code of a
+      // network failure (ECONNREFUSED, ENOTFOUND…), which is never a header value.
+      throw new Error(`could not send the request to ${url.origin}${networkCode(e)}`)
+    }
   }
 
   const first = session.current()

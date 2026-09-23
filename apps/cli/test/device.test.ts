@@ -260,3 +260,31 @@ describe('redirects from the OP are not followed', () => {
     expect(other.requests).toEqual([])
   })
 })
+
+describe('a malformed token from the OP is refused before it is stored', () => {
+  // RFC 6750 §2.1 b64token: what a Bearer header can carry. CR, LF and NUL are not in it.
+  test.each([
+    ['an access token with a newline', { access_token: 'at-SECRET\ninjected' }],
+    ['an access token with a NUL', { access_token: 'at-SECRET\u0000tail' }],
+    ['an access token with a space', { access_token: 'at-SECRET tail' }],
+    ['a refresh token with a CR', { refresh_token: 'rt-SECRET\rtail' }],
+    ['an empty access token', { access_token: '' }],
+  ])('%s', async (_name, over) => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 200, json: { ...TOKEN, ...over } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, fakeDeps()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/malformed/)
+    expect((err as Error).message).not.toMatch(/SECRET|tail|injected/)
+  })
+
+  test('a well-formed JWT and an opaque token pass', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_A~+/=='
+    stub.on('POST /token', () => ({ status: 200, json: { ...TOKEN, access_token: jwt, refresh_token: 'Zm9v_bar-baz' } }))
+    const cred = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, fakeDeps())
+    expect(cred).toMatchObject({ accessToken: jwt, refreshToken: 'Zm9v_bar-baz' })
+  })
+})

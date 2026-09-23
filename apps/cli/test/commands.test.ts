@@ -177,8 +177,18 @@ describe('main: API commands', () => {
     w.signIn({ resource: adminApiResource(gone.url) })
     const io = { ...w.io, env: { ...w.env, METAMODELS_CONSOLE_URL: gone.url } }
     expect(await main(['flocks', 'list'], io)).toBe(1)
-    expect(w.stderr()).toMatch(/fetch failed: .*ECONNREFUSED/)
+    expect(w.stderr()).toMatch(/could not send the request to .*: ECONNREFUSED/)
     expect(w.stderr()).not.toContain('at-1')
+  })
+
+  test('a stored token the Headers API rejects never reaches stderr', async () => {
+    const w = await world()
+    w.signIn({ accessToken: 'eyJSECRET\u0000tail' })
+    w.api.on('GET /api/admin/v1/flocks', () => ok([]))
+    expect(await w.run('flocks', 'list')).toBe(1)
+    expect(w.stderr()).toContain(`mm: could not send the request to ${w.api.url}`)
+    expect(w.stderr()).not.toMatch(/SECRET|tail|Bearer/)
+    expect(w.api.requests).toHaveLength(0)
   })
 
   test('refuses to send a stored token to a console it was not issued for', async () => {

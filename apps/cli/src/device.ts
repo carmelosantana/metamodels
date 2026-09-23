@@ -113,12 +113,23 @@ export async function discover(issuer: string, o: OpDeps = {}): Promise<OpMetada
   }
 }
 
+/**
+ * RFC 6750 §2.1 `b64token`: the characters an `Authorization: Bearer` value may hold. A token outside
+ * it could not be sent anyway, and `fetch` would quote it in the error it throws, so it is refused
+ * here, before it is stored — and the refusal does not quote it either.
+ */
+const B64TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/
+
 /** A token-endpoint success as a credential. `previousRefresh` is kept only if no successor came back. */
 function toCredential(
   issuer: string, resource: string, json: Record<string, unknown>, now: number, previousRefresh?: string,
 ): StoredCredential {
   if (typeof json.access_token !== 'string' || typeof json.expires_in !== 'number') {
     throw new Error('the token endpoint answered without an access token')
+  }
+  if (!B64TOKEN.test(json.access_token)) throw new Error('the token endpoint answered with a malformed access token')
+  if (json.refresh_token !== undefined && (typeof json.refresh_token !== 'string' || !B64TOKEN.test(json.refresh_token))) {
+    throw new Error('the token endpoint answered with a malformed refresh token')
   }
   // A rotating OP (ours) always returns a successor, and the presented token is then spent: store
   // the new one. RFC 6749 §6 keeps the old one only when no new one is issued.
