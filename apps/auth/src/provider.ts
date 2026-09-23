@@ -8,6 +8,7 @@ import { interactionMiddleware } from './interactions.js'
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
 import { accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers } from './resources.js'
+import { DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, prefilledUserCode } from './device-middleware.js'
 import { renderDeviceConfirmPage, renderUserCodePage } from './device-views.js'
 import { authCsp, renderLogoutPage, renderMessagePage } from './views.js'
 
@@ -97,6 +98,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // OAuth 2.1: PKCE for every client, confidential ones included.
     pkce: { required: () => true },
     interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
+    // The library default, named so devicePrefillMiddleware matches the same path.
+    routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
       devInteractions: { enabled: false },
       resourceIndicators: {
@@ -110,7 +113,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
         enabled: true,
         userCodeInputSource: (ctx, form, _out, err) => {
           ctx.type = 'html'
-          ctx.body = renderUserCodePage(form, err)
+          ctx.body = renderUserCodePage(form, err, prefilledUserCode(ctx))
         },
         userCodeConfirmSource: (ctx, form, client, _deviceInfo, userCode) => {
           ctx.type = 'html'
@@ -175,5 +178,6 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     firstPartyClientIds: new Set([CONSOLE_CLIENT_ID, CLI_CLIENT_ID]),
     csp: authCsp([new URL(cfg.consoleUrl).origin]),
   }))
+  provider.use(devicePrefillMiddleware())
   return provider
 }

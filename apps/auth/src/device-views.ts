@@ -5,9 +5,11 @@ import { escapeHtml, page } from './views.js'
  * the sign-in pages: no script, the one stylesheet.
  *
  * `form` is oidc-provider's own form (method, action, xsrf token and user code) — trusted library
- * output, inserted verbatim like the logout form, and submitted by the buttons below via its id.
- * One exception: the input form carries an inline `onfocus` handler, which `default-src 'none'`
- * would block anyway; it is removed so the page carries no inline script at all.
+ * output, inserted like the logout form, and submitted by the buttons below via its id. Two changes
+ * are made to the input form only. Its inline `onfocus` handler is removed: `default-src 'none'`
+ * would block it anyway, and removing it keeps the page free of inline script. A code prefilled from
+ * `verification_uri_complete` is added, escaped, as the input's value (after the handler is removed,
+ * so the removal cannot rewrite the code).
  */
 function withoutInlineHandlers(form: string): string {
   return form.replace(/\s+on[a-z]+="[^"]*"/gi, '')
@@ -39,13 +41,27 @@ function userCodeError(err: UserCodeError | undefined): string | undefined {
   return 'Something went wrong. Start the sign-in again from your terminal.'
 }
 
-/** `features.deviceFlow.userCodeInputSource`: where the operator types the code the CLI printed. */
-export function renderUserCodePage(form: string, err?: UserCodeError): string {
+/**
+ * Put `code` into the provider form's visible user_code input. The code comes from a URL anyone can
+ * send, so it is escaped like every other value on these pages. The form is otherwise untouched:
+ * its xsrf token and action stay the provider's, so Continue goes through the normal POST.
+ */
+function withPrefilledCode(form: string, code: string | undefined): string {
+  if (!code) return form
+  return form.replace(/(<input\s[^>]*?)\bname="user_code"/, `$1name="user_code" value="${escapeHtml(code)}"`)
+}
+
+/**
+ * `features.deviceFlow.userCodeInputSource`: where the operator types the code the CLI printed.
+ * `prefill` is the code from `verification_uri_complete` (`/device?user_code=…`), shown filled in
+ * for the operator to check and submit with Continue.
+ */
+export function renderUserCodePage(form: string, err?: UserCodeError, prefill?: string): string {
   const message = userCodeError(err)
   const error = message ? `<p class="error" role="alert">${escapeHtml(message)}</p>\n` : ''
   return page('Connect the CLI', `<h1>Connect the MetaModels CLI</h1>
 <p>Enter the code shown in your terminal.</p>
-${error}${withoutInlineHandlers(form)}
+${error}${withPrefilledCode(withoutInlineHandlers(form), prefill)}
 <button type="submit" form="op.deviceInputForm">Continue</button>`)
 }
 

@@ -23,6 +23,33 @@ describe('renderUserCodePage', () => {
     expect(html).not.toContain('role="alert"')
   })
 
+  test('prefills the code from verification_uri_complete into the provider\'s own input', () => {
+    const html = renderUserCodePage(INPUT_FORM, undefined, 'BCDF-GHJK')
+    expect(html).toContain('type="text" name="user_code" value="BCDF-GHJK" placeholder="Enter code"')
+    // Still the provider's form: its xsrf token rides along, and Continue submits it.
+    expect(html).toContain('name="xsrf" value="t0ken"')
+    expect(html).toContain('<button type="submit" form="op.deviceInputForm">Continue</button>')
+  })
+
+  test('escapes a hostile prefilled code: it comes from a URL anyone can send', () => {
+    const hostile = `"><script>alert('x')</script><input value="`
+    const html = renderUserCodePage(INPUT_FORM, undefined, hostile)
+    expect(html).toContain('name="user_code" value="&quot;&gt;&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;&lt;input value=&quot;" placeholder')
+    expect(html).not.toMatch(/<script/i)
+    // Exactly one user_code input: nothing broke out of the attribute.
+    expect(html.match(/name="user_code"/g)).toHaveLength(1)
+  })
+
+  test('a prefilled code that looks like a handler is kept as text, not reshaped by the handler strip', () => {
+    const html = renderUserCodePage(INPUT_FORM, undefined, 'x onfocus=')
+    expect(html).toContain('name="user_code" value="x onfocus=" placeholder="Enter code" autofocus autocomplete="off">')
+  })
+
+  test('without a prefill the input is left empty', () => {
+    expect(renderUserCodePage(INPUT_FORM)).toContain('type="text" name="user_code" placeholder="Enter code"')
+    expect(renderUserCodePage(INPUT_FORM, undefined, '')).toContain('type="text" name="user_code" placeholder="Enter code"')
+  })
+
   test('says why a code was refused', () => {
     expect(renderUserCodePage(INPUT_FORM, { name: 'NotFoundError', userCode: 'X' }))
       .toContain('<p class="error" role="alert">That code is not valid. Check your terminal and try again.</p>')

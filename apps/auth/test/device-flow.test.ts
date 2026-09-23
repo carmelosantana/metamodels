@@ -8,8 +8,8 @@ import {
 } from '../src/provider.js'
 import { seedUser } from './helpers/db.js'
 import {
-  approveDevice, authorize, CONSOLE_SECRET, CONSOLE_URL, deviceAuthorization, deviceToken, exchangeCode, opJwks,
-  refreshGrant, startTestOp, type DeviceAuthorization, type TestOp,
+  approveDevice, authorize, CONSOLE_SECRET, CONSOLE_URL, CookieJar, deviceAuthorization, deviceToken, exchangeCode,
+  hiddenFields, opJwks, refreshGrant, send, startTestOp, type DeviceAuthorization, type TestOp,
 } from './helpers/flow.js'
 
 const T = 30_000
@@ -148,6 +148,73 @@ describe('device grant, end to end', () => {
     expect(pages.confirm.body).toContain('That code is not valid.')
     expect(pages.confirm.body).toContain('<link rel="stylesheet" href="/assets/auth.css">')
     expect(pages.confirm.body).not.toContain('Approve</button>')
+  }, T)
+})
+
+describe('verification_uri_complete', () => {
+  const form = { 'content-type': 'application/x-www-form-urlencoded' }
+  /** The value of the page's visible user_code input, as a browser would submit it. */
+  const typedCode = (body: string) =>
+    /<input\s[^>]*name="user_code" value="([^"]*)"/.exec(body)?.[1]
+
+  test('opens our entry page with the code filled in; Continue reaches the confirm page', async () => {
+    op = await startTestOp()
+    const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN })
+    const da = auth.json as unknown as DeviceAuthorization
+    expect(da.verification_uri_complete).toBe(`${op.issuer}/device?user_code=${encodeURIComponent(da.user_code)}`)
+
+    const jar = new CookieJar()
+    const res = await send(jar, da.verification_uri_complete)
+    const body = await res.text()
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-security-policy')).toContain("default-src 'none'")
+    expect(body).toContain('<h1>Connect the MetaModels CLI</h1>')
+    expect(typedCode(body)).toBe(da.user_code)
+    expect(body).toContain('form="op.deviceInputForm">Continue</button>')
+    expect(body).not.toMatch(/<script|\son[a-z]+=/i)
+
+    // Continue: the provider's own form, xsrf included, posted to its own code-verification route.
+    const action = /<form id="op\.deviceInputForm"[^>]* action="([^"]+)"/.exec(body)![1]
+    const fields = hiddenFields(body)
+    expect(fields.xsrf).toMatch(/^[0-9a-f]{48}$/)
+    const confirm = await send(jar, new URL(action, op.issuer).href, {
+      method: 'POST', headers: form,
+      body: new URLSearchParams({ ...fields, user_code: typedCode(body)! }).toString(),
+    })
+    const confirmBody = await confirm.text()
+    expect(confirm.status).toBe(200)
+    expect(confirmBody).toContain('<h1>Approve this sign-in?</h1>')
+    expect(confirmBody).toContain(`<p class="code">${da.user_code}</p>`)
+
+    // The xsrf check still guards that POST: the same submission without the token is refused.
+    const forged = await send(jar, new URL(action, op.issuer).href, {
+      method: 'POST', headers: form, body: new URLSearchParams({ user_code: da.user_code }).toString(),
+    })
+    expect(forged.status).toBe(400)
+    expect(await forged.text()).not.toContain('<h1>Approve this sign-in?</h1>')
+  }, T)
+
+  test('a hostile user_code is shown escaped, never as markup', async () => {
+    op = await startTestOp()
+    const hostile = `"><script>alert(1)</script>`
+    const res = await send(new CookieJar(), `${op.issuer}/device?user_code=${encodeURIComponent(hostile)}`)
+    const body = await res.text()
+    expect(res.status).toBe(200)
+    expect(typedCode(body)).toBe('&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(body).not.toMatch(/<script/i)
+  }, T)
+
+  test('plain /device is unchanged: the empty entry page', async () => {
+    op = await startTestOp()
+    const res = await send(new CookieJar(), `${op.issuer}/device`)
+    const body = await res.text()
+    expect(res.status).toBe(200)
+    expect(body).toContain('<h1>Connect the MetaModels CLI</h1>')
+    expect(body).toContain('type="text" name="user_code" placeholder="Enter code"')
+    expect(typedCode(body)).toBeUndefined()
+    expect(hiddenFields(body).xsrf).toMatch(/^[0-9a-f]{48}$/)
+    expect(body).toContain('form="op.deviceInputForm">Continue</button>')
+    expect(body).not.toMatch(/<script|\son[a-z]+=/i)
   }, T)
 })
 
