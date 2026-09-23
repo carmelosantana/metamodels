@@ -285,6 +285,34 @@ describe('main: usage errors exit 2 and send nothing', () => {
     expect(w.api.requests).toHaveLength(1)
   })
 
+  // encodeURIComponent leaves `.` and `..` as they are, and the URL parser then removes them as dot
+  // segments: `mm flocks delete ..` would send DELETE /api/admin/v1/ and `mm templates delete p1 .`
+  // would address the collection. An empty one leaves `//` for a server to normalise as it likes.
+  test.each([
+    ['flocks', 'delete', '..'],
+    ['flocks', 'delete', '.'],
+    ['flocks', 'delete', ''],
+    ['flocks', 'get', '..'],
+    ['templates', 'remove', 'p1', '..'],
+    ['templates', 'remove', '..', 't1'],
+    ['keys', 'revoke', '.'],
+  ])('a path argument that is `.`, `..` or empty is a usage error: mm %s %s %j', async (...argv) => {
+    const w = await world()
+    w.signIn()
+    expect(await w.run(...argv)).toBe(2)
+    expect(w.stderr()).toMatch(/cannot be empty, `\.` or `\.\.`/)
+    expect(w.api.requests).toHaveLength(0)
+    expect(w.op.requests).toHaveLength(0)
+  })
+
+  test('a dot inside an id is still sent, encoded as part of the segment', async () => {
+    const w = await world()
+    w.signIn()
+    w.api.on('GET /api/admin/v1/flocks/a..b', () => ok({ id: 'a..b' }))
+    expect(await w.run('flocks', 'get', 'a..b')).toBe(0)
+    expect(w.api.requests.map((r) => r.path)).toEqual(['/api/admin/v1/flocks/a..b'])
+  })
+
   test('a --file that cannot be read is a usage error, and nothing is sent', async () => {
     const w = await world()
     w.signIn()

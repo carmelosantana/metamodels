@@ -222,7 +222,15 @@ async function runApi(spec: CommandSpec, rest: string[], values: Values, io: Mai
   ], command)
 
   let path = spec.path
-  params.forEach((p, i) => { path = path.replace(`{${p}}`, encodeURIComponent(rest[i])) })
+  params.forEach((p, i) => {
+    // encodeURIComponent leaves `.` and `..` alone, and URL parsing then removes them as dot
+    // segments (RFC 3986 §5.2.4): `mm flocks delete ..` would send DELETE /api/admin/v1/. An empty
+    // one leaves `//`. None of the three can name a resource, so all are refused before sending.
+    if (rest[i] === '' || rest[i] === '.' || rest[i] === '..') {
+      throw new UsageError(`${argLabel(spec, p)} cannot be empty, \`.\` or \`..\``)
+    }
+    path = path.replace(`{${p}}`, encodeURIComponent(rest[i]))
+  })
   const query: Record<string, string> = {}
   for (const { name } of spec.query) {
     const v = values[kebab(name)]
