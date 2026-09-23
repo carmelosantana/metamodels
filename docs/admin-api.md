@@ -149,10 +149,15 @@ Send the access token as `Authorization: Bearer <token>`. That is the only way i
   is a `401`. A request with a bearer token **and** the cookie is a `400`, before the token is looked
   at. A browser adds the cookie by itself and a script does not, so a request carrying both looks
   like a browser being tricked into making it.
-- A token for another audience, from another issuer, expired, or with a bad signature: `401`.
-  Every rejected token gets the same answer, on purpose.
-- The sign-in service's keys cannot be fetched, or the token names a signing key the sign-in
-  service no longer publishes: `503` with `Retry-After: 30`. The token itself was not judged.
+- A token for another audience, from another issuer, expired, with a bad signature, or signed with
+  a key the sign-in service no longer publishes: `401`. Every rejected token gets the same answer,
+  on purpose.
+- The sign-in service's keys cannot be fetched: `503` with `Retry-After: 30`. The token itself was
+  not judged.
+- The token names a signing key missing from the list the console fetched less than 30 seconds ago:
+  also `503` with `Retry-After: 30`. The console may not fetch the list again that soon, and the key
+  could be one the sign-in service has only just started publishing. A retry after 30 seconds makes
+  the console fetch the list again, and gets `200` or `401`.
 
 ## Routes
 
@@ -246,11 +251,12 @@ console's 10-minute key cache. Leave the previous key in `OIDC_PREVIOUS_SIGNING_
 long after redeploying the sign-in service. After you clear it (step 4), the console may keep
 accepting tokens signed with the old key for up to 10 more minutes, until its cached copy expires.
 
-**Known issue.** Once the old key is gone, a token signed with it is answered `503` (see
-[Authentication](#authentication)), not `401`, even after the token has expired. `mm` renews its
-token only on a `401`. So a CLI that was not used during the whole window, and still holds a token
-signed with the old key, fails every command with `503 Service Unavailable` until you run `mm login`
-again on that machine.
+Once the console's copy no longer lists the old key, a token signed with it is answered `401`, like
+any other rejected token. `mm` then renews its token with its refresh token, so a CLI that was not
+used during the whole window keeps working without a new `mm login`. There is one short gap, the
+30-second case under [Authentication](#authentication): if the console fetched the key list less
+than 30 seconds earlier, the old-key token gets `503` instead. `mm` does not retry a `503`, so run the
+command again after 30 seconds.
 
 **The one exception is a leaked key.** Never use the overlap for it: that would keep publishing the
 leaked key for the whole window. Replace it outright, with `OIDC_PREVIOUS_SIGNING_KEYS` empty, as
