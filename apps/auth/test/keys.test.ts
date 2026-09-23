@@ -74,4 +74,24 @@ describe('signing-key rotation overlap', () => {
     expect(keys).toHaveLength(2)
     expect(keys[1].kid).toBe(rsaThumbprint(jwkOf(previousPem())))
   })
+
+  // oidc-provider rejects a duplicate `kid` at provider construction
+  // (lib/helpers/initialize_keystore.js: 'jwks.keys configuration must not contain duplicate
+  // "kid" values'), which kills the container at boot without naming either variable. Catch it
+  // here instead, while we still know which env var is at fault.
+  test('a previous key that repeats the signer is rejected, naming the variable at fault', () => {
+    const kid = rsaThumbprint(jwkOf(currentPem()))
+    expect(() => signingJwks(currentPem(), false, [currentPem()])).toThrow(
+      `OIDC_PREVIOUS_SIGNING_KEYS must not repeat OIDC_SIGNING_KEY or another previous key (kid ${kid})`,
+    )
+  })
+
+  test('two identical previous keys are rejected, naming the variable at fault', () => {
+    const kid = rsaThumbprint(jwkOf(previousPem()))
+    expect(() => signingJwks(currentPem(), false, [previousPem(), previousPem()])).toThrow(
+      `OIDC_PREVIOUS_SIGNING_KEYS must not repeat OIDC_SIGNING_KEY or another previous key (kid ${kid})`,
+    )
+    // Two *distinct* previous keys remain fine — the check is about repetition, not count.
+    expect(signingJwks(currentPem(), false, [previousPem(), freshPem('rsa')]).keys).toHaveLength(3)
+  })
 })

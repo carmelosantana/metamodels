@@ -31,6 +31,12 @@ function toSigJwk(key: KeyObject, source: string): JWK {
  * the first key that matches the algorithm, so order is the whole mechanism. Without this overlap,
  * rotating the signing key invalidates every in-flight access token at once (M1 handoff). Each key
  * is a distinct RFC 7638 thumbprint, so the verifying side resolves `kid` with no bookkeeping.
+ *
+ * Signer-first survives oidc-provider's `keystore[filter]` sort (`lib/helpers/keystore.js`) only
+ * because of a *tie plus a stable sort*: `toSigJwk` gives every key both `alg` and `use`, so all
+ * of them score 2 under `keyscore`, and `Array.prototype.sort` is stable (ES2019), which preserves
+ * the order we built. Varying `alg` or `use` per key would break that tie and reorder the set —
+ * a previous key could then out-score the signer and sign.
  */
 export function signingJwks(
   pem: string | null,
@@ -42,11 +48,27 @@ export function signingJwks(
   else if (allowEphemeral) key = generateKeyPairSync('rsa', { modulusLength: MIN_MODULUS_BITS }).privateKey
   else throw new Error('OIDC_SIGNING_KEY is required (OIDC_ALLOW_EPHEMERAL_KEY=true is for local development only)')
 
-  return {
-    keys: [
-      // The signer first; everything after it verifies but never signs.
-      toSigJwk(key, 'OIDC_SIGNING_KEY'),
-      ...previousPems.map((p) => toSigJwk(createPrivateKey(p), 'OIDC_PREVIOUS_SIGNING_KEYS')),
-    ],
+  const keys: JWK[] = [
+    // The signer first; everything after it verifies but never signs.
+    toSigJwk(key, 'OIDC_SIGNING_KEY'),
+    ...previousPems.map((p) => toSigJwk(createPrivateKey(p), 'OIDC_PREVIOUS_SIGNING_KEYS')),
+  ]
+
+  // A repeated key reaches oidc-provider as a duplicate `kid`, which throws at provider
+  // construction ('jwks.keys configuration must not contain duplicate "kid" values') — before
+  // `server.listen`, so sign-in is down for everyone. That message names neither env var, and an
+  // operator who applied step 1 of the rotation without step 2 has no clue which to edit. Fail
+  // at the same moment, with the variable at fault in the message.
+  const seen = new Set<string>()
+  for (const jwk of keys) {
+    const kid = jwk.kid as string
+    if (seen.has(kid)) {
+      throw new Error(
+        `OIDC_PREVIOUS_SIGNING_KEYS must not repeat OIDC_SIGNING_KEY or another previous key (kid ${kid})`,
+      )
+    }
+    seen.add(kid)
   }
+
+  return { keys }
 }
