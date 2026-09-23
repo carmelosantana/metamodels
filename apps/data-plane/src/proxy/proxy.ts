@@ -1,4 +1,4 @@
-import type { RewrittenRequest, UpstreamResult } from '@metamodels/connectors'
+import { upstreamAuthHeaders, type RewrittenRequest, type UpstreamResult } from '@metamodels/connectors'
 import { extractTextFrames } from '../meter/extract.js'
 
 export type FetchImpl = (url: string, init: RequestInit) => Promise<Response>
@@ -76,8 +76,7 @@ export async function proxyToUpstream(
   const doFetch = opts.fetchImpl ?? ((url, init) => fetch(url, init))
   const url = flock.baseUrl.replace(/\/$/, '') + req.path
 
-  const headers: Record<string, string> = { ...req.headers }
-  if (flock.upstreamAuth) headers['authorization'] = `Bearer ${flock.upstreamAuth}`
+  const headers: Record<string, string> = { ...req.headers, ...upstreamAuthHeaders(flock) }
 
   const init: RequestInit = { method: req.method, headers }
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
@@ -107,4 +106,18 @@ export async function proxyToUpstream(
     response: new Response(toClient, { status: upstream.status, headers: clientHeaders }),
     metering: readOutcome(toMeter, upstream.status, outHeaders),
   }
+}
+
+// A breed's raw call to its flock (e.g. a multipart upload): the caller's init untouched, plus
+// the flock's credential under the same convention as `proxyToUpstream`.
+export function rawToUpstream(
+  flock: { baseUrl: string; upstreamAuth: string | null },
+  path: string,
+  init: RequestInit,
+  opts: { fetchImpl?: FetchImpl } = {},
+): Promise<Response> {
+  const doFetch = opts.fetchImpl ?? ((url, i) => fetch(url, i))
+  const headers = new Headers(init.headers)
+  for (const [k, v] of Object.entries(upstreamAuthHeaders(flock))) headers.set(k, v)
+  return doFetch(flock.baseUrl.replace(/\/$/, '') + path, { ...init, headers })
 }
