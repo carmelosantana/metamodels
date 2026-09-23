@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -350,18 +350,23 @@ describe('main: login', () => {
     expect(w.op.requests.find((r) => r.path === '/device/auth')!.form.scope).toBe('openid offline_access read')
   })
 
-  test('revokes the refresh token it replaces, after storing the new one', async () => {
+  test('revokes the refresh token it replaces, after storing the new one, still holding the credentials lock', async () => {
     const w = await loginWorld()
     w.signIn()
     let storedAtRevocation: string | undefined
+    let lockedAtRevocation: boolean | undefined
     w.op.on('POST /token/revocation', () => {
       storedAtRevocation = readCredentials(w.path, w.op.url)?.refreshToken
+      lockedAtRevocation = existsSync(`${w.path}.lock`)
       return { status: 200, text: '' }
     })
     expect(await w.run('login')).toBe(0)
     const revoke = w.op.requests.filter((r) => r.path === '/token/revocation')
     expect(revoke.map((r) => r.form)).toEqual([{ token: 'rt-1', token_type_hint: 'refresh_token', client_id: CLI_CLIENT_ID }])
     expect(storedAtRevocation).toBe('rt-new-secret')
+    // A refresh in another process waits on this lock: it cannot rotate the replaced token before it is revoked.
+    expect(lockedAtRevocation).toBe(true)
+    expect(existsSync(`${w.path}.lock`)).toBe(false)
     expect(readCredentials(w.path, w.op.url)?.refreshToken).toBe('rt-new-secret')
     expect(w.stderr()).not.toContain('rt-1')
   })
