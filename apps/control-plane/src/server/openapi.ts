@@ -482,8 +482,8 @@ const COMPONENT_RESPONSES: Record<string, ResponseObject> = {
       headers: {
         'Retry-After': {
           description:
-            'Seconds. The key-set fetch cooldown: for a signing key missing from a recently ' +
-            'fetched key set, the retry is allowed to fetch the key set again.',
+            'Seconds. The key-set fetch cooldown, after which a signing key missing from the key ' +
+            'set makes the server fetch it again. Another request may start a new cooldown first.',
           schema: { type: 'integer' },
         },
       },

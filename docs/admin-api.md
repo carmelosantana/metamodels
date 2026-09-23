@@ -156,8 +156,9 @@ Send the access token as `Authorization: Bearer <token>`. That is the only way i
   not judged.
 - The token names a signing key missing from the list the console fetched less than 30 seconds ago:
   also `503` with `Retry-After: 30`. The console may not fetch the list again that soon, and the key
-  could be one the sign-in service has only just started publishing. A retry after 30 seconds makes
-  the console fetch the list again, and gets `200` or `401`.
+  could be one the sign-in service has only just started publishing. After 30 seconds the console
+  may fetch the list again, and a retry gets `200` or `401`. If another request made it fetch the
+  list in the meantime, the retry can get `503` again.
 
 ## Routes
 

@@ -144,7 +144,8 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
      *   looked up in it: the key is retired or forged, and the client should refresh.
      * - Cooling down → 503. The set was fetched under `JWKS_COOLDOWN_MS` ago and jose refetched
      *   nothing, so the `kid` may belong to a signer the OP began publishing since. The cooldown ends
-     *   within the 30 s `Retry-After`, and the retry refetches.
+     *   within the 30 s `Retry-After`. A retry after that refetches, unless another verification's
+     *   miss refetched first and started a new cooldown.
      *
      * Two races, each within one turn of the event loop. If the cooldown ends between the read above
      * and jose's check, jose refetches and the answer is still 503. If a concurrent verification's
