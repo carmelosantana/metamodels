@@ -7,7 +7,8 @@ import { saveFlock, deleteFlock } from '../../../server/flocks-service'
 import { testFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
 import type { ModelListResult } from '@metamodels/connectors'
 import { publishConfigInvalidation } from '../../../server/config-publisher'
-import { flockFormToInput, saveFlockErrorMessage } from '../../../lib/flock-form'
+import { flockFormToInput } from '../../../lib/flock-form'
+import { saveFlockErrorMessage } from '../../../server/flock-save-error'
 
 const registry = buildBreedRegistry()
 
