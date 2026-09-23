@@ -460,7 +460,10 @@ describe('/api/admin/v1/paddocks — the C3 intersection over HTTP', () => {
 
   test('a token with no capability scopes is 403, not 200', async () => {
     const t = await tok.mint({ sub: adminUserId, scopes: [] })
-    expect((await call(collection, 'GET', '/paddocks', t)).status).toBe(403)
+    const res = await call(collection, 'GET', '/paddocks', t)
+    expect(res.status).toBe(403)
+    // The problem names the capability the token lacks, as M2 spec §7 asks of an unscoped token.
+    expect(await res.json()).toMatchObject({ capability: 'read' })
   })
 
   test('the status and fence sub-resources enforce resource.write too', async () => {
