@@ -89,3 +89,27 @@ ${form}
 <button autofocus type="submit" form="op.logoutForm" value="yes" name="logout">Sign out</button>
 <button class="secondary" type="submit" form="op.logoutForm">Stay signed in</button>`)
 }
+
+/**
+ * The page `switchAccountMiddleware` shows in place of oidc-provider's logout step, when a resume
+ * has just refused to continue as the account that signed in because this browser's OP session
+ * holds a different one. oidc-provider handles that case by ending the old session first: the
+ * browser posts `logout=yes` and the library's xsrf token to its logout-confirm endpoint, which
+ * redirects back to the resume, now as the new account. The library sends that POST from an
+ * auto-submitting script page, which our CSP blocks. This page is the same form, with a button and
+ * an explanation. `then` finishes the sentence with what happens after the old session ends.
+ */
+export function switchAccountPage(action: string, xsrf: string, then: string): string {
+  return page('Switch account', `<h1>Switch account?</h1>
+<p>This browser is signed in to MetaModels as a different account. Continue to sign that account out here and ${escapeHtml(then)}.</p>
+<form id="op.switchAccountForm" method="post" action="${escapeHtml(action)}">
+<input type="hidden" name="xsrf" value="${escapeHtml(xsrf)}"/>
+<input type="hidden" name="logout" value="yes"/>
+</form>
+<button autofocus type="submit" form="op.switchAccountForm">Continue</button>`)
+}
+
+/** The switch on the console's sign-in resume (`GET /auth/:uid`), such as an invite sign-in. */
+export function renderConsoleSwitchAccountPage(action: string, xsrf: string): string {
+  return switchAccountPage(action, xsrf, 'sign in as the account you just entered')
+}
