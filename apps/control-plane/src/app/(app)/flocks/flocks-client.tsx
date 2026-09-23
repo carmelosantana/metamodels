@@ -89,10 +89,10 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
           <div><Label htmlFor="name">Name</Label><Input id="name" name="name" value={name} onChange={(e) => setName(e.target.value)} required /></div>
           <div><Label htmlFor="baseUrl">Base URL</Label><Input id="baseUrl" name="baseUrl" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434" required /></div>
           <div>
-            <Label htmlFor="upstreamAuth">Upstream auth (optional)</Label>
+            <Label htmlFor="upstreamAuth">Upstream bearer token (optional)</Label>
             {/* Masked, and never pre-filled: the credential is write-only, stored encrypted, and no read returns it. */}
             <Input id="upstreamAuth" name="upstreamAuth" type="password" autoComplete="off" value={upstreamAuth} onChange={(e) => setUpstreamAuth(e.target.value)} />
-            <p className="mt-1 text-xs text-[var(--color-muted)]">Stored encrypted. It is never shown again.</p>
+            <p className="mt-1 text-xs text-[var(--color-muted)]">The token only, without &ldquo;Bearer&rdquo;. It is sent as <code>Authorization: Bearer &lt;token&gt;</code>, stored encrypted, and never shown again.</p>
           </div>
           <div className="flex items-center gap-2">
             <Switch checked={tls} onChange={setTls} name="tlsTrust" />
