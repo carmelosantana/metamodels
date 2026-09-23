@@ -46,6 +46,8 @@ OPERATOR_PASSWORD=$(gen)
 CONSOLE_CLIENT_SECRET=$(gen)
 OIDC_COOKIE_KEYS=$(gen)
 OIDC_SIGNING_KEY=$(genkey)
+# Empty until you rotate OIDC_SIGNING_KEY: the retired key, published for verification only.
+OIDC_PREVIOUS_SIGNING_KEYS=
 EOF
 )
 
@@ -75,9 +77,10 @@ Store these now — they are not recoverable from the running stack.
                       `pnpm seed` will not reset an existing user. To retire
                       it, invite a second admin from Team (they choose their
                       own password), then deactivate the seeded account.
-  OIDC_SIGNING_KEY    signs every token the sign-in service issues. Changing
-                      it invalidates issued tokens; it does not sign anyone
-                      out (see "Rotating the sign-in keys" in docs/DEPLOY.md).
+  OIDC_SIGNING_KEY    signs every token the sign-in service issues. Rotate it
+                      via OIDC_PREVIOUS_SIGNING_KEYS, or issued tokens stop
+                      verifying at once; it does not sign anyone out (see
+                      "Rotating the sign-in keys" in docs/DEPLOY.md).
   OIDC_COOKIE_KEYS    signs the sign-in service's cookies. Rotate without
                       signing anyone out by prepending: <new>,<old>
 

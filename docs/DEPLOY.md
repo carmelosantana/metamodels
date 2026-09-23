@@ -222,18 +222,20 @@ Keep at least one active admin — deactivating the last one locks everybody out
 - **`OIDC_SIGNING_KEY`** — rotate it with an overlap window, or every ID and access token
   already issued stops verifying at once:
 
-  1. Copy the current `OIDC_SIGNING_KEY` value into `OIDC_PREVIOUS_SIGNING_KEYS`.
-  2. Set `OIDC_SIGNING_KEY` to the new key.
-  3. Redeploy the sign-in service. It publishes both keys in its JWKS, the new one first, so new
+  1. In a single edit, applied together before any redeploy: move the current `OIDC_SIGNING_KEY`
+     value into `OIDC_PREVIOUS_SIGNING_KEYS` **and** set `OIDC_SIGNING_KEY` to the new key. The
+     two variables must never hold the same key at the same time — that is a duplicate key id,
+     and the sign-in service refuses to start, so save the environment only once both are set.
+  2. Redeploy the sign-in service. It publishes both keys in its JWKS, the new one first, so new
      tokens are signed with the new key while in-flight tokens still verify against the old one.
-  4. Once the window has passed — the longest access-token lifetime, plus the console's JWKS cache
-     — remove the entry from `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the
-     old key stop verifying.
+  3. Wait out the window: the longest access-token lifetime, plus the console's JWKS cache.
+  4. Clear `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the old key stop
+     verifying.
 
-  Replacing `OIDC_SIGNING_KEY` without step 1 is the *deliberate* way to invalidate issued tokens
-  immediately. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
-  `SESSION_SECRET`, and sign-in service sessions are database rows behind cookies signed with
-  `OIDC_COOKIE_KEYS`; neither depends on this key.
+  Replacing `OIDC_SIGNING_KEY` on its own, with `OIDC_PREVIOUS_SIGNING_KEYS` left empty, is the
+  *deliberate* way to invalidate issued tokens immediately. Either way it does **not** sign anyone
+  out: console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
+  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
 
@@ -254,7 +256,12 @@ After a suspected leak, end both kinds of session:
    DELETE FROM oidc_payload WHERE model = 'Session';
    ```
 
-Rotate `OIDC_SIGNING_KEY` as well if the leak may have included it.
+If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright** — set it to a new key and
+leave `OIDC_PREVIOUS_SIGNING_KEYS` empty. Do **not** run the overlap procedure in
+[Rotating the sign-in keys](#rotating-the-sign-in-keys) here: its first step moves the old key into
+`OIDC_PREVIOUS_SIGNING_KEYS`, which would keep publishing the *leaked* key for verification for the
+whole window. A leaked key must stop verifying immediately, and losing the in-flight tokens signed
+with it is the point.
 
 ### Upgrading from 0.3.x
 
