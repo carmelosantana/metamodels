@@ -8,7 +8,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "seed": "tsx bin/seed.ts",
-    "scheduler": "tsx bin/scheduler.ts"
+    "scheduler": "tsx bin/scheduler.ts",
+    "gen:openapi": "tsx scripts/gen-openapi.ts"
   },
   "dependencies": {
     "@metamodels/connectors": "workspace:*",
