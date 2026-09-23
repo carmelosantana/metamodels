@@ -53,5 +53,11 @@ export async function resealUpstreamAuth(db: PgDatabase<any, any, any>, ring: Se
     }
     await tx.execute(sql`ALTER TABLE "flock" VALIDATE CONSTRAINT "flock_upstream_auth_sealed"`)
   })
+  // An UPDATE leaves the old row version, plaintext and all, in the table's pages until it happens
+  // to be overwritten. VACUUM FULL rewrites the table without them. It cannot run in a transaction
+  // and takes an exclusive lock, which is harmless here because nothing else runs until `migrate`
+  // exits. It runs only on the pass that actually sealed plaintext. It cannot reach the WAL or
+  // existing backups; docs/DEPLOY.md says what to do about those.
+  if (report.sealed > 0) await db.execute(sql`VACUUM FULL "flock"`)
   return report
 }

@@ -63,6 +63,30 @@ describe('migration 0008 + resealUpstreamAuth — the upgrade path', () => {
     const { rows } = await db.execute(sql`select convalidated from pg_constraint where conname = 'flock_upstream_auth_sealed'`)
     expect(rows).toEqual([{ convalidated: true }])
   })
+
+  test('sealing plaintext rewrites the table, so the old row versions holding it are not left in its pages', async () => {
+    const db = drizzle(new PGlite(), { schema })
+    await migrate(db, { migrationsFolder: foldersUpTo(7) })
+    const [{ id: orgId }] = (await db.execute(sql`insert into "org" (name) values ('o') returning id`)).rows as { id: string }[]
+    await db.execute(sql`insert into "flock" (org_id, breed, name, base_url, upstream_auth)
+      values (${orgId}, 'ollama', 'legacy', 'http://o', 'Bearer legacy-token')`)
+    await migrate(db, { migrationsFolder })
+    const filenode = async () =>
+      ((await db.execute(sql`select pg_relation_filenode('flock') as n`)).rows[0] as { n: number }).n
+    const before = await filenode()
+    await resealUpstreamAuth(db, ring(key()))
+    // VACUUM FULL writes a new relation file; a plain UPDATE only adds row versions beside the old.
+    expect(await filenode()).not.toBe(before)
+  })
+
+  test('a pass with no plaintext to seal does not rewrite the table', async () => {
+    const { db } = await migratedDb()
+    const filenode = async () =>
+      ((await db.execute(sql`select pg_relation_filenode('flock') as n`)).rows[0] as { n: number }).n
+    const before = await filenode()
+    await resealUpstreamAuth(db, ring(key()))
+    expect(await filenode()).toBe(before)
+  })
 })
 
 describe('resealUpstreamAuth', () => {

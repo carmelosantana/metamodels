@@ -355,7 +355,8 @@ scope.
 2. **Replace the stack file** with the current one. It passes the key to `migrate`,
    `control-plane` and `data-plane`.
 3. **Redeploy.** `migrate` renames `flock.upstream_auth` to `upstream_auth_enc`, encrypts each
-   existing credential, and logs how many it encrypted.
+   existing credential, logs how many it encrypted, and then rewrites the `flock` table
+   (`VACUUM FULL`) so the old plaintext row versions are not left in its data files.
 
 Afterwards:
 
@@ -364,9 +365,10 @@ Afterwards:
   to clear it.
 - **There is no downgrade short of a database restore.** Older images read a column that no
   longer exists.
-- **Backups taken before the upgrade still hold every credential in plaintext.** So does any
-  listing already fetched through the API. If either may have left your control, reissue the
-  credentials at the upstream servers.
+- **Backups taken before the upgrade still hold every credential in plaintext.** So do Postgres's
+  write-ahead log and any WAL archive from before the upgrade, and any listing already fetched
+  through the API. If any of those may have left your control, reissue the credentials at the
+  upstream servers.
 
 ### Upgrading from 0.3.x
 

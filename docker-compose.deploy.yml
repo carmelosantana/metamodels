@@ -33,7 +33,7 @@ services:
     command: ["pnpm", "start"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — openssl rand -base64 32}
       UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
     depends_on:
       postgres:
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — openssl rand -base64 32}
       UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL}
       SESSION_SECRET: ${SESSION_SECRET}
@@ -108,7 +108,7 @@ services:
     command: ["pnpm", "start"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — openssl rand -base64 32}
       UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL}
       PORT: ${PORT:-8787}

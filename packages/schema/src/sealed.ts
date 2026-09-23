@@ -94,7 +94,8 @@ export function openSealed(envelope: string, ring: SealKeyring): string {
   const key = ring.byKid.get(kid)
   if (!key) throw new UnsealError('unknown-key', `sealed under key ${kid}, which this keyring does not hold`)
   try {
-    const decipher = createDecipheriv('aes-256-gcm', key.key, Buffer.from(iv, 'base64url'))
+    // The envelope regex already pins the tag at 16 bytes; this refuses a short one on its own too.
+    const decipher = createDecipheriv('aes-256-gcm', key.key, Buffer.from(iv, 'base64url'), { authTagLength: 16 })
     decipher.setAAD(Buffer.from(`${PREFIX}${kid}`, 'utf8'))
     decipher.setAuthTag(Buffer.from(tag, 'base64url'))
     return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8')
