@@ -113,7 +113,9 @@ the throwaway stack with `CONSOLE_URL=http://other.invalid`, so that one expects
 `OIDC_INTERNAL_URL` and the key set. One real access token must then get `200` from the stack's own
 control plane (the anchor: the token is otherwise valid) and `401` from the second one.
 
-It takes the compose file, the throwaway stack's env file, a free host port and the console URL. It
+It takes the compose file, the throwaway stack's env file, a free host port and the console URL, which
+must be an origin: `http(s)://host[:port]`, optionally with a trailing `/`, where the host is a
+hostname, an IPv4 literal or a bracketed IPv6 literal. No userinfo, path, query or fragment. It
 takes no wrapper and no compose flags, and it runs only in the throwaway compose project
 `mm-m2-e2e`:
 

@@ -63,7 +63,12 @@ compose() {
 if ! [[ $port =~ ^[1-9][0-9]{3,4}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then
   die "the host port must be 1024-65535, got '$port'"
 fi
-[[ $original =~ ^https?://[^/[:space:]]+$ ]] || die "the original console URL must be an origin (http(s)://host[:port]), got '$original'"
+# An origin and nothing else: http(s)://, a host, an optional port and an optional trailing `/`. The
+# host is dot-separated labels of letters, digits and inner hyphens (which covers an IPv4 literal) or
+# a bracketed IPv6 literal. No userinfo, path, query, fragment, `;`, or glob braces.
+host_label='[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?'
+origin_re="^https?://(${host_label}(\\.${host_label})*|\\[[0-9A-Fa-f:.]+\\])(:[0-9]{1,5})?/?\$"
+[[ $4 =~ $origin_re ]] || die "the original console URL must be an origin (http(s)://host[:port]), got '$4'"
 [[ -n $aud_token ]] || die "set AUD_ACCESS_TOKEN to an access token for $original (it is never printed)"
 [[ $aud_token =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]] || die "AUD_ACCESS_TOKEN is not a compact JWT"
 

@@ -257,6 +257,21 @@ expect_code 0
 docker_calls | grep -qF -- ' -p 127.0.0.1:13001:3000 ' && ok "port 13001 accepted and published" \
   || fail "port 13001 not published: $(docker_calls)"
 
+echo "# console URLs: only http(s)://host[:port] with an optional trailing /"
+i=0
+for bad_url in 'http://u@evil.test' 'http://x?y' 'http://x;y' 'http://{a,b}' 'http://x#y'; do
+  i=$((i + 1)); case_name="url-bad-$i"
+  run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$PORT" "$bad_url"
+  refused "URL '$bad_url'"
+done
+i=0
+for good_url in 'http://localhost:13000' 'http://127.0.0.1:13000/' 'https://console.example' 'http://[::1]:13000'; do
+  i=$((i + 1)); case_name="url-good-$i"
+  run_case mm-m2-e2e '200 401 200' -- "$repo_compose" "$work/e2e.env" "$PORT" "$good_url"
+  [[ $code -eq 0 ]] && ok "accepted URL '$good_url'" || { fail "URL '$good_url': exit $code"; sed 's/^/    | /' "$log/out"; }
+  curl_calls | grep -qF -- '//api/' && fail "a request URL has '//api/': $(curl_calls)" || true
+done
+
 case_name=curlrc; echo "# the real curl, a ~/.curlrc of 'verbose', and a stub server as both consoles"
 curlhome="$work/curlhome"; mkdir -p "$curlhome"; echo verbose >"$curlhome/.curlrc"
 stub_port=38124
