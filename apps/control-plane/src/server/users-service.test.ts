@@ -12,7 +12,7 @@ async function seedUser(db: TestDb, orgId: string, email: string, role: string, 
   return u
 }
 function actor(u: { id: string; orgId: string; email: string }, role: Actor['role'] = 'admin'): Actor {
-  return { id: u.id, orgId: u.orgId, email: u.email, role }
+  return { id: u.id, orgId: u.orgId, email: u.email, role, credential: 'session' }
 }
 
 describe('users-service', () => {

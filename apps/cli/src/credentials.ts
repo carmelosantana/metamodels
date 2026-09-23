@@ -1,0 +1,272 @@
+import { randomBytes } from 'node:crypto'
+import {
+  closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
+  writeSync, type Stats,
+} from 'node:fs'
+import { hostname } from 'node:os'
+import { dirname, join } from 'node:path'
+
+/**
+ * One issuer's tokens. Keyed by issuer so several MetaModels boxes coexist in one file (spec §4.4).
+ * `resource` is the admin-API resource the tokens are bound to: a refresh must name the same one,
+ * and the OP refuses a refresh for another resource only after consuming the token (see `device.ts`), so a command
+ * pointed at a different console must be stopped before it refreshes, not after.
+ */
+export interface StoredCredential {
+  issuer: string
+  resource: string
+  /** The capability scopes the OP granted, space-separated, as the token response carried them. */
+  scope: string
+  accessToken: string
+  /** Epoch milliseconds. */
+  accessExpiresAt: number
+  refreshToken?: string
+  /** Epoch milliseconds. */
+  obtainedAt: number
+}
+
+type Store = Record<string, StoredCredential>
+
+/** `$XDG_CONFIG_HOME/metamodels/credentials.json`, else `~/.config/metamodels/credentials.json`. */
+export function credentialsPath(env: NodeJS.ProcessEnv): string {
+  // The XDG Base Directory spec: an empty value is treated as unset.
+  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, 'metamodels', 'credentials.json')
+  if (env.HOME) return join(env.HOME, '.config', 'metamodels', 'credentials.json')
+  throw new Error('cannot locate the credentials file: neither XDG_CONFIG_HOME nor HOME is set')
+}
+
+/**
+ * Refuses a store directory that someone else could swap the file in: one other users can write to
+ * (they could rename their own file over ours, or plant the lock), one another user owns, or a
+ * symlink (judged as itself, by lstat: where it points is not checked, so it is not trusted).
+ * `mkdirSync`'s mode only applies when it creates the directory, so an existing one is checked on
+ * every read and before the lock is taken. False when the directory does not exist.
+ */
+function checkDir(dir: string): boolean {
+  let st: Stats
+  try {
+    st = lstatSync(dir)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
+  }
+  if (!st.isDirectory()) throw new Error(`${dir} is not a directory; it must be a directory you own that only you can write to`)
+  if ((st.mode & 0o022) !== 0) {
+    throw new Error(
+      `${dir} is writable by other users (mode ${(st.mode & 0o777).toString(8)}); run \`chmod 700 ${dir}\``,
+    )
+  }
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new Error(`${dir} is owned by uid ${st.uid}, not by you; refusing to use it. Remove it and sign in again.`)
+  }
+  return true
+}
+
+/**
+ * The whole store, or `{}` when the file does not exist. Throws when its directory fails
+ * `checkDir`, or when the file is readable by anyone but its owner, or owned by someone else: a
+ * credentials file anyone on the box can read is a refresh token anyone on the box can use, and
+ * one another user owns is one they can swap.
+ */
+function readStore(path: string): Store {
+  if (!checkDir(dirname(path))) return {}
+  let mode: number
+  let uid: number
+  try {
+    ;({ mode, uid } = statSync(path))
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw e
+  }
+  if ((mode & 0o077) !== 0) {
+    throw new Error(
+      `${path} is readable or writable by other users (mode ${(mode & 0o777).toString(8)}); ` +
+      'it must be 0600. Run `chmod 600` on it, or delete it and sign in again.',
+    )
+  }
+  if (typeof process.getuid === 'function' && uid !== process.getuid()) {
+    throw new Error(`${path} is owned by uid ${uid}, not by you; refusing to use it`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    throw new Error(`${path} is not valid JSON; delete it and sign in again`)
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${path} is not a credentials object; delete it and sign in again`)
+  }
+  return parsed as Store
+}
+
+/**
+ * Replace the file in one step: a 0600 temp file in the same directory (so the rename cannot cross
+ * a filesystem), flushed, then renamed over the target. A process crash leaves either the old file
+ * or the new one, never a torn one — which matters because a refresh has already consumed the old
+ * token by the time its successor is written. The directory is not fsynced after the rename, so
+ * after a power loss the rename itself may not have reached the disk.
+ */
+function writeStore(path: string, store: Store): void {
+  const dir = dirname(path)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const tmp = join(dir, `.credentials.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+  const fd = openSync(tmp, 'wx', 0o600)
+  try {
+    // Exact, whatever the umask: openSync's mode is masked by it, fchmod is not.
+    fchmodSync(fd, 0o600)
+    writeSync(fd, `${JSON.stringify(store, null, 2)}\n`)
+    fsyncSync(fd)
+    closeSync(fd)
+    renameSync(tmp, path)
+  } catch (e) {
+    try { closeSync(fd) } catch { /* already closed */ }
+    try { unlinkSync(tmp) } catch { /* never created, or already renamed */ }
+    throw e
+  }
+}
+
+/** This issuer's credential, or null when there is none (or no file at all). Throws on a loose file. */
+export function readCredentials(path: string, issuer: string): StoredCredential | null {
+  return readStore(path)[issuer] ?? null
+}
+
+/** Store (or replace) this issuer's credential, keeping every other issuer's. */
+export function writeCredentials(path: string, cred: StoredCredential): void {
+  const store = readStore(path)
+  store[cred.issuer] = cred
+  writeStore(path, store)
+}
+
+/** Forget this issuer's credential, keeping every other issuer's. */
+export function deleteCredentials(path: string, issuer: string): void {
+  const store = readStore(path)
+  if (!(issuer in store)) return
+  delete store[issuer]
+  writeStore(path, store)
+}
+
+export interface LockOptions {
+  /**
+   * A lock older than this is presumed left by a crashed process and taken over (sooner when it
+   * was taken on this host by a process that no longer exists: see `holderExited`). It must exceed
+   * the longest a holder can legitimately keep it: every OP request made under the lock carries a
+   * timeout well inside this (see `device.ts`).
+   */
+  staleMs?: number
+  pollMs?: number
+  /** Called each time the lock is found held — for tests. */
+  onWait?: () => void
+  /** Called when a lock has been judged stale, just before it is re-checked and removed — for tests. */
+  onStale?: () => void
+  /** Where the one "waiting" line goes when the lock is found held (default: stderr). */
+  notify?: (line: string) => void
+}
+
+export const LOCK_STALE_MS = 60_000
+
+/**
+ * True when the lock was taken on this host by a process that no longer exists — a holder stopped
+ * by Ctrl-C or a crash, which never ran its release. Its lock is stale whatever its age.
+ *
+ * A lock records `hostname:pid`. A pid means something only on the host that recorded it: on a
+ * home directory shared over NFS, a live holder's pid usually does not exist here. So only a lock
+ * naming this host, whose pid gets ESRCH, counts as exited. EPERM is a live process of another
+ * user. A lock naming another host, one in the older bare-pid form (no host), one with no content
+ * yet (taken a moment ago, not yet written) or any other content, and a pid since reused by a live
+ * process, all fall back to the age check.
+ *
+ * The hostname does not tell PID namespaces apart: a holder in a container that shares this host's
+ * hostname but not its pids reads as exited and loses its lock early. So do two hosts with one
+ * hostname sharing this directory.
+ */
+function holderExited(lock: string): boolean {
+  let text: string
+  try { text = readFileSync(lock, 'utf8') } catch { return false }
+  // Greedy: the pid follows the last colon.
+  const m = /^(.+):([1-9]\d{0,9})\n$/.exec(text)
+  if (m === null || m[1] !== hostname()) return false
+  try {
+    process.kill(Number(m[2]), 0)
+    return false
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+
+/** The same lock file: same inode, and not rewritten since (a lock is written once, when taken). */
+function sameLock(a: Stats, b: Stats): boolean {
+  return a.ino === b.ino && a.mtimeMs === b.mtimeMs
+}
+
+/**
+ * Run `fn` holding an exclusive lock file beside the store (`<path>.lock`, created with `wx`), and
+ * always release it. Zero-dependency and cross-process: two `mm` processes refreshing with the same
+ * refresh token would present it twice, and the second presentation is a reuse that revokes the
+ * whole grant.
+ *
+ * A lock is identified by its inode AND its mtime: a lock created later at a reused inode carries a
+ * later mtime, so it does not pass for the one it replaced — unless both were created within one
+ * tick of the filesystem's timestamps.
+ *
+ * Stale-lock takeover is still best effort. The re-check and the unlink are two system calls, so a
+ * lock created between them is removed as if it were the stale one, and two waiters can then both
+ * proceed. The cost of losing that race is one "sign in again", never a leaked token.
+ *
+ * On NFS the whole lock is best effort: exclusive create is not atomic on NFSv2 and v3, so two
+ * hosts can both believe they created it.
+ */
+export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>, o: LockOptions = {}): Promise<T> {
+  const staleMs = o.staleMs ?? LOCK_STALE_MS
+  const pollMs = o.pollMs ?? 100
+  const notify = o.notify ?? ((line: string) => { process.stderr.write(`${line}\n`) })
+  const lock = `${path}.lock`
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  checkDir(dirname(path))
+  let waited = false
+  let ours: Stats
+  for (;;) {
+    try {
+      const fd = openSync(lock, 'wx', 0o600)
+      try {
+        writeSync(fd, `${hostname()}:${process.pid}\n`)
+        ours = fstatSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      break
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+    }
+    // lstat, not stat: a symlink at the lock path is judged as itself, never as what it points to.
+    let held: Stats
+    try {
+      held = lstatSync(lock)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue // released between our open and our lstat
+      throw e
+    }
+    if (!held.isFile()) {
+      // Not a lock any `mm` took (it only ever creates regular files), so neither waiting nor a
+      // takeover would clear it. Left in place for the operator to look at.
+      throw new Error(`${lock} is not a regular file; remove it and run the command again`)
+    }
+    if (Date.now() - held.mtimeMs > staleMs || holderExited(lock)) {
+      o.onStale?.()
+      // Remove the lock we judged stale, not one a faster waiter has since created (best effort, as above).
+      try { if (sameLock(lstatSync(lock), held)) unlinkSync(lock) } catch { /* already gone */ }
+      continue
+    }
+    if (!waited) {
+      waited = true
+      notify('waiting for the credentials lock…')
+    }
+    o.onWait?.()
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+  try {
+    return await fn()
+  } finally {
+    // If we overran staleMs and another process took the lock over, it is theirs now: leave it.
+    try { if (sameLock(lstatSync(lock), ours)) unlinkSync(lock) } catch { /* already gone */ }
+  }
+}

@@ -1,7 +1,8 @@
 import type { IncomingMessage } from 'node:http'
 import type { Middleware, ParameterizedContext } from 'koa'
 import type Provider from 'oidc-provider'
-import { errors } from 'oidc-provider'
+import type { Grant, KoaContextWithOIDC } from 'oidc-provider'
+import { errors, interactionPolicy } from 'oidc-provider'
 import { verifyLogin } from './account.js'
 import type { Db } from './db.js'
 import type { LoginThrottle } from './login-throttle.js'
@@ -17,6 +18,59 @@ export interface InteractionDeps {
   /** Clients that ARE MetaModels, so consent is implied. Everyone else is refused until M4's consent screen. */
   firstPartyClientIds: ReadonlySet<string>
   csp: string
+}
+
+/** oidc-provider's route names for the browser half of the device grant: the confirm POST, and resuming after an interaction. */
+const DEVICE_APPROVAL_ROUTES: ReadonlySet<string> = new Set(['code_verification', 'device_resume'])
+
+/**
+ * oidc-provider's default interaction policy plus one login check: approving a device requires a
+ * password typed in THIS interaction (RFC 8628 §5.4, remote phishing). An existing OP session does
+ * not count, however recent.
+ *
+ * `ctx.oidc.result` is the result of the interaction being resumed, and exists only on a resume
+ * route. On the confirm POST (`code_verification`) there is none, so the login prompt always
+ * fires. On `device_resume` it is what our handlers submitted for this interaction: `login` is
+ * present only if the login form was submitted here (the consent step keeps it, since it merges
+ * with the last submission). A login in another tab is a different interaction and leaves no
+ * `result.login` here. oidc-provider's own `max_age` check uses the same test.
+ *
+ * Every other route (the console's authorization-code flow) skips the check, so its login
+ * behaves as before.
+ */
+export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.DefaultPolicy {
+  const { Check, base } = interactionPolicy
+  const policy = base()
+  policy.get('login')!.checks.add(new Check(
+    'device_fresh_login',
+    'approving a device requires the password',
+    (ctx) => DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) && !ctx.oidc.result?.login
+      ? Check.REQUEST_PROMPT
+      : Check.NO_NEED_TO_PROMPT,
+  ))
+  return policy
+}
+
+/**
+ * `loadExistingGrant`: which grant an authorization request starts from. oidc-provider's default
+ * takes the grant the consent step just handed back (`result.consent.grantId`), and failing that
+ * the one the browser session already holds for the client (`session.grantIdFor(clientId)`).
+ *
+ * A device approval (`DEVICE_APPROVAL_ROUTES`) skips the session's grant, so every approval starts
+ * from an empty grant: the consent prompt then lists every scope the device asked for, and
+ * `consentFor` saves them in a new grant. One grant per approval is this project's decision, not
+ * something RFC 8628 asks for: revoking a refresh token revokes its grant, so a grant shared by
+ * every machine approved in one browser would let signing one machine out sign them all out. The
+ * consent step's own grant is still taken: oidc-provider then records it as the session's
+ * grant for the client, and binds the device code to that. The session so points at the newest
+ * device grant. An older one is not revoked; it lives on for the refresh tokens issued under it.
+ *
+ * Every other route (the console's authorization-code flow) keeps the default.
+ */
+export async function loadExistingGrant(ctx: KoaContextWithOIDC): Promise<Grant | undefined> {
+  const grantId = ctx.oidc.result?.consent?.grantId
+    || (DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) ? undefined : ctx.oidc.session!.grantIdFor(ctx.oidc.client!.clientId))
+  return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined
 }
 
 const INTERACTION_PATH = /^\/interaction\/([A-Za-z0-9_-]+)(\/login)?$/
@@ -65,7 +119,7 @@ export function interactionMiddleware(deps: InteractionDeps): Middleware {
       if (err instanceof errors.SessionNotFound) {
         html(ctx, 400, renderMessagePage(
           'Sign-in expired',
-          'This sign-in attempt has expired or was already completed. Go back to the console and sign in again.',
+          'This sign-in attempt has expired or was already completed. Start the sign-in again from the console or your terminal.',
         ))
         return
       }
@@ -103,10 +157,22 @@ async function showInteraction(ctx: Ctx, deps: InteractionDeps): Promise<void> {
 /**
  * Automatic consent for a first-party client: grant exactly what this request is missing, and
  * nothing more. Mirrors oidc-provider's reference consent handler, minus the screen.
+ *
+ * Which grant it writes to is decided by `details.grantId`, the saved grant the request started
+ * from (see `loadExistingGrant`):
+ * - Set (the console's authorization-code flow, when its browser session already holds a grant for
+ *   the client): the missing scopes are added to that grant in place, and nothing is handed back.
+ * - Unset: a NEW grant is saved and its id handed back, and the provider binds the request to it.
+ *   Every device approval takes this branch: `loadExistingGrant` starts it from an unsaved grant,
+ *   so it never carries the session's grant here, and the missing scopes are all it asked for.
+ *   A device approval that did carry one is refused rather than given a shared grant.
  */
 async function consentFor(provider: Provider, details: InteractionDetails): Promise<{ grantId?: string }> {
   const accountId = details.session?.accountId
   if (!accountId) throw new Error('consent prompt reached without an authenticated session')
+  if (details.deviceCode !== undefined && details.grantId !== undefined) {
+    throw new Error('device approval reached consent with an existing grant; each device gets its own')
+  }
 
   const existing = details.grantId ? await provider.Grant.find(details.grantId) : undefined
   const grant = existing ?? new provider.Grant({ accountId, clientId: String(details.params.client_id) })

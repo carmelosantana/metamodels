@@ -65,8 +65,8 @@ export async function changeUserRole(db: Db, actor: Actor, userId: string, role:
       if ((await otherActiveAdmins(tx, actor.orgId, userId)) === 0) throw new LastAdminError()
     }
     await tx.update(user).set({ role }).where(and(eq(user.id, userId), eq(user.orgId, actor.orgId)))
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'user.role',
+    await writeAudit(tx, actor, {
+      action: 'user.role',
       target: `user:${userId}`, detail: { role },
     })
   })
@@ -99,8 +99,7 @@ export async function setUserStatus(
       if (active + pending >= seatLimit) throw new SeatLimitError()
     }
     await tx.update(user).set({ status }).where(and(eq(user.id, userId), eq(user.orgId, actor.orgId)))
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email,
+    await writeAudit(tx, actor, {
       action: status === 'active' ? 'user.reactivate' : 'user.deactivate',
       target: `user:${userId}`,
     })

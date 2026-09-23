@@ -8,7 +8,7 @@ import { ForbiddenError, type Actor } from '../auth/authorize'
 const NOW = 1_800_000_000_000
 
 async function admin(db: TestDb, orgId: string): Promise<Actor> {
-  return { id: 'admin', orgId, email: 'admin@x.io', role: 'admin' }
+  return { id: 'admin', orgId, email: 'admin@x.io', role: 'admin', credential: 'session' }
 }
 async function addUser(db: TestDb, orgId: string, email: string, status: 'active' | 'deactivated') {
   await db.insert(schema.user).values({ orgId, email, passwordHash: 'scrypt$x$y', role: 'member', status }).returning()
@@ -56,7 +56,7 @@ describe('seats', () => {
   test('seatUsage requires user.manage', async () => {
     const db = await freshDb()
     const o = await seedOrg(db)
-    const viewer: Actor = { id: 'v', orgId: o.id, email: 'v@x.io', role: 'viewer' }
+    const viewer: Actor = { id: 'v', orgId: o.id, email: 'v@x.io', role: 'viewer', credential: 'session' }
     await expect(seatUsage(db, viewer, 1, NOW)).rejects.toThrow(ForbiddenError)
   })
 })
@@ -64,7 +64,7 @@ describe('seats', () => {
 const SECRET = 'seats-test-secret-at-least-16-chars'
 
 describe('getSeatLimit reads the entitlement', () => {
-  const admin = (orgId: string) => ({ id: 'a', orgId, email: 'a@x.io', role: 'admin' as const })
+  const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'a@x.io', role: 'admin', credential: 'session' })
 
   test('no entitlement → BASE_SEATS (1)', async () => {
     const db = await freshDb(); const o = await seedOrg(db)

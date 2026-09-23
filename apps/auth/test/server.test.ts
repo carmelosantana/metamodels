@@ -14,6 +14,7 @@ function testConfig(): AuthConfig {
     consoleClientSecret: 'console-secret-0123456789',
     cookieKeys: ['cookie-key-0123456789abcdef'],
     signingKeyPem: null,
+    previousSigningKeyPems: [],
     allowEphemeralKey: true,
     databaseUrl: 'unused-db-is-injected',
     port: 0,

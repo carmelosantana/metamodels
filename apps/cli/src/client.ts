@@ -1,0 +1,178 @@
+import { STATUS_CODES } from 'node:http'
+import type { StoredCredential } from './credentials.js'
+import { SignInAgainError } from './device.js'
+
+/**
+ * Refresh before sending when the stored access token expires within this long. The margin is on
+ * this machine's clock, so a clock running behind the server's can still send a token the server
+ * holds expired: the refresh on a 401 in `callApi` is the fallback for that.
+ */
+export const REFRESH_MARGIN_MS = 30_000
+
+/** Where the access token comes from, and how a refused or expiring one is replaced (`session.ts`). */
+export interface ApiSession {
+  current(): StoredCredential
+  refresh(stale: StoredCredential): Promise<StoredCredential>
+}
+
+export interface ApiRequest {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  /** Relative to `/api/admin/v1`, e.g. `/flocks/{id}` with the id filled in. */
+  path: string
+  query?: Record<string, string>
+  body?: unknown
+}
+
+export interface ApiResponse {
+  status: number
+  body: unknown
+  /** The `cursor` of the next page, from `Link: <…>; rel="next"` (RFC 8288), when there is one. */
+  next?: string
+}
+
+/** A non-2xx answer from the admin API, rendered from its RFC 9457 problem document. */
+export class ApiProblemError extends Error {
+  readonly status: number
+  readonly problem: unknown
+  constructor(status: number, problem: unknown, retryAfter?: string | null) {
+    super(formatProblem(status, problem, retryAfter))
+    this.name = 'ApiProblemError'
+    this.status = status
+    this.problem = problem
+  }
+}
+
+/**
+ * RFC 9110 §10.2.3: delay-seconds or an HTTP-date. Anything else is not printed, so a header cannot
+ * put arbitrary text on the operator's terminal.
+ */
+function retryAfterText(value: string | null | undefined): string | undefined {
+  if (!value) return undefined
+  if (/^\d{1,9}$/.test(value)) return `${value} seconds`
+  return /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) ? value : undefined
+}
+
+/**
+ * An RFC 9457 problem as terminal text: `status title: detail`, then the missing `capability`
+ * (so a scope mistake reads as one, not as a bare 403) and any validation `errors`, one per line,
+ * then the response's `Retry-After` when it has one (the admin API sends it with a 503).
+ * Only those members are printed; the API puts nothing token-derived in any of them.
+ */
+export function formatProblem(status: number, problem: unknown, retryAfter?: string | null): string {
+  const p = typeof problem === 'object' && problem !== null ? (problem as Record<string, unknown>) : {}
+  const title = typeof p.title === 'string' ? p.title : (STATUS_CODES[status] ?? 'Error')
+  const lines = [typeof p.detail === 'string' ? `${status} ${title}: ${p.detail}` : `${status} ${title}`]
+  if (typeof p.capability === 'string') lines.push(`  capability: ${p.capability} (sign in again with it in --scope)`)
+  if (Array.isArray(p.errors)) {
+    for (const e of p.errors as Array<Record<string, unknown>>) {
+      const path = typeof e?.path === 'string' && e.path !== '' ? e.path : '(body)'
+      lines.push(`  ${path}: ${String(e?.message)}`)
+    }
+  }
+  const retry = retryAfterText(retryAfter)
+  if (retry !== undefined) lines.push(`  retry after: ${retry}`)
+  return lines.join('\n')
+}
+
+/** The next page's cursor. A relative target resolves against the request URL (RFC 8288 §3.1). */
+function nextCursor(link: string | null, base: URL): string | undefined {
+  if (link === null) return undefined
+  for (const part of link.split(',')) {
+    const m = /^\s*<([^>]*)>\s*;\s*rel="?next"?\s*$/.exec(part)
+    if (m) return new URL(m[1], base).searchParams.get('cursor') ?? undefined
+  }
+  return undefined
+}
+
+async function readBody(res: Response): Promise<unknown> {
+  const text = await res.text()
+  if (text === '') return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/** `: ECONNREFUSED` for a `fetch failed` whose cause carries a system error code, else nothing. */
+function networkCode(e: unknown): string {
+  const code = e instanceof Error && e.cause instanceof Error ? (e.cause as NodeJS.ErrnoException).code : undefined
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `: ${code}` : ''
+}
+
+/**
+ * One admin-API call. Authenticates with `Authorization: Bearer` and nothing else — never a cookie:
+ * the API answers a bearer that arrives with a session cookie with 400, and this client keeps no
+ * cookie jar to send one from.
+ *
+ * A stored access token that has expired, or expires within `REFRESH_MARGIN_MS`, is refreshed
+ * before anything is sent, through the same `session.refresh` a 401 uses (the credentials lock, the
+ * store re-read under it), so the API never sees it. Without a refresh token there is nothing to
+ * refresh with: the token is sent as it is, and a 401 then says to sign in again, as it always did.
+ *
+ * If that pre-send refresh fails, what happens depends on why. A `SignInAgainError` (the OP refused
+ * it, and the sign-in is gone) always fails the call. Any other failure (the OP unreachable, a 5xx,
+ * the credentials lock) fails the call only when the token has already expired on this machine's
+ * clock. A token with time left is sent as it is: the refresh was early, not needed yet. If the API
+ * then answers 401, that refresh's error is thrown, and no second refresh is attempted in this call.
+ *
+ * On a 401 to a token it has not refreshed, it asks the session for a fresh token once and retries
+ * once. A 401 to a token refreshed during this call, before sending or after the first 401, is
+ * surfaced as the API's problem, not retried: a token refreshed a moment ago and still refused will
+ * not be fixed by another refresh. Redirects are not followed — the admin API issues none, and
+ * following one would carry the bearer somewhere it was not meant for.
+ */
+export async function callApi(
+  consoleUrl: string, session: ApiSession, req: ApiRequest, fetchImpl: typeof fetch = fetch,
+): Promise<ApiResponse> {
+  const url = new URL(`${consoleUrl}/api/admin/v1${req.path}`)
+  for (const [k, v] of Object.entries(req.query ?? {})) url.searchParams.set(k, v)
+
+  const send = async (cred: StoredCredential) => {
+    const headers: Record<string, string> = { authorization: `Bearer ${cred.accessToken}`, accept: 'application/json' }
+    if (req.body !== undefined) headers['content-type'] = 'application/json'
+    try {
+      return await fetchImpl(url, {
+        method: req.method,
+        headers,
+        body: req.body === undefined ? undefined : JSON.stringify(req.body),
+        redirect: 'manual',
+      })
+    } catch (e) {
+      // A header `fetch` refuses is quoted in the message it throws, and one of these headers holds
+      // the access token. So none of the thrown text is passed on — only the system error code of a
+      // network failure (ECONNREFUSED, ENOTFOUND…), which names the failure, not a header.
+      throw new Error(`could not send the request to ${url.origin}${networkCode(e)}`)
+    }
+  }
+
+  let cred = session.current()
+  let refreshed = false
+  /** Set when the pre-send refresh failed and the unexpired token was sent anyway. */
+  let earlyRefreshError: unknown
+  if (cred.refreshToken !== undefined && cred.accessExpiresAt - Date.now() <= REFRESH_MARGIN_MS) {
+    try {
+      cred = await session.refresh(cred)
+      refreshed = true
+    } catch (e) {
+      if (e instanceof SignInAgainError || cred.accessExpiresAt <= Date.now()) throw e
+      earlyRefreshError = e
+    }
+  }
+  let res = await send(cred)
+  if (res.status === 401 && earlyRefreshError !== undefined) {
+    await res.body?.cancel()
+    throw earlyRefreshError
+  }
+  if (res.status === 401 && !refreshed) {
+    await res.body?.cancel()
+    res = await send(await session.refresh(cred))
+  }
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error(`the admin API answered with a redirect (HTTP ${res.status}); check --console`)
+  }
+  const body = await readBody(res)
+  if (!res.ok) throw new ApiProblemError(res.status, body, res.headers.get('retry-after'))
+  const next = nextCursor(res.headers.get('link'), url)
+  return { status: res.status, body, ...(next === undefined ? {} : { next }) }
+}

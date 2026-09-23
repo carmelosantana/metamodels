@@ -28,7 +28,7 @@ describe.skipIf(!PG_TEST_URL)('acquireOrgLock under real concurrency', () => {
       .insert(user)
       .values({ orgId: o.id, email, role: 'admin', status: 'active', passwordHash: 'x' })
       .returning()
-    return { orgId: o.id, actor: { id: u.id, orgId: o.id, email, role: 'admin' } }
+    return { orgId: o.id, actor: { id: u.id, orgId: o.id, email, role: 'admin', credential: 'session' } }
   }
 
   async function activeAdminCount(orgId: string): Promise<number> {
@@ -62,8 +62,8 @@ describe.skipIf(!PG_TEST_URL)('acquireOrgLock under real concurrency', () => {
     const emailB = uniqueEmail('adminB')
     const [a] = await db.insert(user).values({ orgId: o.id, email: emailA, role: 'admin', status: 'active', passwordHash: 'x' }).returning()
     const [b] = await db.insert(user).values({ orgId: o.id, email: emailB, role: 'admin', status: 'active', passwordHash: 'x' }).returning()
-    const actorA: Actor = { id: a.id, orgId: o.id, email: emailA, role: 'admin' }
-    const actorB: Actor = { id: b.id, orgId: o.id, email: emailB, role: 'admin' }
+    const actorA: Actor = { id: a.id, orgId: o.id, email: emailA, role: 'admin', credential: 'session' }
+    const actorB: Actor = { id: b.id, orgId: o.id, email: emailB, role: 'admin', credential: 'session' }
     const now = Date.now()
     const seatLimit = 5 // deactivation ignores seats; a high limit keeps the seat guard out of the way
 

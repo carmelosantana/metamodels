@@ -63,6 +63,13 @@ jobs:
         run: pnpm --filter @metamodels/control-plane build
       - name: Typecheck
         run: pnpm -w exec tsc -b
+      # The committed document is generated, so it can go stale silently the moment a route
+      # changes. Regenerate and diff: a handler nobody described fails the build instead of
+      # shipping a document that quietly describes last month's API.
+      - name: OpenAPI document is current
+        run: |
+          pnpm --filter @metamodels/control-plane gen:openapi
+          git diff --exit-code docs/api/openapi.json
       - name: Root test lane (worker + data-plane integration run here)
         run: pnpm test
       - name: Control-plane test lane (concurrency test runs here)

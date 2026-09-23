@@ -3,11 +3,28 @@ import { USER_ROLES, type UserRole, type Capability } from '@metamodels/schema'
 export type { Capability }
 export type Role = UserRole
 
+/**
+ * Which credential performed a mutation, for `audit_log.changed_by` (spec §4.2). Exactly two
+ * forms exist: the console cookie session, and a bearer access token identified by its client
+ * and its `jti`. Typed as a closed grammar rather than `string` because this is an audit
+ * identity — an arbitrary string here is an audit row nobody can trust.
+ */
+export type Credential = 'session' | `token:${string}:${string}`
+
 export interface Actor {
   id: string
   orgId: string
   email: string
   role: Role
+  /**
+   * OAuth scopes granted to the presented credential, intersected with the role matrix (spec §2.3).
+   * `undefined` means "no credential-level restriction" and is reserved for the console cookie
+   * session. The bearer path ALWAYS supplies a concrete set, even an empty one — an unscoped token
+   * must deny, not inherit full role power (the Portainer impersonation trap C3 exists to avoid).
+   */
+  grants?: ReadonlySet<Capability>
+  /** Which credential acted, for `audit_log.changed_by`: `session` or `token:<client_id>:<jti>`. */
+  credential: Credential
 }
 
 const MATRIX = {
@@ -25,8 +42,11 @@ export class ForbiddenError extends Error {
   }
 }
 
-export function authorize(user: { role: Role }, action: Capability): boolean {
-  return MATRIX[user.role]?.[action] ?? false
+export function authorize(
+  user: { role: Role; grants?: ReadonlySet<Capability> },
+  action: Capability,
+): boolean {
+  return (MATRIX[user.role]?.[action] ?? false) && (user.grants?.has(action) ?? true)
 }
 
 export function requireCapability(user: Actor, action: Capability): void {

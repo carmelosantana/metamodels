@@ -8,9 +8,14 @@ import {
   type Actor,
   type Role,
   type Capability,
+  type Credential,
 } from './authorize'
 
-const actor = (role: Role): Actor => ({ id: 'u1', orgId: 'o1', email: 'a@b.c', role })
+const actor = (role: Role, grants?: string[]): Actor => ({
+  id: 'u', orgId: 'o', email: 'e@x.test', role,
+  grants: grants ? new Set(grants as Capability[]) : undefined,
+  credential: 'session',
+})
 
 describe('authorize role/capability matrix', () => {
   test('every schema USER_ROLES value is a known Role in the matrix', () => {
@@ -58,5 +63,56 @@ describe('authorize role/capability matrix', () => {
     expect(isRole('owner')).toBe(false)
     expect(isRole('root')).toBe(false)
     expect(isRole(null)).toBe(false)
+  })
+})
+
+describe('authorize — C3 intersection', () => {
+  test('undefined grants means role-only (the console cookie path is unchanged)', () => {
+    expect(authorize(actor('admin'), 'user.manage')).toBe(true)
+    expect(authorize(actor('viewer'), 'resource.write')).toBe(false)
+  })
+
+  test('an empty grant set denies everything, whatever the role', () => {
+    expect(authorize(actor('admin', []), 'read')).toBe(false)
+    expect(authorize(actor('admin', []), 'user.manage')).toBe(false)
+  })
+
+  test('a grant cannot exceed the role', () => {
+    expect(authorize(actor('viewer', ['resource.write']), 'resource.write')).toBe(false)
+  })
+
+  test('the role cannot exceed the grants', () => {
+    expect(authorize(actor('admin', ['read']), 'user.manage')).toBe(false)
+    expect(authorize(actor('admin', ['read']), 'read')).toBe(true)
+  })
+
+  test('requireCapability throws ForbiddenError naming the capability', () => {
+    expect(() => requireCapability(actor('admin', ['read']), 'user.manage'))
+      .toThrow(ForbiddenError)
+    try {
+      requireCapability(actor('admin', ['read']), 'user.manage')
+    } catch (e) {
+      expect((e as ForbiddenError).capability).toBe('user.manage')
+    }
+  })
+})
+
+// The Credential grammar (spec §4.2) is a compile-time contract: `credential` is the source for
+// `audit_log.changed_by`, so the only thing worth asserting is that tsc rejects anything outside
+// the two legal forms. These tests fail in `pnpm --filter @metamodels/control-plane build`, not in
+// vitest — the runtime expects below merely keep the values from being elided as dead code.
+describe('Credential grammar (spec §4.2) — enforced by tsc, not by these assertions', () => {
+  test('both legal forms are assignable', () => {
+    const session = 'session' satisfies Credential
+    // Task 3 builds this from claims, so it must stay assignable as `token:${string}:${string}`.
+    const bearer = `token:${'console'}:${'jti-1'}` satisfies Credential
+    expect([session, bearer]).toEqual(['session', 'token:console:jti-1'])
+  })
+
+  test('an arbitrary string is not a credential', () => {
+    // @ts-expect-error — if Credential ever widens to `string`, this directive becomes unused and
+    // the build fails, which is the point: the guard cannot silently rot.
+    const rogue: Credential = 'whatever'
+    expect(rogue).toBe('whatever')
   })
 })

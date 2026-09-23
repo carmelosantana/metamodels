@@ -47,8 +47,8 @@ export async function saveTemplate(
       ? existing.map((t) => (t.id === tpl.id ? tpl : t))
       : [...existing, tpl]
     await writeTemplates(tx, actor, input.paddockId, next)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'template.save',
+    await writeAudit(tx, actor, {
+      action: 'template.save',
       target: `paddock:${input.paddockId}`, detail: { templateId: tpl.id },
     })
     return next
@@ -63,8 +63,8 @@ export async function deleteTemplate(
     const existing = await currentTemplates(tx, actor, input.paddockId)
     const next = existing.filter((t) => t.id !== input.templateId)
     await writeTemplates(tx, actor, input.paddockId, next)
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'template.delete',
+    await writeAudit(tx, actor, {
+      action: 'template.delete',
       target: `paddock:${input.paddockId}`, detail: { templateId: input.templateId },
     })
     return next

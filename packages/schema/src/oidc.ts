@@ -6,6 +6,9 @@
 /** The console's OAuth client_id — the `aud` of every console ID token. */
 export const CONSOLE_CLIENT_ID = 'metamodels-console'
 
+/** The admin CLI's OAuth client_id — the `client_id` claim of every access token the CLI holds. */
+export const CLI_CLIENT_ID = 'metamodels-cli'
+
 /** The admin API's RFC 8707 resource indicator — and therefore the `aud` of its access tokens. */
 export function adminApiResource(consoleUrl: string): string {
   return `${consoleUrl}/api/admin`

@@ -1,0 +1,409 @@
+import { afterEach, describe, expect, test } from 'vitest'
+import { CLI_CLIENT_ID } from '@metamodels/schema'
+import { deviceLogin, discover, refresh, revokeRefreshToken, SignInAgainError, type OpDeps } from '../src/device.js'
+import { serveDiscovery, startStub, type Reply, type Stub } from './helpers/stub.js'
+
+const RESOURCE = 'http://console.test/api/admin'
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+let stub: Stub | undefined
+afterEach(async () => {
+  await stub?.close()
+  stub = undefined
+})
+
+/** Deps that never really sleep: every requested wait is recorded instead. */
+function fakeDeps(): OpDeps & { sleeps: number[]; printed: string[] } {
+  let clock = 1_000_000
+  const sleeps: number[] = []
+  const printed: string[] = []
+  return {
+    sleeps,
+    printed,
+    now: () => clock,
+    sleep: async (ms: number) => { sleeps.push(ms); clock += ms },
+    print: (line: string) => { printed.push(line) },
+  }
+}
+
+const TOKEN = { access_token: 'at-1', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rt-1', scope: 'read resource.write' }
+
+/** Discovery, device authorization, and a token endpoint answering `polls` in turn. */
+async function stubOp(polls: Reply[], device: Record<string, unknown> = {}): Promise<Stub> {
+  stub = await startStub()
+  serveDiscovery(stub)
+  stub.on('POST /device/auth', () => ({
+    status: 200,
+    json: {
+      device_code: 'dc-1',
+      user_code: 'BCDF-GHJK',
+      verification_uri: `${stub!.url}/device`,
+      verification_uri_complete: `${stub!.url}/device?user_code=BCDF-GHJK`,
+      expires_in: 600,
+      interval: 3,
+      ...device,
+    },
+  }))
+  let i = 0
+  stub.on('POST /token', () => polls[Math.min(i++, polls.length - 1)])
+  return stub
+}
+
+const pending: Reply = { status: 400, json: { error: 'authorization_pending' } }
+const granted: Reply = { status: 200, json: TOKEN }
+
+describe('deviceLogin', () => {
+  test('asks for the admin resource, polls at the advertised interval, and returns the tokens', async () => {
+    const op = await stubOp([pending, pending, granted])
+    const deps = fakeDeps()
+    const cred = await deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read', 'resource.write'] }, deps)
+
+    const auth = op.requests.find((r) => r.path === '/device/auth')!
+    expect(auth.form).toEqual({ client_id: CLI_CLIENT_ID, scope: 'openid offline_access read resource.write', resource: RESOURCE })
+    // The confirm page shows the requesting machine's user agent: make it say what it is.
+    expect(auth.headers['user-agent']).toMatch(/^metamodels-cli \(/)
+
+    const polls = op.requests.filter((r) => r.path === '/token')
+    expect(polls).toHaveLength(3)
+    for (const p of polls) {
+      expect(p.form).toEqual({ grant_type: DEVICE_GRANT, device_code: 'dc-1', client_id: CLI_CLIENT_ID, resource: RESOURCE })
+    }
+    expect(deps.sleeps).toEqual([3000, 3000, 3000])
+
+    expect(cred).toEqual({
+      issuer: op.url, resource: RESOURCE, scope: 'read resource.write', accessToken: 'at-1', refreshToken: 'rt-1',
+      obtainedAt: 1_009_000, accessExpiresAt: 1_009_000 + 3_600_000,
+    })
+  })
+
+  test('tells the operator where to go, that it asks for their password, and to cancel if the machine is not theirs', async () => {
+    const op = await stubOp([granted])
+    const deps = fakeDeps()
+    await deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, deps)
+    const text = deps.printed.join('\n')
+    expect(text).toContain(`${op.url}/device?user_code=BCDF-GHJK`)
+    expect(text).toContain('BCDF-GHJK')
+    expect(text).toMatch(/password/)
+    expect(text).toMatch(/IP address and user agent/)
+    expect(text).toMatch(/Cancel/)
+    expect(text).not.toContain('at-1')
+    expect(text).not.toContain('rt-1')
+  })
+
+  test('without verification_uri_complete, prints the entry page and the code to type', async () => {
+    const op = await stubOp([granted], { verification_uri_complete: undefined })
+    const deps = fakeDeps()
+    await deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, deps)
+    const text = deps.printed.join('\n')
+    expect(text).toContain(`${op.url}/device`)
+    expect(text).not.toContain('user_code=')
+    expect(text).toMatch(/enter the code\s+BCDF-GHJK/)
+  })
+
+  test('slow_down adds five seconds to the interval, for every later poll (RFC 8628 §3.5)', async () => {
+    const op = await stubOp([{ status: 400, json: { error: 'slow_down' } }, pending, granted], { interval: 5 })
+    const deps = fakeDeps()
+    await deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, deps)
+    expect(deps.sleeps).toEqual([5000, 10000, 10000])
+  })
+
+  test('with no interval advertised, polls every five seconds (RFC 8628 §3.2)', async () => {
+    const op = await stubOp([pending, granted], { interval: undefined })
+    const deps = fakeDeps()
+    await deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, deps)
+    expect(deps.sleeps).toEqual([5000, 5000])
+  })
+
+  test('gives up on expired_token', async () => {
+    const op = await stubOp([pending, { status: 400, json: { error: 'expired_token' } }, granted])
+    await expect(deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, fakeDeps()))
+      .rejects.toThrow(/expired/)
+    // It stopped at the refusal: the third, granting, answer was never asked for.
+    expect(op.requests.filter((r) => r.path === '/token')).toHaveLength(2)
+  })
+
+  test('gives up on access_denied, saying the request was cancelled', async () => {
+    const op = await stubOp([{ status: 400, json: { error: 'access_denied' } }, granted])
+    await expect(deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, fakeDeps()))
+      .rejects.toThrow(/cancel/i)
+    expect(op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
+  })
+
+  test('stops polling once the device code has expired locally', async () => {
+    const op = await stubOp([pending], { expires_in: 7, interval: 3 })
+    await expect(deviceLogin({ issuer: op.url, resource: RESOURCE, scopes: ['read'] }, fakeDeps()))
+      .rejects.toThrow(/expired/)
+    // Polls at 3s and 6s; the 9s poll would be after the 7s expiry.
+    expect(op.requests.filter((r) => r.path === '/token')).toHaveLength(2)
+  })
+})
+
+describe('discover', () => {
+  test('returns the endpoints of a matching issuer', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    const meta = await discover(stub.url, fakeDeps())
+    expect(meta.tokenEndpoint).toBe(`${stub.url}/token`)
+    expect(meta.deviceAuthorizationEndpoint).toBe(`${stub.url}/device/auth`)
+    expect(meta.revocationEndpoint).toBe(`${stub.url}/token/revocation`)
+  })
+
+  test('refuses a document naming a different issuer (RFC 8414 §3.3)', async () => {
+    stub = await startStub()
+    serveDiscovery(stub, { issuer: 'http://elsewhere.test' })
+    await expect(discover(stub.url, fakeDeps())).rejects.toThrow(/issuer/)
+  })
+})
+
+describe('refresh', () => {
+  test('names the resource, and returns the rotated refresh token with the new access token', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 200, json: { ...TOKEN, access_token: 'at-2', refresh_token: 'rt-2', scope: 'read' } }))
+    const deps = fakeDeps()
+    const cred = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, deps)
+    const req = stub.requests.find((r) => r.path === '/token')!
+    expect(req.form).toEqual({ grant_type: 'refresh_token', refresh_token: 'rt-1', client_id: CLI_CLIENT_ID, resource: RESOURCE })
+    expect(cred).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2', scope: 'read', resource: RESOURCE })
+  })
+
+  test('any 4xx is "sign in again", and its message carries no token', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 400, json: { error: 'invalid_grant', error_description: 'grant request is invalid' } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-secret-1' }, fakeDeps())
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SignInAgainError)
+    expect(String((err as Error).message)).toMatch(/mm login/)
+    expect(String((err as Error).message)).not.toContain('rt-secret-1')
+  })
+
+  test('a 5xx is not "sign in again": the OP may never have seen the token', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 503, json: { error: 'server_error' } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, fakeDeps()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(SignInAgainError)
+    expect(String((err as Error).message)).toMatch(/503/)
+  })
+})
+
+describe('revokeRefreshToken', () => {
+  test('posts the token to the revocation endpoint as the public CLI client', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token/revocation', () => ({ status: 200, text: '' }))
+    expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-1' }, fakeDeps())).toBe(true)
+    const req = stub.requests.find((r) => r.path === '/token/revocation')!
+    expect(req.form).toEqual({ token: 'rt-1', token_type_hint: 'refresh_token', client_id: CLI_CLIENT_ID })
+    expect(req.headers.authorization).toBeUndefined()
+  })
+
+  test('is false, not a throw, when the OP refuses or has no revocation endpoint', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token/revocation', () => ({ status: 503, text: '' }))
+    expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-1' }, fakeDeps())).toBe(false)
+    serveDiscovery(stub, { revocation_endpoint: undefined })
+    expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-1' }, fakeDeps())).toBe(false)
+  })
+})
+
+describe('redirects from the OP are not followed', () => {
+  let elsewhere: Stub | undefined
+  afterEach(async () => {
+    await elsewhere?.close()
+    elsewhere = undefined
+  })
+
+  /** A second origin that would accept anything sent to it, and records it. */
+  async function otherOrigin(): Promise<Stub> {
+    elsewhere = await startStub()
+    for (const route of ['GET /.well-known/openid-configuration', 'POST /token', 'POST /token/revocation']) {
+      elsewhere.on(route, () => ({ status: 200, json: TOKEN }))
+    }
+    return elsewhere
+  }
+
+  test('a 307 from the token endpoint does not carry the refresh token to another origin', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 307, headers: { location: `${other.url}/token` } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-SECRET' }, fakeDeps()).catch((e: unknown) => e)
+    // The request did reach the OP, with the token: the stub is what redirected it.
+    expect(stub.requests.find((r) => r.path === '/token')!.form.refresh_token).toBe('rt-SECRET')
+    expect(other.requests).toEqual([])
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(SignInAgainError)
+    expect((err as Error).message).toMatch(/redirect/)
+    expect((err as Error).message).not.toContain('rt-SECRET')
+  })
+
+  test('a 307 from the revocation endpoint is not followed either', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token/revocation', () => ({ status: 307, headers: { location: `${other.url}/token/revocation` } }))
+    expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-SECRET' }, fakeDeps())).toBe(false)
+    expect(stub.requests.some((r) => r.path === '/token/revocation')).toBe(true)
+    expect(other.requests).toEqual([])
+  })
+
+  test('a redirected discovery document is refused, not fetched from where it points', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 302, headers: { location: `${other.url}/.well-known/openid-configuration` },
+    }))
+    await expect(discover(stub.url, fakeDeps())).rejects.toThrow(/redirect/)
+    expect(other.requests).toEqual([])
+  })
+})
+
+describe('a malformed token from the OP is refused before it is stored', () => {
+  // RFC 6750 §2.1 b64token: what a Bearer header can carry. CR, LF and NUL are not in it.
+  test.each([
+    ['an access token with a newline', { access_token: 'at-SECRET\ninjected' }],
+    ['an access token with a NUL', { access_token: 'at-SECRET\u0000tail' }],
+    ['an access token with a space', { access_token: 'at-SECRET tail' }],
+    ['a refresh token with a CR', { refresh_token: 'rt-SECRET\rtail' }],
+    ['an empty access token', { access_token: '' }],
+  ])('%s', async (_name, over) => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 200, json: { ...TOKEN, ...over } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, fakeDeps()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/malformed/)
+    expect((err as Error).message).not.toMatch(/SECRET|tail|injected/)
+  })
+
+  test('a well-formed JWT and an opaque token pass', async () => {
+    stub = await startStub()
+    serveDiscovery(stub)
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_A~+/=='
+    stub.on('POST /token', () => ({ status: 200, json: { ...TOKEN, access_token: jwt, refresh_token: 'Zm9v_bar-baz' } }))
+    const cred = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-1' }, fakeDeps())
+    expect(cred).toMatchObject({ accessToken: jwt, refreshToken: 'Zm9v_bar-baz' })
+  })
+})
+
+describe('plain http in discovery', () => {
+  const ISSUER = 'https://op.lan.test'
+
+  /** Reaches the stub for the non-loopback names these tests use, without any real network. */
+  function viaStub(s: Stub): typeof fetch {
+    return (input, init) => fetch(String(input).replace(/^https?:\/\/op\.lan\.test/, s.url), init)
+  }
+
+  async function lanOp(tokenEndpoint: string, revocationEndpoint = `${ISSUER}/token/revocation`): Promise<Stub> {
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 200,
+      json: {
+        issuer: ISSUER, token_endpoint: tokenEndpoint, device_authorization_endpoint: `${ISSUER}/device/auth`,
+        revocation_endpoint: revocationEndpoint,
+      },
+    }))
+    stub.on('POST /token', () => ({ status: 200, json: TOKEN }))
+    stub.on('POST /token/revocation', () => ({ status: 200, text: '' }))
+    return stub
+  }
+
+  test('an https issuer advertising an http token endpoint is refused, and the refresh token is not sent', async () => {
+    const s = await lanOp('http://op.lan.test/token')
+    const err = await refresh({ issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })
+      .catch((e: unknown) => e)
+    expect(s.requests.map((r) => r.path)).toEqual(['/.well-known/openid-configuration'])
+    expect((err as Error).message).toMatch(/token_endpoint.*http:\/\/op\.lan\.test\/token/)
+    expect((err as Error).message).toMatch(/--allow-insecure-http/)
+  })
+
+  test('an http revocation endpoint is refused too', async () => {
+    const s = await lanOp(`${ISSUER}/token`, 'http://op.lan.test/token/revocation')
+    expect(await revokeRefreshToken({ issuer: ISSUER, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })).toBe(false)
+    expect(s.requests.some((r) => r.path === '/token/revocation')).toBe(false)
+  })
+
+  test('with the opt-in, the http endpoint is used', async () => {
+    const s = await lanOp('http://op.lan.test/token')
+    const cred = await refresh(
+      { issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s), allowInsecureHttp: true },
+    )
+    expect(cred.accessToken).toBe('at-1')
+    expect(s.requests.find((r) => r.path === '/token')!.form.refresh_token).toBe('rt-1')
+  })
+
+  test('an https endpoint needs no opt-in', async () => {
+    const s = await lanOp(`${ISSUER}/token`)
+    const cred = await refresh({ issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })
+    expect(cred.accessToken).toBe('at-1')
+  })
+})
+
+// The CLI sends nothing to the verification URI, but it sends the operator there to type their
+// password: the same rule as for the endpoints that receive a credential.
+describe('plain http in the device authorization response', () => {
+  const ISSUER = 'https://op.lan.test'
+
+  function viaStub(s: Stub): typeof fetch {
+    return (input, init) => fetch(String(input).replace(/^https?:\/\/op\.lan\.test/, s.url), init)
+  }
+
+  async function lanDeviceOp(device: Record<string, unknown>): Promise<Stub> {
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 200,
+      json: { issuer: ISSUER, token_endpoint: `${ISSUER}/token`, device_authorization_endpoint: `${ISSUER}/device/auth` },
+    }))
+    stub.on('POST /device/auth', () => ({
+      status: 200,
+      json: {
+        device_code: 'dc-1', user_code: 'BCDF-GHJK', verification_uri: `${ISSUER}/device`,
+        verification_uri_complete: `${ISSUER}/device?user_code=BCDF-GHJK`, expires_in: 600, interval: 3, ...device,
+      },
+    }))
+    stub.on('POST /token', () => granted)
+    return stub
+  }
+
+  test.each([
+    ['verification_uri, with no verification_uri_complete', 'verification_uri',
+      { verification_uri: 'http://op.lan.test/device', verification_uri_complete: undefined }],
+    ['verification_uri, beside an https verification_uri_complete', 'verification_uri',
+      { verification_uri: 'http://op.lan.test/device' }],
+    ['verification_uri_complete', 'verification_uri_complete',
+      { verification_uri_complete: 'http://op.lan.test/device?user_code=BCDF-GHJK' }],
+  ])('an https issuer answering with a plain-http %s is refused before the operator is sent there', async (_name, field, device) => {
+    const s = await lanDeviceOp(device)
+    const deps = fakeDeps()
+    const err = await deviceLogin({ issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s) })
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toContain(`the OP's ${field} http://op.lan.test/device`)
+    expect((err as Error).message).toMatch(/password/)
+    expect((err as Error).message).toMatch(/--allow-insecure-http/)
+    // Nothing invites the operator to open it, and no poll starts.
+    expect(deps.printed).toEqual([])
+    expect(s.requests.some((r) => r.path === '/token')).toBe(false)
+  })
+
+  test('with the opt-in, the plain-http verification URI is printed and the flow completes', async () => {
+    const s = await lanDeviceOp({ verification_uri: 'http://op.lan.test/device', verification_uri_complete: undefined })
+    const deps = fakeDeps()
+    const cred = await deviceLogin(
+      { issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s), allowInsecureHttp: true },
+    )
+    expect(cred.accessToken).toBe('at-1')
+    expect(deps.printed.join('\n')).toContain('open http://op.lan.test/device in a browser')
+  })
+
+  test('an https verification URI needs no opt-in', async () => {
+    const s = await lanDeviceOp({})
+    const deps = fakeDeps()
+    const cred = await deviceLogin({ issuer: ISSUER, resource: RESOURCE, scopes: ['read'] }, { ...deps, fetch: viaStub(s) })
+    expect(cred.accessToken).toBe('at-1')
+    expect(deps.printed.join('\n')).toContain(`${ISSUER}/device?user_code=BCDF-GHJK`)
+  })
+})

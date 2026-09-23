@@ -12,6 +12,8 @@ docker compose run --rm control-plane pnpm seed
 
 Control-plane UI at http://localhost:3000, data-plane proxy at http://localhost:8787 — set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` in `.env` if either is already taken. Full instructions: [docs/DEPLOY.md](docs/DEPLOY.md).
 
+**Script it:** everything the console does to flocks, paddocks, fences and keys is also an HTTP API, with the `mm` CLI (`apps/cli`) to sign in and call it — see [docs/admin-api.md](docs/admin-api.md).
+
 **Deploy on Portainer / a server:** pull pre-built images instead of building — see [docs/DEPLOY.md](docs/DEPLOY.md#deploy-on-portainer-pre-built-images) and [docs/RELEASING.md](docs/RELEASING.md).
 
 ## How it works

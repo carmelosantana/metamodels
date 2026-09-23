@@ -33,7 +33,8 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_INTERNAL_URL` | control-plane | How the console reaches the sign-in service server-to-server: `http://auth:3100` in compose. Defaults to `OIDC_ISSUER`. |
 | `CONSOLE_CLIENT_SECRET` | auth, control-plane | ≥16 chars, the same value in both. `openssl rand -hex 32`. |
 | `OIDC_COOKIE_KEYS` | auth | Cookie-signing keys, comma-separated, newest first, each ≥16 chars. |
-| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Changing it invalidates issued tokens but signs nobody out — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
+| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Rotate it through `OIDC_PREVIOUS_SIGNING_KEYS` so issued tokens survive — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
+| `OIDC_PREVIOUS_SIGNING_KEYS` | auth | Optional. Comma-separated retired signing keys, same format and same rules as `OIDC_SIGNING_KEY`. Published for verification only, after the signer, so they never sign a new token. This is the rotation overlap window. |
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
@@ -42,6 +43,9 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
 | `DATA_PLANE_PORT` | compose | Host port for the proxy. Default `8787`. |
 | `AUTH_HOST_PORT` | compose | Host port for the sign-in service. Default `3100`. |
+| `METAMODELS_ISSUER` | admin CLI (operator's machine) | Not read by any service. The sign-in service `mm` signs in against: exactly the deployment's `OIDC_ISSUER`. `--issuer` overrides. No default. |
+| `METAMODELS_CONSOLE_URL` | admin CLI (operator's machine) | Not read by any service. The console whose admin API `mm` calls: exactly the deployment's `CONSOLE_URL`, since the CLI's tokens are bound to the resource derived from it. `--console` overrides. No default. |
+| `METAMODELS_ALLOW_INSECURE_HTTP` | admin CLI (operator's machine) | Not read by any service. `mm` refuses plain `http://` to a host that is not loopback (`localhost`, `127.0.0.0/8`, `::1`) for the issuer, the console and the endpoints the sign-in service advertises, since it sends tokens to them, and for the page `mm login` sends the operator to, since they type their password there. `1` (or `--allow-insecure-http`) allows it, with a warning on stderr on every run. Default off. |
 
 ## Security headers
 
@@ -98,7 +102,7 @@ docker rm -f mm-pg mm-redis
 
 ## Deploy gotchas
 
-- **Trusted reverse proxy for the login throttle.** The sign-in throttle (in the auth service) keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
+- **Trusted reverse proxy for the login throttle.** The sign-in throttle (in the auth service) keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. The IP address the CLI approval page shows for the requesting machine is that same hop, so it is only as trustworthy as the proxy. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
 - **Typecheck needs a build first.** Control-plane `tsc -b` depends on `.next/types` produced by `next build`/`next typegen`; a cold clone must build the app before typechecking it. (Enforced in Plan 6b CI.)
 - **Base images are digest-pinned; refresh them deliberately.** The Node base (`docker/Dockerfile`) and the `postgres:16-bookworm` / `redis:7-bookworm` services (compose files) are pinned by `@sha256:` for reproducible, tamper-evident builds. Pinned digests don't receive upstream security patches automatically — re-bump each on a CVE or on a quarterly cadence via `docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'`.
 
@@ -161,7 +165,7 @@ error rather than silently booting with a guessable credential:
 | `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
-| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Changing it invalidates issued tokens; it does **not** sign anyone out |
+| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Rotate it via `OIDC_PREVIOUS_SIGNING_KEYS`, or issued access tokens stop verifying once the console's 10-minute copy of the keys expires; it does **not** sign anyone out |
 
 Everything else defaults:
 
@@ -218,17 +222,36 @@ Keep at least one active admin — deactivating the last one locks everybody out
 
 - **`OIDC_COOKIE_KEYS`** — prepend a new key (`<new>,<old>`) and redeploy: new cookies are
   signed with it and old ones still verify. Drop the old key after a day.
-- **`OIDC_SIGNING_KEY`** — replacing it invalidates every ID and access token already issued.
-  The sign-in service publishes only the current key, so there is no overlap window: a token
-  signed with the old key fails verification immediately. It does **not** sign anyone out.
-  Console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
-  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
+- **`OIDC_SIGNING_KEY`** — rotate it with an overlap window, or every access token already issued
+  stops verifying once the console's cached copy of the sign-in service's keys expires, within
+  10 minutes:
+
+  1. In a single edit, applied together before any redeploy: move the current `OIDC_SIGNING_KEY`
+     value into `OIDC_PREVIOUS_SIGNING_KEYS` **and** set `OIDC_SIGNING_KEY` to the new key. The
+     two variables must never hold the same key at the same time — that is a duplicate key id,
+     and the sign-in service refuses to start, so save the environment only once both are set.
+  2. Redeploy the sign-in service. It publishes both keys in its JWKS, the new one first, so new
+     tokens are signed with the new key while in-flight tokens still verify against the old one.
+  3. Wait out the window: the longest access-token lifetime, plus the console's JWKS cache.
+  4. Clear `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the sign-in service stop
+     publishing the old key. The console stops accepting it once its cached copy expires, within
+     10 more minutes.
+
+  Replacing `OIDC_SIGNING_KEY` on its own, with `OIDC_PREVIOUS_SIGNING_KEYS` left empty, is the
+  *deliberate* way to invalidate issued tokens. The console refuses them once its cached copy of the
+  keys expires, within 10 minutes, or at once if you restart the control-plane container after the
+  sign-in service is running with the new key, as
+  [Forcing everyone to sign in again](#forcing-everyone-to-sign-in-again) describes for a leaked
+  key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
+  `SESSION_SECRET`, and sign-in service sessions are database rows behind cookies signed with
+  `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
 
 ### Forcing everyone to sign in again
 
-After a suspected leak, end both kinds of session:
+After a suspected leak, end all three kinds of sign-in: console sessions, sign-in service sessions,
+and `mm` CLI sign-ins.
 
 1. **Rotate `SESSION_SECRET`** (`openssl rand -hex 32`). Every console session cookie stops
    verifying, so every operator is signed out of the console.
@@ -243,7 +266,47 @@ After a suspected leak, end both kinds of session:
    DELETE FROM oidc_payload WHERE model = 'Session';
    ```
 
-Rotate `OIDC_SIGNING_KEY` as well if the leak may have included it.
+5. **End every `mm` sign-in.** Steps 1 to 4 do not touch these. A CLI sign-in is a grant stored in
+   the sign-in service's database, and its refresh token keeps renewing for up to 90 days whatever
+   happens to the secrets above. Delete every refresh token and grant:
+
+   ```sql
+   DELETE FROM oidc_payload WHERE model IN ('RefreshToken', 'Grant');
+   ```
+
+   Each `mm` then has its next renewal refused and asks for `mm login`. The console holds no
+   refresh tokens, so this step is for `mm` only. It also deletes the console's grants, which does
+   no harm: the console's next sign-in creates a new grant, with no extra prompt. The step does not
+   end **access tokens** already issued: those are signed JWTs that the console checks by itself
+   and that are never stored, so each one keeps working until it expires, one hour after it was
+   issued at most. To end them sooner, replace `OIDC_SIGNING_KEY` outright, as the next paragraph
+   describes: the console then refuses them once its cached copy of the sign-in service's keys
+   expires, within 10 minutes, or at once if you also restart the control-plane container.
+
+If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
+
+1. Set `OIDC_SIGNING_KEY` to a new key and make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty,
+   clearing it if a rotation window left a key in it, since that key may be the leaked one.
+2. Redeploy the sign-in service (`auth`), and wait until it is running with the new key.
+3. **Then restart the control-plane container**, for example `docker compose restart control-plane`.
+   Do this even if the control-plane was redeployed with the other secrets, unless that happened
+   after step 2. The console keeps its copy of the sign-in service's published keys in the
+   control-plane process's memory, for up to 10 minutes. Until that copy expires it still accepts
+   admin API access tokens signed with the leaked key, including any forged with it. A restart
+   drops the copy, so the leaked key stops verifying at once. Without the restart it stops within
+   10 minutes.
+
+Steps 2 and 3 together cover every place that verifies these tokens. The restart covers the
+control-plane process, which holds two copies of the keys, both in memory: the admin API's, which
+checks the access tokens clients present, and the console sign-in's, which checks only the ID token
+the console receives straight from the sign-in service when someone signs in. The data plane
+verifies no token from the sign-in service at all: it authenticates API keys. The sign-in service
+reads its keys when it starts (step 2).
+
+Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-the-sign-in-keys)
+here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
+publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
+as soon as possible, and losing the in-flight tokens signed with it is the point.
 
 ### Upgrading from 0.3.x
 

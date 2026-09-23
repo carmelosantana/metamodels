@@ -11,7 +11,7 @@ const NOW = 1_800_000_000_000
 
 async function seedAdminUser(db: TestDb, orgId: string): Promise<Actor> {
   const [u] = await db.insert(schema.user).values({ orgId, email: 'admin@x.io', passwordHash: 'scrypt$x$y', role: 'admin', status: 'active' }).returning()
-  return { id: u.id, orgId, email: u.email, role: 'admin' }
+  return { id: u.id, orgId, email: u.email, role: 'admin', credential: 'session' }
 }
 
 describe('invites-service', () => {
@@ -100,6 +100,8 @@ describe('invites-service acceptInvite', () => {
 
     const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'user.accept'))
     expect(audits.length).toBe(1)
+    // No acting operator exists here: the new user is their own audit actor, on the session path.
+    expect(audits[0]).toMatchObject({ orgId: o.id, actor: 'new@x.io', changedBy: 'session' })
   })
 
   test('rejects invalid, expired, and already-accepted tokens', async () => {

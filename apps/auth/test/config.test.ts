@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest'
 import { loadAuthConfig } from '../src/config.js'
+import { generateKeyPairSync } from 'node:crypto'
 import { rsaPemBase64 } from './helpers/keys.js'
+
+/** A second, distinct key, minted at test time. rsaPemBase64() caches per size. */
+let second: string | undefined
+const secondRsaPemBase64 = () =>
+  (second ??= Buffer.from(
+    generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }) as string,
+  ).toString('base64'))
 
 function env(over: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   return {
@@ -52,6 +60,27 @@ describe('loadAuthConfig', () => {
 
   test('rejects a signing key that is not base64 of a PKCS#8 PEM', () => {
     expect(() => loadAuthConfig(env({ OIDC_SIGNING_KEY: Buffer.from('nope').toString('base64') }))).toThrow('PKCS#8')
+  })
+
+  test('OIDC_PREVIOUS_SIGNING_KEYS is optional and splits on commas', () => {
+    const b64a = rsaPemBase64()
+    const b64b = secondRsaPemBase64()
+    const cfg = loadAuthConfig(env({ OIDC_PREVIOUS_SIGNING_KEYS: ` ${b64a} , ${b64b} , ` }))
+    expect(cfg.previousSigningKeyPems).toHaveLength(2)
+    for (const p of cfg.previousSigningKeyPems) expect(p).toContain('-----BEGIN PRIVATE KEY-----')
+    expect(cfg.previousSigningKeyPems[0]).not.toBe(cfg.previousSigningKeyPems[1])
+    expect(loadAuthConfig(env()).previousSigningKeyPems).toEqual([])
+    expect(loadAuthConfig(env({ OIDC_PREVIOUS_SIGNING_KEYS: '' })).previousSigningKeyPems).toEqual([])
+  })
+
+  test('a previous key that is not base64 PKCS#8 PEM is rejected at boot', () => {
+    // loadAuthConfig IS the boot path (server.ts calls it with process.env before anything else),
+    // so a malformed previous key kills the container at startup, not at the first token exchange.
+    expect(() => loadAuthConfig(env({ OIDC_PREVIOUS_SIGNING_KEYS: 'bm90LWEta2V5' })))
+      .toThrow(/PKCS#8 PEM/)
+    // A good signer alongside a bad previous key still fails, and the message names the culprit.
+    expect(() => loadAuthConfig(env({ OIDC_PREVIOUS_SIGNING_KEYS: `${rsaPemBase64()},bm90LWEta2V5` })))
+      .toThrow(/OIDC_PREVIOUS_SIGNING_KEYS/)
   })
 
   test('validates AUTH_PORT', () => {

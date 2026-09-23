@@ -6,7 +6,7 @@ import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
-  return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role }
+  return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
 }
 
 async function seedAudit(db: TestDb, orgId: string, actor: string, action: string, target: string, detail?: unknown) {
@@ -67,7 +67,7 @@ describe('audit-service', () => {
   test('a non-read role is rejected', async () => {
     const db = await freshDb()
     const o = await seedOrg(db)
-    const noRead = { id: 'u1', orgId: o.id, email: 'x@x.io', role: 'viewer' as const }
+    const noRead: Actor = { id: 'u1', orgId: o.id, email: 'x@x.io', role: 'viewer', credential: 'session' }
     // sanity: viewer HAS read; assert the capability gate exists by calling requireCapability path via a bad role cast
     const bad = { ...noRead, role: 'nobody' as unknown as Actor['role'] }
     await expect(listAudit(db, bad, { limit: 10 })).rejects.toThrow(ForbiddenError)

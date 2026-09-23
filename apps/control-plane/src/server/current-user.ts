@@ -1,11 +1,11 @@
 import { cookies } from 'next/headers'
 import { OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
-import { signSession, verifySession } from '../auth/session'
+import { SESSION_COOKIE, signSession, verifySession } from '../auth/session'
 import { type Actor } from '../auth/authorize'
 import { loadActiveActor } from './actor'
 import { getDb } from './db'
 
-export const SESSION_COOKIE = 'mm_session'
+export { SESSION_COOKIE } from '../auth/session'
 export const SESSION_TTL_MS = OPERATOR_SESSION_TTL_MS
 
 export function sessionSecret(): string {
@@ -20,7 +20,7 @@ export async function getCurrentActor(): Promise<Actor | null> {
   const payload = verifySession(token, sessionSecret(), Date.now())
   if (!payload) return null
   // Re-load the user so a deactivated/role-changed user loses access immediately.
-  return loadActiveActor(getDb(), payload.uid)
+  return loadActiveActor(getDb(), payload.uid, 'session')
 }
 
 export async function setSessionCookie(actor: Actor): Promise<void> {

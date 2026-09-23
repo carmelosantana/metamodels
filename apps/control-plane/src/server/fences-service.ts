@@ -70,8 +70,8 @@ export async function saveFence(
       .onConflictDoUpdate({ target: fence.paddockId, set: conflictSet })
       .returning()
 
-    await writeAudit(tx, {
-      orgId: actor.orgId, actor: actor.email, action: 'fence.save',
+    await writeAudit(tx, actor, {
+      action: 'fence.save',
       target: `paddock:${data.paddockId}`, detail: { breed: breedId },
     })
     return saved

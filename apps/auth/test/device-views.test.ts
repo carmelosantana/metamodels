@@ -1,0 +1,178 @@
+import { describe, expect, test } from 'vitest'
+import { renderDeviceConfirmPage, renderSwitchAccountPage, renderUserCodePage } from '../src/device-views.js'
+
+// The exact markup oidc-provider 9.12 hands the two sources (lib/helpers/user_code_form.js),
+// including the inline `onfocus` handler the input form carries.
+const INPUT_FORM = `<form id="op.deviceInputForm" novalidate method="post" action="/device">
+  <input type="hidden" name="xsrf" value="t0ken"/>
+  <input
+    type="text" name="user_code" placeholder="Enter code" onfocus="this.select(); this.onfocus = undefined;" autofocus autocomplete="off"></input>
+  </form>`
+const CONFIRM_FORM = `<form id="op.deviceConfirmForm" method="post" action="/device">
+<input type="hidden" name="xsrf" value="t0ken"/>
+<input type="hidden" name="user_code" value="BCDF-GHJK"/>
+<input type="hidden" name="confirm" value="yes"/>
+</form>`
+
+describe('renderUserCodePage', () => {
+  test('embeds the provider form and a submit button that targets it', () => {
+    const html = renderUserCodePage(INPUT_FORM)
+    expect(html).toContain('name="xsrf" value="t0ken"')
+    expect(html).toContain('name="user_code"')
+    expect(html).toContain('<button type="submit" form="op.deviceInputForm">Continue</button>')
+    expect(html).not.toContain('role="alert"')
+  })
+
+  test('prefills the code from verification_uri_complete into the provider\'s own input', () => {
+    const html = renderUserCodePage(INPUT_FORM, undefined, 'BCDF-GHJK')
+    expect(html).toContain('type="text" name="user_code" value="BCDF-GHJK" placeholder="Enter code"')
+    // Still the provider's form: its xsrf token rides along, and Continue submits it.
+    expect(html).toContain('name="xsrf" value="t0ken"')
+    expect(html).toContain('<button type="submit" form="op.deviceInputForm">Continue</button>')
+  })
+
+  test('escapes a hostile prefilled code: it comes from a URL anyone can send', () => {
+    const hostile = `"><script>alert('x')</script><input value="`
+    const html = renderUserCodePage(INPUT_FORM, undefined, hostile)
+    expect(html).toContain('name="user_code" value="&quot;&gt;&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;&lt;input value=&quot;" placeholder')
+    expect(html).not.toMatch(/<script/i)
+    // Exactly one user_code input: nothing broke out of the attribute.
+    expect(html.match(/name="user_code"/g)).toHaveLength(1)
+  })
+
+  // `$1`, `` $` ``, `$&` and `$'` are special in a String.prototype.replace replacement string, and
+  // escapeHtml leaves `$` alone. Each must come back as the literal text, not as library markup.
+  test.each([
+    ['$1', '$1'],
+    ['$`', '$`'],
+    ['$&', '$&amp;'],
+    ["$'", '$&#39;'],
+    ['$1 hidden form=nope', '$1 hidden form=nope'],
+    ['$$', '$$'],
+  ])(
+    'a prefilled code containing %s is shown as that text, and the form is not duplicated',
+    (code, value) => {
+      const html = renderUserCodePage(INPUT_FORM, undefined, code)
+      expect(html).toContain(`<input\n    type="text" name="user_code" value="${value}" placeholder="Enter code" autofocus autocomplete="off"></input>`)
+      expect(html.match(/<input type="hidden" name="xsrf" value="t0ken"\/>/g)).toHaveLength(1)
+      expect(html.match(/<form /g)).toHaveLength(1)
+      expect(html.match(/name="user_code"/g)).toHaveLength(1)
+    },
+  )
+
+  test('a prefilled code that looks like a handler is kept as text, not reshaped by the handler strip', () => {
+    const html = renderUserCodePage(INPUT_FORM, undefined, 'x onfocus=')
+    expect(html).toContain('name="user_code" value="x onfocus=" placeholder="Enter code" autofocus autocomplete="off">')
+  })
+
+  test('without a prefill the input is left empty', () => {
+    expect(renderUserCodePage(INPUT_FORM)).toContain('type="text" name="user_code" placeholder="Enter code"')
+    expect(renderUserCodePage(INPUT_FORM, undefined, '')).toContain('type="text" name="user_code" placeholder="Enter code"')
+  })
+
+  test('says why a code was refused', () => {
+    expect(renderUserCodePage(INPUT_FORM, { name: 'NotFoundError', userCode: 'X' }))
+      .toContain('<p class="error" role="alert">That code is not valid. Check your terminal and try again.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'NoCodeError' }))
+      .toContain('That code is not valid.')
+    // oidc-provider's ReRenderErrors, by name (lib/helpers/re_render_errors.js). A dead code is
+    // told apart from a mistyped one: retyping the same dead code from the terminal cannot help.
+    expect(renderUserCodePage(INPUT_FORM, { name: 'ExpiredError', userCode: 'X' }))
+      .toContain('<p class="error" role="alert">That code has expired. Start the sign-in again from your terminal.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'ExpiredError' }))
+      .toContain('That code has expired.')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'AlreadyUsedError', userCode: 'X' }))
+      .toContain('<p class="error" role="alert">That code was already used or cancelled. Start the sign-in again from your terminal.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'AlreadyUsedError' }))
+      .toContain('That code was already used or cancelled.')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'AbortedError' }))
+      .toContain('<p class="error" role="alert">The sign-in was cancelled.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'SomethingElse' }))
+      .toContain('<p class="error" role="alert">Something went wrong. Start the sign-in again from your terminal.</p>')
+  })
+})
+
+const CLI_DEVICE = { ip: '203.0.113.9', ua: 'metamodels-cli/0.1 (linux; x64)' }
+
+describe('renderDeviceConfirmPage', () => {
+  test('shows where the device request came from, and tells the operator to cancel if it is not theirs', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE)
+    expect(html).toContain('IP address: <strong>203.0.113.9</strong>')
+    expect(html).toContain('User agent: <strong>metamodels-cli/0.1 (linux; x64)</strong>')
+    expect(html).toContain('If this is not your machine, or you did not just start this sign-in yourself, press Cancel.')
+  })
+
+  test('escapes a hostile user agent and IP: the device side is attacker-controlled', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', {
+      ip: '"><img src=x>', ua: '<script>alert(1)</script>',
+    })
+    expect(html).toContain('IP address: <strong>&quot;&gt;&lt;img src=x&gt;</strong>')
+    expect(html).toContain('User agent: <strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong>')
+    expect(html).not.toMatch(/<script|<img/i)
+  })
+
+  test('says so when the device sent no user agent, or the info is not text', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', { ip: 42, ua: undefined })
+    expect(html).toContain('IP address: <strong>unknown</strong>')
+    expect(html).toContain('User agent: <strong>unknown</strong>')
+  })
+
+  test('names the client, shows the code, and approves through the provider form', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE)
+    expect(html).toContain(CONFIRM_FORM)
+    expect(html).toContain('<strong>MetaModels admin CLI</strong>')
+    expect(html).toContain('<p class="code">BCDF-GHJK</p>')
+    expect(html).toContain('<button autofocus type="submit" form="op.deviceConfirmForm">Approve</button>')
+    expect(html).toContain('<button class="secondary" type="submit" form="op.deviceConfirmForm" name="abort" value="yes">Cancel</button>')
+  })
+
+  test('escapes a hostile client name and user code', () => {
+    const html = renderDeviceConfirmPage(CONFIRM_FORM, '<img src=x>', '"><script>x</script>', CLI_DEVICE)
+    expect(html).toContain('<strong>&lt;img src=x&gt;</strong>')
+    expect(html).toContain('<p class="code">&quot;&gt;&lt;script&gt;x&lt;/script&gt;</p>')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<script')
+  })
+})
+
+describe('renderSwitchAccountPage', () => {
+  test('explains the switch and posts the logout step with its xsrf token behind a visible button', () => {
+    const html = renderSwitchAccountPage('http://op.test/session/end/confirm', 'abc123')
+    expect(html).toContain('<h1>Switch account?</h1>')
+    expect(html).toContain('<form id="op.switchAccountForm" method="post" action="http://op.test/session/end/confirm">')
+    expect(html).toContain('<input type="hidden" name="xsrf" value="abc123"/>')
+    expect(html).toContain('<input type="hidden" name="logout" value="yes"/>')
+    expect(html).toContain('<button autofocus type="submit" form="op.switchAccountForm">Continue</button>')
+  })
+
+  test('escapes both values', () => {
+    const html = renderSwitchAccountPage('/x"><script>', '"><script>')
+    expect(html).not.toMatch(/<script/i)
+    expect(html).toContain('action="/x&quot;&gt;&lt;script&gt;"')
+  })
+})
+
+describe('CSP compatibility', () => {
+  const pages = [
+    renderUserCodePage(INPUT_FORM),
+    renderUserCodePage(INPUT_FORM, { name: 'NotFoundError' }),
+    renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK', CLI_DEVICE),
+    renderSwitchAccountPage('/session/end/confirm', 'abc123'),
+  ]
+
+  test('no device page carries inline script, an inline event handler, or inline style', () => {
+    for (const html of pages) {
+      expect(html).toContain('<link rel="stylesheet" href="/assets/auth.css">')
+      expect(html).not.toMatch(/<script/i)
+      expect(html).not.toMatch(/\son[a-z]+=/i)
+      expect(html).not.toMatch(/<style/i)
+      expect(html).not.toMatch(/\sstyle=/i)
+    }
+  })
+
+  test('stripping the handler leaves the input itself intact', () => {
+    const html = renderUserCodePage(INPUT_FORM)
+    expect(INPUT_FORM).toContain('onfocus=')
+    expect(html).toContain('type="text" name="user_code" placeholder="Enter code" autofocus autocomplete="off">')
+  })
+})

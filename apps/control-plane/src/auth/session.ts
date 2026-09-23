@@ -1,6 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { isRole, type Role } from './authorize'
 
+/**
+ * The console's cookie name. Lives here rather than in `server/current-user.ts` so plain-node
+ * callers — the admin API's bearer-only triage, and its tests — can read it without dragging
+ * `next/headers` into the import graph. `current-user.ts` re-exports it.
+ */
+export const SESSION_COOKIE = 'mm_session'
+
 export interface SessionPayload {
   uid: string
   oid: string

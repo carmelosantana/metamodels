@@ -13,21 +13,23 @@ async function withUser(overrides: Partial<{ status: string; role: string }> = {
 }
 
 describe('loadActiveActor', () => {
-  test('maps an active user to an Actor', async () => {
+  test('maps an active user to an Actor, carrying the credential verbatim', async () => {
     const { db, u, org } = await withUser()
-    expect(await loadActiveActor(db, u.id)).toEqual({ id: u.id, orgId: org.id, email: 'op@x.io', role: 'member' })
+    expect(await loadActiveActor(db, u.id, 'session')).toEqual({ id: u.id, orgId: org.id, email: 'op@x.io', role: 'member', credential: 'session' })
+    // Not hardcoded to 'session': the bearer path needs its own value in audit_log.changed_by.
+    expect((await loadActiveActor(db, u.id, 'token:cli:jti-1'))?.credential).toBe('token:cli:jti-1')
   })
 
   test('refuses a deactivated user or an unknown role', async () => {
     const off = await withUser({ status: 'deactivated' })
-    expect(await loadActiveActor(off.db, off.u.id)).toBeNull()
+    expect(await loadActiveActor(off.db, off.u.id, 'session')).toBeNull()
     const odd = await withUser({ role: 'owner' })
-    expect(await loadActiveActor(odd.db, odd.u.id)).toBeNull()
+    expect(await loadActiveActor(odd.db, odd.u.id, 'session')).toBeNull()
   })
 
   test('refuses an unknown id and a non-uuid id without a database error', async () => {
     const { db } = await withUser()
-    expect(await loadActiveActor(db, '00000000-0000-4000-8000-000000000000')).toBeNull()
-    expect(await loadActiveActor(db, 'not-a-uuid')).toBeNull()
+    expect(await loadActiveActor(db, '00000000-0000-4000-8000-000000000000', 'session')).toBeNull()
+    expect(await loadActiveActor(db, 'not-a-uuid', 'session')).toBeNull()
   })
 })

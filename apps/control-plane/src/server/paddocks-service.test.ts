@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
-import { listPaddocks, savePaddock, deletePaddock, setPaddockStatus, SlugTakenError } from './paddocks-service'
+import { listPaddocks, getPaddock, savePaddock, deletePaddock, setPaddockStatus, SlugTakenError } from './paddocks-service'
+import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { NotFoundError } from './flocks-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
@@ -11,7 +12,7 @@ type TDb = Awaited<ReturnType<typeof freshDb>>
 async function orgWithFlock(db: TDb, role: Actor['role'] = 'admin') {
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
-  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role }
+  const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
   return { o, f, actor }
 }
 
@@ -105,5 +106,44 @@ describe('paddocks-service', () => {
     expect(await db.select().from(schema.paddock)).toHaveLength(0)
     const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'paddock.delete'))
     expect(audits).toHaveLength(1)
+  })
+
+  test('listPaddocks paginates by id and a cursor resumes exactly after it', async () => {
+    const db = await freshDb()
+    const { f, actor } = await orgWithFlock(db)
+    const made = []
+    for (const s of ['a', 'b', 'c']) {
+      made.push(await savePaddock(db, actor, { flockId: f.id, name: s, slug: s, status: 'active', theme: 'plain' }))
+    }
+    const byId = [...made].sort((x, y) => x.id.localeCompare(y.id))
+
+    const first = await listPaddocks(db, actor, { limit: 2 })
+    expect(first.map((p) => p.id)).toEqual([byId[0].id, byId[1].id])
+
+    const second = await listPaddocks(db, actor, { limit: 2, cursor: encodeCursor(byId[1].id) })
+    expect(second.map((p) => p.id)).toEqual([byId[2].id])
+  })
+
+  test('listPaddocks without opts still returns every row (the console path is unchanged)', async () => {
+    const db = await freshDb()
+    const { f, actor } = await orgWithFlock(db)
+    // More than one default page, so a regression that paginated the console's bare call would
+    // return DEFAULT_LIMIT rows and fail here.
+    const n = DEFAULT_LIMIT + 1
+    await db.insert(schema.paddock).values(Array.from({ length: n }, (_, i) => ({
+      orgId: actor.orgId, flockId: f.id, name: `p${i}`, slug: `p${i}`,
+    })))
+    expect(await listPaddocks(db, actor)).toHaveLength(n)
+  })
+
+  test('getPaddock is org-scoped — another org 404s rather than leaking', async () => {
+    const db = await freshDb()
+    const { f, actor } = await orgWithFlock(db)
+    const mine = await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'a', status: 'active', theme: 'plain' })
+    expect((await getPaddock(db, actor, mine.id)).id).toBe(mine.id)
+
+    const other = await seedOrg(db, 'other')
+    const otherOrgActor: Actor = { ...actor, orgId: other.id }
+    await expect(getPaddock(db, otherOrgActor, mine.id)).rejects.toThrow(NotFoundError)
   })
 })
