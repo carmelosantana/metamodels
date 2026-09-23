@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 /**
  * One issuer's tokens. Keyed by issuer so several MetaModels boxes coexist in one file (spec §4.4).
  * `resource` is the admin-API resource the tokens are bound to: a refresh must name the same one,
- * and a refresh the OP refuses has already consumed its token (see `session.ts`), so a command
+ * and the OP refuses a refresh for another resource only after consuming the token (see `device.ts`), so a command
  * pointed at a different console must be stopped before it refreshes, not after.
  */
 export interface StoredCredential {

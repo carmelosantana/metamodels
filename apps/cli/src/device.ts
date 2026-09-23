@@ -32,7 +32,7 @@ const DEVICE_CODE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 /** The confirm page shows the requesting machine's user agent; this is what it will say. */
 const USER_AGENT = `metamodels-cli (${process.platform}; ${process.arch})`
 
-/** A refresh the OP refused. The token it presented is spent: the only way on is `mm login`. */
+/** A refresh the OP refused. The token it presented may be spent: the only safe way on is `mm login`. */
 export class SignInAgainError extends Error {
   constructor(why: string) {
     super(`${why}; run \`mm login\` to sign in again`)
@@ -240,9 +240,10 @@ export async function deviceLogin(
 
 /**
  * One refresh-token grant, naming the same resource (without it the OP answers with an opaque
- * userinfo token). Throws `SignInAgainError` on any 4xx: the OP consumes the presented token before
- * it decides, so a refused refresh has already spent it, and presenting it again is a reuse that
- * revokes the whole grant. A 5xx or a network failure throws a plain error — the OP may never have
+ * userinfo token). Throws `SignInAgainError` on any 4xx. Some refusals come after the OP has
+ * consumed the presented token (a resource it will not issue for is checked after rotation), and the
+ * response does not say which, so a refused token is treated as spent: presenting a spent one again
+ * is a reuse that revokes the whole grant. A 5xx or a network failure throws a plain error — the OP may never have
  * seen the token, so the caller keeps it.
  *
  * Unlocked. Callers use `refreshStored` (`session.ts`), which serialises refreshes across processes.

@@ -37,7 +37,7 @@ export function loadCredential(ctx: SessionContext): StoredCredential {
  *
  * After taking the lock it re-reads the store: if another process has refreshed in the meantime,
  * that result is used and nothing is sent. Otherwise one refresh; the rotated tokens are written
- * (atomically) before the lock is released. A refused refresh has spent its token, so the stored
+ * (atomically) before the lock is released. A refused refresh may have spent its token, so the stored
  * credential is dropped rather than kept for a retry that would read as reuse and revoke the grant.
  */
 export async function refreshStored(ctx: SessionContext, stale: StoredCredential): Promise<StoredCredential> {

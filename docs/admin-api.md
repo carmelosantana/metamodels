@@ -76,10 +76,10 @@ API refuses it. The 30 seconds are measured on your machine's clock, so a machin
 behind may still send an expired token; the renewal on a refusal covers that. A refresh token
 expires after 30 days of disuse, and 90 days after the sign-in at the latest.
 
-**If the sign-in service refuses a renewal, sign in again.** A refresh token is used up on every
-attempt, even a refused one, so `mm` forgets the sign-in and tells you to run `mm login`. Retrying
-would only look like a stolen token being replayed, and the sign-in service would revoke the whole
-sign-in.
+**If the sign-in service refuses a renewal, sign in again.** Some refusals come after the refresh
+token has been used up, and the refusal does not say which, so `mm` forgets the sign-in and tells
+you to run `mm login`. Retrying with a used-up token would look like a stolen token being replayed,
+and the sign-in service would revoke the whole sign-in.
 
 A renewal can also fail without a refusal: the sign-in service cannot be reached, or answers with a
 server error (`5xx`). Then `mm` keeps the sign-in, and the next command tries the renewal again. The
