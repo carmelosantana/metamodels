@@ -331,6 +331,39 @@ describe('verifyAdminToken', () => {
     await expect(verifyAdminToken(idToken)).rejects.toMatchObject({ name: 'TokenError' })
   })
 
+  test('rejects a token from another issuer, signed by a key the JWKS does publish', async () => {
+    // Same key, kid, typ, aud and sub as a token that verifies: only `iss` differs, so the refusal
+    // can only come from the issuer check.
+    const signed = (iss: string) => new SignJWT({ client_id: 'metamodels-cli', aud: adminApiResource(CONSOLE_URL) })
+      .setProtectedHeader({ alg: 'RS256', kid: KID_B, typ: 'at+jwt' })
+      .setIssuer(iss)
+      .setSubject(SUBJECT)
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(keyB)
+    expect((await verifyAdminToken(await signed(issuer))).sub).toBe(SUBJECT)
+    await expect(verifyAdminToken(await signed('https://evil.example.test'))).rejects.toMatchObject({
+      name: 'TokenError',
+      reason: 'signature, issuer, typ or expiry rejected',
+    })
+  })
+
+  test('rejects a token with no `sub`, or an empty one', async () => {
+    const withSub = (sub?: string) => {
+      const jwt = new SignJWT({ client_id: 'metamodels-cli', aud: adminApiResource(CONSOLE_URL) })
+        .setProtectedHeader({ alg: 'RS256', kid: KID_B, typ: 'at+jwt' })
+        .setIssuer(issuer)
+        .setIssuedAt()
+        .setExpirationTime('1h')
+      if (sub !== undefined) jwt.setSubject(sub)
+      return jwt.sign(keyB)
+    }
+    expect((await verifyAdminToken(await withSub(SUBJECT))).sub).toBe(SUBJECT)
+    for (const sub of [undefined, '']) {
+      await expect(verifyAdminToken(await withSub(sub))).rejects.toMatchObject({ name: 'TokenError', reason: 'missing sub' })
+    }
+  })
+
   test('rejects an expired token', async () => {
     const expired = await mint({ aud: adminApiResource(CONSOLE_URL) }, { exp: nowSeconds() - 3600 })
     await expect(verifyAdminToken(expired)).rejects.toMatchObject({ name: 'TokenError' })
