@@ -194,6 +194,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     provider,
     db,
     throttle: new LoginThrottle(),
+    // Auto-consented without a consent screen (spec §8, the auto-consent note). Not a grant of the
+    // admin API: that is `resourcesByClient`, where only the CLI is listed (spec A15).
     firstPartyClientIds: new Set([CONSOLE_CLIENT_ID, CLI_CLIENT_ID]),
     csp: authCsp([new URL(cfg.consoleUrl).origin]),
   }))
