@@ -57,6 +57,13 @@
       "when": 1790093024486,
       "tag": "0007_dazzling_oracle",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790130514705,
+      "tag": "0008_seal_upstream_auth",
+      "breakpoints": true
     }
   ]
 }

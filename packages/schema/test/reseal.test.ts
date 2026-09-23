@@ -1,0 +1,108 @@
+import { randomBytes } from 'node:crypto'
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { PGlite } from '@electric-sql/pglite'
+import { drizzle } from 'drizzle-orm/pglite'
+import { migrate } from 'drizzle-orm/pglite/migrator'
+import { eq, sql } from 'drizzle-orm'
+import { describe, expect, test } from 'vitest'
+import * as schema from '../src/schema.js'
+import { loadSealKeyring, openSealed, seal, type SealKeyring } from '../src/sealed.js'
+import { resealUpstreamAuth } from '../src/reseal.js'
+
+const { flock, org } = schema
+const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../drizzle')
+const key = () => randomBytes(32).toString('base64')
+const ring = (cur: string, prev: string[] = []): SealKeyring =>
+  loadSealKeyring({ UPSTREAM_AUTH_KEY: cur, UPSTREAM_AUTH_PREVIOUS_KEYS: prev.join(',') })
+
+/** The migrations folder as it stood at `lastIdx`, so a test can hold a database at an old schema. */
+function foldersUpTo(lastIdx: number): string {
+  const dir = mkdtempSync(join(tmpdir(), 'mm-migrations-'))
+  cpSync(migrationsFolder, dir, { recursive: true })
+  const journalPath = join(dir, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { idx: number }[] }
+  journal.entries = journal.entries.filter((e) => e.idx <= lastIdx)
+  writeFileSync(journalPath, JSON.stringify(journal))
+  return dir
+}
+
+async function migratedDb() {
+  const db = drizzle(new PGlite(), { schema })
+  await migrate(db, { migrationsFolder })
+  const [o] = await db.insert(org).values({ name: 'o' }).returning()
+  return { db, orgId: o.id }
+}
+
+const addFlock = (db: Awaited<ReturnType<typeof migratedDb>>['db'], orgId: string, name: string, upstreamAuthEnc: string | null) =>
+  db.insert(flock).values({ orgId, breed: 'ollama', name, baseUrl: 'http://o', upstreamAuthEnc })
+    .returning().then((r) => r[0])
+
+describe('migration 0008 + resealUpstreamAuth — the upgrade path', () => {
+  test('a pre-0008 plaintext credential survives the rename and comes out sealed, then the check is validated', async () => {
+    const db = drizzle(new PGlite(), { schema })
+    await migrate(db, { migrationsFolder: foldersUpTo(7) })
+    const [{ id: orgId }] = (await db.execute(sql`insert into "org" (name) values ('o') returning id`)).rows as { id: string }[]
+    await db.execute(sql`insert into "flock" (org_id, breed, name, base_url, upstream_auth)
+      values (${orgId}, 'ollama', 'legacy', 'http://o', 'Bearer legacy-token')`)
+
+    await migrate(db, { migrationsFolder })
+    // NOT VALID let the plaintext through the migration — the positive anchor for "sealed" below.
+    const [before] = await db.select().from(flock)
+    expect(before.upstreamAuthEnc).toBe('Bearer legacy-token')
+
+    const r = ring(key())
+    const report = await resealUpstreamAuth(db, r)
+    expect(report).toEqual({ sealed: 1, resealed: 0, unreadable: [] })
+    const [after] = await db.select().from(flock)
+    expect(after.upstreamAuthEnc).not.toContain('legacy-token')
+    expect(openSealed(after.upstreamAuthEnc!, r)).toBe('Bearer legacy-token')
+
+    const { rows } = await db.execute(sql`select convalidated from pg_constraint where conname = 'flock_upstream_auth_sealed'`)
+    expect(rows).toEqual([{ convalidated: true }])
+  })
+})
+
+describe('resealUpstreamAuth', () => {
+  test('the database refuses a plaintext write once migrated', async () => {
+    const { db, orgId } = await migratedDb()
+    const err = await addFlock(db, orgId, 'f', 'plain-token').catch((e: Error) => e)
+    // Drizzle wraps the driver error; the constraint name is on the cause.
+    expect(String((err as Error & { cause?: unknown }).cause ?? err)).toMatch(/flock_upstream_auth_sealed/)
+  })
+
+  test('re-seals rows under a previous key with the current one — how a rotation completes', async () => {
+    const { db, orgId } = await migratedDb()
+    const old = key()
+    const f = await addFlock(db, orgId, 'f', seal('tok', ring(old)))
+    const r = ring(key(), [old])
+    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 1, unreadable: [] })
+    const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
+    expect(row.upstreamAuthEnc!.split(':')[2]).toBe(r.current.kid)
+    expect(openSealed(row.upstreamAuthEnc!, r)).toBe('tok')
+  })
+
+  test('is idempotent: rows already under the current key and null rows are left alone', async () => {
+    const { db, orgId } = await migratedDb()
+    const r = ring(key())
+    const env = seal('tok', r)
+    await addFlock(db, orgId, 'a', env)
+    await addFlock(db, orgId, 'b', null)
+    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 0, unreadable: [] })
+    const rows = await db.select().from(flock)
+    expect(rows.map((x) => x.upstreamAuthEnc).sort()).toEqual([env, null].sort())
+  })
+
+  test('a row under a key this stack does not hold is reported by id and name, left untouched, and does not fail the sweep', async () => {
+    const { db, orgId } = await migratedDb()
+    const foreign = seal('tok', ring(key()))
+    const f = await addFlock(db, orgId, 'restored', foreign)
+    const r = ring(key())
+    const report = await resealUpstreamAuth(db, r)
+    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: f.id, name: 'restored', reason: 'unknown-key' }] })
+    const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
+    expect(row.upstreamAuthEnc).toBe(foreign)
+  })
+})

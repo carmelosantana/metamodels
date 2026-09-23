@@ -1,4 +1,5 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
+import { boolean, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 const id = () => uuid('id').primaryKey().defaultRandom()
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
@@ -50,11 +51,18 @@ export const flock = pgTable('flock', {
   breed: text('breed').notNull(),
   name: text('name').notNull(),
   baseUrl: text('base_url').notNull(),
-  upstreamAuth: text('upstream_auth'),
+  // The credential sent upstream, SEALED (`@metamodels/schema/sealed`), never plaintext. `_enc` like
+  // `license_key_enc`, and renamed from `upstream_auth` so that every reader of the old plaintext
+  // field stopped compiling rather than quietly receiving ciphertext.
+  upstreamAuthEnc: text('upstream_auth_enc'),
   tlsTrust: boolean('tls_trust').notNull().default(false),
   healthOk: boolean('health_ok'),
   createdAt: createdAt(),
-})
+}, (t) => [
+  // The backstop for a future code path that forgets to seal. Added NOT VALID by the migration, so
+  // pre-existing plaintext survives the upgrade until `migrate` seals it and validates this.
+  check('flock_upstream_auth_sealed', sql`${t.upstreamAuthEnc} IS NULL OR ${t.upstreamAuthEnc} LIKE 'sealed:v1:%'`),
+])
 
 export const paddock = pgTable('paddock', {
   id: id(),
