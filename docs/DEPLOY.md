@@ -257,7 +257,8 @@ After a suspected leak, end both kinds of session:
    ```
 
 If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright** — set it to a new key and
-leave `OIDC_PREVIOUS_SIGNING_KEYS` empty. Do **not** run the overlap procedure in
+make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty, clearing it if a rotation window left a key in it,
+since that key may be the leaked one. Do **not** run the overlap procedure in
 [Rotating the sign-in keys](#rotating-the-sign-in-keys) here: its first step moves the old key into
 `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep publishing the *leaked* key for verification for the
 whole window. A leaked key must stop verifying immediately, and losing the in-flight tokens signed

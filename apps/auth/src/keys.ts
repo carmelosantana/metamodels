@@ -57,8 +57,8 @@ export function signingJwks(
   // A repeated key reaches oidc-provider as a duplicate `kid`, which throws at provider
   // construction ('jwks.keys configuration must not contain duplicate "kid" values') — before
   // `server.listen`, so sign-in is down for everyone. That message names neither env var, and an
-  // operator who applied step 1 of the rotation without step 2 has no clue which to edit. Fail
-  // at the same moment, with the variable at fault in the message.
+  // operator who moved the old key across without setting the new one has no clue which to edit.
+  // Fail at the same moment, with the variable at fault in the message.
   const seen = new Set<string>()
   for (const jwk of keys) {
     const kid = jwk.kid as string
