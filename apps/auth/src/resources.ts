@@ -47,7 +47,7 @@ export function resourcesByClient(consoleUrl: string): ReadonlyMap<string, Reado
  * for every resource a request names, at the authorization, device-authorization and token
  * endpoints and on every refresh, passing the requesting client as the third argument. Two checks,
  * both `invalid_target`: the resource must be declared in `servers`, AND the client must be listed
- * in `allowedByClient` with that resource in its set. An unlisted client is refused everything; it
+ * in `allowedByClient` with that resource in its set. An unlisted client is refused every resource; it
  * never falls through to allowed.
  */
 export function makeGetResourceServerInfo(

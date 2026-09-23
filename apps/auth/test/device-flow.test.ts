@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { jwtVerify } from 'jose'
 import { and, eq } from 'drizzle-orm'
 import { errors } from 'oidc-provider'
@@ -124,6 +124,22 @@ describe('device grant, end to end', () => {
     expect(replay.json.error).toBe('invalid_grant')
   }, T)
 
+  test('Cancel on the confirm page denies the device: the CLI\'s poll gets access_denied', async () => {
+    op = await startTestOp()
+    const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN })
+    const da = auth.json as unknown as DeviceAuthorization
+
+    const pages = await approveDevice(op, da, { cancel: true })
+    expect(pages.confirm.body).toContain('form="op.deviceConfirmForm">Approve</button>')
+    expect(pages.final.status).toBe(200)
+    expect(pages.final.body).toContain('<p class="error" role="alert">The sign-in was cancelled.</p>')
+    expect(pages.final.body).not.toContain('<h1>Signed in</h1>')
+
+    const poll = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(poll.status).toBe(400)
+    expect(poll.json.error).toBe('access_denied')
+  }, T)
+
   test('a wrong user code is refused on our own entry page', async () => {
     op = await startTestOp()
     const auth = await deviceAuthorization(op, { scope: SCOPE, resource: ADMIN })
@@ -236,6 +252,13 @@ describe('refresh-token lifetime', () => {
 })
 
 describe('refreshTokenTtl', () => {
+  // refreshTokenTtl reads the clock itself. Frozen, so a tick between `now()` here and its own read
+  // cannot shift the exact boundaries below.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.UTC(2026, 0, 1, 0, 0, 0, 500))
+  })
+  afterEach(() => { vi.useRealTimers() })
   const now = () => Math.floor(Date.now() / 1000)
   const ttl = (iiat: number | undefined) => refreshTokenTtl({} as never, { iiat } as never)
 

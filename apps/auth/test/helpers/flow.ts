@@ -225,11 +225,13 @@ export interface DevicePages {
 }
 
 /**
- * The browser half: open the verification page, type the user code, press Approve on the confirm
- * page, then sign in (when `email` is given) and follow redirects to the page the flow ends on.
+ * The browser half: open the verification page, type the user code, press Approve (or Cancel, with
+ * `cancel`) on the confirm page, then sign in (when `email` is given) and follow redirects to the
+ * page the flow ends on.
  */
 export async function approveDevice(
-  op: TestOp, auth: DeviceAuthorization, o: { email?: string; password?: string; jar?: CookieJar } = {},
+  op: TestOp, auth: DeviceAuthorization,
+  o: { email?: string; password?: string; jar?: CookieJar; cancel?: boolean } = {},
 ): Promise<DevicePages> {
   const jar = o.jar ?? new CookieJar()
   const form = { 'content-type': 'application/x-www-form-urlencoded' }
@@ -244,8 +246,10 @@ export async function approveDevice(
   })
   const confirm = { status: confirmRes.status, body: await confirmRes.text(), csp: confirmRes.headers.get('content-security-policy') }
 
+  // Both buttons submit the confirm form; Cancel adds its own name/value pair, as a browser would.
+  const pressed = { ...hiddenFields(confirm.body), ...(o.cancel ? { abort: 'yes' } : {}) }
   let res = await send(jar, action, {
-    method: 'POST', headers: form, body: new URLSearchParams(hiddenFields(confirm.body)).toString(),
+    method: 'POST', headers: form, body: new URLSearchParams(pressed).toString(),
   })
   let submitted = false
   for (let hop = 0; hop < 12; hop++) {

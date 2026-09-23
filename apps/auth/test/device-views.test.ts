@@ -28,6 +28,16 @@ describe('renderUserCodePage', () => {
       .toContain('<p class="error" role="alert">That code is not valid. Check your terminal and try again.</p>')
     expect(renderUserCodePage(INPUT_FORM, { name: 'NoCodeError' }))
       .toContain('That code is not valid.')
+    // oidc-provider's ReRenderErrors, by name (lib/helpers/re_render_errors.js). A dead code is
+    // told apart from a mistyped one: retyping the same dead code from the terminal cannot help.
+    expect(renderUserCodePage(INPUT_FORM, { name: 'ExpiredError', userCode: 'X' }))
+      .toContain('<p class="error" role="alert">That code has expired. Start the sign-in again from your terminal.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'ExpiredError' }))
+      .toContain('That code has expired.')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'AlreadyUsedError', userCode: 'X' }))
+      .toContain('<p class="error" role="alert">That code was already used or cancelled. Start the sign-in again from your terminal.</p>')
+    expect(renderUserCodePage(INPUT_FORM, { name: 'AlreadyUsedError' }))
+      .toContain('That code was already used or cancelled.')
     expect(renderUserCodePage(INPUT_FORM, { name: 'AbortedError' }))
       .toContain('<p class="error" role="alert">The sign-in was cancelled.</p>')
     expect(renderUserCodePage(INPUT_FORM, { name: 'SomethingElse' }))

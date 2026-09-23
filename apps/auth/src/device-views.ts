@@ -13,7 +13,10 @@ function withoutInlineHandlers(form: string): string {
   return form.replace(/\s+on[a-z]+="[^"]*"/gi, '')
 }
 
-/** The error oidc-provider re-renders the entry page with (its ReRenderErrors carry `userCode`). */
+/**
+ * The error oidc-provider re-renders the entry page with. Its ReRenderErrors are told apart by
+ * `name`; `userCode` is set only on those raised while checking a code the browser posted to /device.
+ */
 export interface UserCodeError {
   name?: string
   userCode?: string
@@ -21,10 +24,18 @@ export interface UserCodeError {
 
 function userCodeError(err: UserCodeError | undefined): string | undefined {
   if (!err) return undefined
+  switch (err.name) {
+    case 'ExpiredError':
+      return 'That code has expired. Start the sign-in again from your terminal.'
+    // A code already approved, cancelled or refused, or whose approval is already under way.
+    case 'AlreadyUsedError':
+      return 'That code was already used or cancelled. Start the sign-in again from your terminal.'
+    case 'AbortedError':
+      return 'The sign-in was cancelled.'
+  }
   if (err.userCode !== undefined || err.name === 'NoCodeError' || err.name === 'NotFoundError') {
     return 'That code is not valid. Check your terminal and try again.'
   }
-  if (err.name === 'AbortedError') return 'The sign-in was cancelled.'
   return 'Something went wrong. Start the sign-in again from your terminal.'
 }
 
