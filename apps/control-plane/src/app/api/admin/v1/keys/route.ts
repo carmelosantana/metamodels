@@ -32,4 +32,4 @@ export const POST = withAdmin(async ({ actor, req }) => {
   const body = await readJsonObject(req)
   const created = await createKey(getDb(), actor, body)
   return Response.json(created, { status: 201 })
-})
+}, { invalidates: 'key.create' })

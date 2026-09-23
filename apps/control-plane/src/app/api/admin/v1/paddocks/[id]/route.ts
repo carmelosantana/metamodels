@@ -36,9 +36,9 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
   // Do not remove it when copying this module to another resource.
   await getPaddock(db, actor, id)
   return Response.json(await savePaddock(db, actor, { ...body, id }))
-})
+}, { invalidates: 'paddock.save' })
 
 export const DELETE = withAdmin(async ({ actor, params }) => {
   await deletePaddock(getDb(), actor, parsePathId(params.id))
   return new Response(null, { status: 204 })
-})
+}, { invalidates: 'paddock.delete' })

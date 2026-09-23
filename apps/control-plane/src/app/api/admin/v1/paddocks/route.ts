@@ -30,4 +30,4 @@ export const POST = withAdmin(async ({ actor, req }) => {
     status: 201,
     headers: { location: `${new URL(req.url).pathname}/${created.id}` },
   })
-})
+}, { invalidates: 'paddock.save' })

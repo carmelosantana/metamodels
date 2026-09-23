@@ -23,7 +23,7 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
     draft: { ...body, id: params.tid },
   })
   return Response.json(saved)
-})
+}, { invalidates: 'template.save' })
 
 /**
  * 204 rather than the remaining array, so DELETE means the same thing here as on every other
@@ -33,4 +33,4 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
 export const DELETE = withAdmin(async ({ actor, params }) => {
   await deleteTemplate(getDb(), actor, { paddockId: parsePathId(params.id), templateId: params.tid })
   return new Response(null, { status: 204 })
-})
+}, { invalidates: 'template.delete' })

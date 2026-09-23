@@ -51,4 +51,4 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
   // The path owns the paddock id; a `paddockId` in the body is overwritten, never trusted.
   const saved = await saveFence(getDb(), actor, registry, { ...body, paddockId })
   return Response.json(saved)
-})
+}, { invalidates: 'fence.save' })

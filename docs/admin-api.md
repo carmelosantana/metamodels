@@ -213,9 +213,21 @@ plain text to any token with `read`. Treat flock listings as secrets.
 ### Why keys are revoked, not deleted
 
 An API key's usage history, which is what you bill from, is stored against the key. Deleting the key
-would delete that history with it. So a key is only ever **revoked**: it stops working at once and
-its history stays. `DELETE /keys/{id}` answers `405` with an empty `Allow` header and a `detail` that
-names `POST /keys/{id}/revoke`. `mm` has no `keys delete` command.
+would delete that history with it. So a key is only ever **revoked**, and its history stays.
+`DELETE /keys/{id}` answers `405` with an empty `Allow` header and a `detail` that names
+`POST /keys/{id}/revoke`. `mm` has no `keys delete` command.
+
+### When a change reaches the proxy
+
+With Redis configured, each data-plane node keeps a copy of keys and paddocks for up to 30 seconds.
+Every successful create, replace, delete, status change and revocation through this API sends the
+same "configuration changed" message through Redis that the console sends for the same change, and
+each node drops its copy when that message reaches it. So a revoked key, a disabled paddock or a
+changed fence takes effect at the proxy as soon as the message arrives, whichever of the two made
+the change. The message is sent once and not retried. If it is lost (Redis was unreachable when it
+was sent), the change reaches each node when that node's copy expires, within 30 seconds. A refused
+request sends nothing. Without Redis, the data plane keeps no copy and reads the database on every
+request.
 
 ## Errors
 

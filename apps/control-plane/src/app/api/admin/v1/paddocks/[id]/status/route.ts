@@ -24,4 +24,4 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
   const id = parsePathId(params.id)
   const { status } = statusBody.parse(await readJsonObject(req))
   return Response.json(await setPaddockStatus(getDb(), actor, id, status))
-})
+}, { invalidates: 'paddock.status' })

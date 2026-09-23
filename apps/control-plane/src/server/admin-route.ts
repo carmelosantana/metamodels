@@ -1,6 +1,7 @@
 import type { Actor } from '../auth/authorize'
 import { SESSION_COOKIE } from '../auth/session'
 import { actorFromToken } from './admin-token'
+import { publishConfigInvalidation } from './config-publisher'
 import { getDb } from './db'
 import { problem, problemForError, unauthorized } from './problem'
 
@@ -10,6 +11,19 @@ export interface AdminContext {
   params: Record<string, string>
 }
 export type AdminHandler = (ctx: AdminContext) => Promise<Response>
+
+export interface AdminRouteOptions {
+  /**
+   * The config-invalidation reason this route publishes after a successful (2xx) response — the
+   * same argument the console action performing the same service call passes, so the data plane
+   * drops its cached config whichever surface made the change. Omit on routes that change nothing
+   * the data plane caches (every GET). Published after the handler's service call has committed
+   * and never on a refusal; `publishConfigInvalidation` never throws, so a failed publish cannot
+   * turn a committed change into an error response (the data plane's cache TTL backstops it), which
+   * is also how the console behaves.
+   */
+  invalidates?: string
+}
 
 /**
  * RFC 9110 §11.1: the auth scheme token is case-INsensitive, so a conforming client sending
@@ -36,7 +50,7 @@ function hasSessionCookie(req: Request): boolean {
  * automatic Origin-vs-Host check; Route Handlers get nothing, so the CSRF posture is: a bearer and
  * NO ambient cookie. A request carrying both means a browser sent it — the confused-deputy shape.
  */
-export function withAdmin(handler: AdminHandler) {
+export function withAdmin(handler: AdminHandler, opts: AdminRouteOptions = {}) {
   return async (req: Request, ctx: { params: Promise<Record<string, string>> }): Promise<Response> => {
     const bearer = bearerOf(req)
     const cookie = hasSessionCookie(req)
@@ -59,10 +73,13 @@ export function withAdmin(handler: AdminHandler) {
       return problemForError(e)
     }
 
+    let res: Response
     try {
-      return await handler({ actor, req, params: await ctx.params })
+      res = await handler({ actor, req, params: await ctx.params })
     } catch (e) {
       return problemForError(e)
     }
+    if (opts.invalidates && res.ok) await publishConfigInvalidation(opts.invalidates)
+    return res
   }
 }

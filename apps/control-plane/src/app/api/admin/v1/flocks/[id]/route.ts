@@ -22,9 +22,9 @@ export const PUT = withAdmin(async ({ actor, req, params }) => {
   // Do not remove it when copying this module to another resource.
   await getFlock(db, actor, id)
   return Response.json(await saveFlock(db, actor, { ...body, id }))
-})
+}, { invalidates: 'flock.save' })
 
 export const DELETE = withAdmin(async ({ actor, params }) => {
   await deleteFlock(getDb(), actor, parsePathId(params.id))
   return new Response(null, { status: 204 })
-})
+}, { invalidates: 'flock.delete' })

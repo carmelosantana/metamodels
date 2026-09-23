@@ -26,4 +26,4 @@ import { parsePathId } from '../../../../../../../server/path-id'
 export const POST = withAdmin(async ({ actor, params }) => {
   await revokeKey(getDb(), actor, parsePathId(params.id))
   return new Response(null, { status: 204 })
-})
+}, { invalidates: 'key.revoke' })

@@ -36,4 +36,4 @@ export const POST = withAdmin(async ({ actor, req, params }) => {
   const draft = await readJsonObject(req)
   const saved = await saveTemplate(getDb(), actor, { paddockId, draft })
   return Response.json(saved, { status: 201 })
-})
+}, { invalidates: 'template.save' })
