@@ -13,6 +13,7 @@ const EXCLUDED = new Set([
   'REDIS_TEST_URL',
   'PG_TEST_URL',
   'NODE_ENV',
+  'NEXT_RUNTIME', // set by Next.js itself: 'nodejs' or 'edge'
   'CI',
   'OLLAMA_TEST_URL',
   'OLLAMA_TEST_MODEL',
