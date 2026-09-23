@@ -132,7 +132,8 @@ takes no wrapper and no compose flags, and it runs only in the throwaway compose
 - After `run` starts `mm-m2-e2e-aud`, and before the health check and before the token is sent
   anywhere, it reads the container's `com.docker.compose.project` label and exits `2` unless it is
   exactly `mm-m2-e2e`.
-- It refuses a host port something already answers on, and publishes the second control plane on
+- It takes a host port of 1024-65535 written in plain decimal (no leading zero, which bash would read
+  as octal), refuses one something already answers on, and publishes the second control plane on
   `127.0.0.1` only. `--no-deps` leaves the running stack alone.
 - Its only destructive call is `docker rm -f mm-m2-e2e-aud`, in an `EXIT` trap, so it also runs when
   the script fails or is interrupted. The name `mm-m2-e2e-aud` is reserved for this script.

@@ -58,7 +58,9 @@ compose() {
 }
 
 # --- Arguments and the token ------------------------------------------------------------------------
-if ! [[ $port =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
+# Four or five digits, no leading zero: bash arithmetic reads `08080` as octal and fails, which would
+# skip the range check. The comparison is in base 10 all the same.
+if ! [[ $port =~ ^[1-9][0-9]{3,4}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then
   die "the host port must be 1024-65535, got '$port'"
 fi
 [[ $original =~ ^https?://[^/[:space:]]+$ ]] || die "the original console URL must be an origin (http(s)://host[:port]), got '$original'"

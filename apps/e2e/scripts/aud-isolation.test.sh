@@ -229,6 +229,24 @@ case_name=accepted; echo "# the second console accepts the token"
 run_case mm-m2-e2e '200 200 200' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
 expect_code 1
 
+# refused <what>: exit 2 before any docker or curl call.
+refused() {
+  [[ $code -eq 2 && -z $(docker_calls) && -z $(curl_calls) ]] && ok "refused $1: exit 2, no docker or curl call" \
+    || { fail "$1: exit $code, docker: '$(docker_calls)', curl: '$(curl_calls)'"; sed 's/^/    | /' "$log/out"; }
+}
+
+echo "# host ports: a leading zero, and the edges of 1024-65535"
+for bad_port in 08080 099 0 1023 65536; do
+  case_name="port-$bad_port"
+  run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$bad_port" http://console.example.test
+  refused "port '$bad_port'"
+done
+case_name=port-13001
+run_case mm-m2-e2e '200 401 200' -- "$repo_compose" "$work/e2e.env" 13001 http://console.example.test
+expect_code 0
+docker_calls | grep -qF -- ' -p 127.0.0.1:13001:3000 ' && ok "port 13001 accepted and published" \
+  || fail "port 13001 not published: $(docker_calls)"
+
 case_name=curlrc; echo "# the real curl, a ~/.curlrc of 'verbose', and a stub server as both consoles"
 curlhome="$work/curlhome"; mkdir -p "$curlhome"; echo verbose >"$curlhome/.curlrc"
 stub_port=38124
