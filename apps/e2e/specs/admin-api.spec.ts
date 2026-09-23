@@ -209,8 +209,12 @@ test.afterAll(async () => {
         const res: Response = await fetch(url, { headers: bearer(state.operator) })
         if (!res.ok) break
         for (const f of await res.json() as Array<{ id: string; name: unknown }>) if (ownFlock(f.name)) ids.add(f.id)
+        // Only the cursor is taken from `Link`, as the CLI does: the server builds `Link` from the
+        // request URL, which can name the container's own address, and following its host could send
+        // the operator's bearer elsewhere. The next URL is rebuilt on this spec's own `API` base.
         const next = /<([^>]+)>;\s*rel="?next"?/.exec(res.headers.get('link') ?? '')?.[1]
-        url = next === undefined ? null : new URL(next, url).href
+        const cursor = next === undefined ? null : new URL(next, url).searchParams.get('cursor')
+        url = cursor === null ? null : `${API}/flocks?${new URLSearchParams({ limit: '200', cursor })}`
       }
       for (const id of ids) await api('DELETE', `/flocks/${id}`, bearer(state.operator)).catch(() => {})
     } catch {
