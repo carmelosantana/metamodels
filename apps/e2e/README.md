@@ -112,22 +112,40 @@ the throwaway stack with `CONSOLE_URL=http://other.invalid`, so that one expects
 `OIDC_INTERNAL_URL` and the key set. One real access token must then get `200` from the stack's own
 control plane (the anchor: the token is otherwise valid) and `401` from the second one.
 
-It runs only against the throwaway compose project `mm-m2-e2e`, through a wrapper script you pass
-as the first argument, and it never calls `docker compose` itself:
+It takes the compose file, the throwaway stack's env file, a free host port and the console URL. It
+takes no wrapper and no compose flags, and it runs only in the throwaway compose project
+`mm-m2-e2e`:
 
-- It refuses to run unless the wrapper hard-codes `docker compose -p mm-m2-e2e` on a line that is not
-  a comment, names no other project (`-p`, `-p=`, `--project-name`), and does not set
-  `COMPOSE_PROJECT_NAME`. Each refusal exits `2` before anything is started.
+- It makes one `docker compose` call, and that call is written once in the script as `docker compose
+  -p mm-m2-e2e --file=<compose file> --env-file=<env file> run …`. The project is a literal. The two
+  paths are resolved to absolute paths, so neither can be read as a flag, and each is one argument.
+  Nothing you pass adds or changes a project flag.
+- Compose ranks `-p` above `COMPOSE_PROJECT_NAME` and above a compose file's top-level `name:`
+  ([project name precedence](https://docs.docker.com/compose/how-tos/project-name/)). A
+  `COMPOSE_PROJECT_NAME` in your shell or in the env file (compose reads pre-defined `COMPOSE_*`
+  variables from it) therefore cannot move the project. The script unsets `COMPOSE_PROJECT_NAME`
+  anyway.
+- It refuses a compose file that is not this repository's `docker-compose.yml` (compared by
+  `realpath`, so a symlink to it is accepted). `-p` would override another file's `name:`, but
+  another file could define a different `control-plane` service, on another network.
+- After `run` starts `mm-m2-e2e-aud`, and before the health check and before the token is sent
+  anywhere, it reads the container's `com.docker.compose.project` label and exits `2` unless it is
+  exactly `mm-m2-e2e`.
 - It refuses a host port something already answers on, and publishes the second control plane on
-  `127.0.0.1` only.
-- It starts the container through the wrapper: `run -d --rm --no-deps --name mm-m2-e2e-aud -e
-  CONSOLE_URL=http://other.invalid -p 127.0.0.1:<port>:3000 control-plane`. `--no-deps` leaves the
-  running stack alone.
-- Its only direct `docker` call is `docker rm -f mm-m2-e2e-aud`, in an `EXIT` trap, so it also runs
-  when the script fails or is interrupted. The name `mm-m2-e2e-aud` is reserved for this script.
-- It reads the token from `AUD_ACCESS_TOKEN`, never from an argument, and sends it to `curl` on stdin,
-  so the token is in no process's argument list. It prints status codes only, never the token. Do
-  not run it under `bash -x`.
+  `127.0.0.1` only. `--no-deps` leaves the running stack alone.
+- Its only destructive call is `docker rm -f mm-m2-e2e-aud`, in an `EXIT` trap, so it also runs when
+  the script fails or is interrupted. The name `mm-m2-e2e-aud` is reserved for this script.
+- It reads the token from `AUD_ACCESS_TOKEN` into an unexported variable and unsets
+  `AUD_ACCESS_TOKEN` before starting any process, so the token is in no argument list and no child
+  environment. It reaches `curl` on stdin. The script's own process keeps the environment it was
+  started with, so `ps e` on that one PID still shows it. The script prints status codes only, never
+  the token. Do not run it under `bash -x`.
+
+What the label check does not cover: which Docker daemon `docker` talks to, and what the env file
+points the container at. Use the throwaway stack's own env file.
+
+`scripts/aud-isolation.test.sh` checks all of this without Docker, with fake `docker` and `curl`
+executables on `PATH`: `pnpm --filter @metamodels/e2e run test:aud-script`.
 
 The stack must already be up, with a `control-plane` image built from the commit under test. The
 token must be an unexpired access token for that stack's console. A fresh `mm login` gives one:
@@ -138,23 +156,26 @@ XDG_CONFIG_HOME=$MM_HOME pnpm --filter @metamodels/cli start -- login \
   --issuer "$E2E_AUTH_URL" --console "$E2E_BASE_URL" --scope read
 AUD_ACCESS_TOKEN=$(node -e 'process.stdout.write(require(process.argv[1])[process.argv[2]].accessToken)' \
   "$MM_HOME/metamodels/credentials.json" "$E2E_AUTH_URL") \
-  apps/e2e/scripts/aud-isolation.sh <the mm-m2-e2e wrapper> <a free host port> "$E2E_BASE_URL"
+  apps/e2e/scripts/aud-isolation.sh docker-compose.yml <the throwaway env file> <a free host port> "$E2E_BASE_URL"
 rm -rf "$MM_HOME"
 ```
 
 A pass prints:
 
 ```
-aud-isolation: <wrapper> hard-codes -p mm-m2-e2e
 aud-isolation: starting mm-m2-e2e-aud: CONSOLE_URL=http://other.invalid, on 127.0.0.1:<port>
+aud-isolation: mm-m2-e2e-aud is in compose project mm-m2-e2e
 aud-isolation: mm-m2-e2e-aud is up
 original console (<console URL>): GET /api/admin/v1/flocks -> 200 (expect 200)
 second console (CONSOLE_URL=http://other.invalid): GET /api/admin/v1/flocks -> 401 (expect 401)
+original console again: GET /api/admin/v1/flocks -> 200 (expect 200)
 aud-isolation: PASS: a token for <console URL>/api/admin is refused by a console expecting http://other.invalid/api/admin
 ```
 
-and exits `0`. Any other pair of codes exits `1`. If the anchor is not `200`, the token proves
-nothing: get a fresh one. A `503` from the second console usually means it could not fetch the key set.
+and exits `0`. Anything else exits `1`. The anchor is asked twice, before and after the second
+console, so a token that expires in between fails the run instead of passing it. If the anchor is not
+`200` both times, the token proves nothing: get a fresh one. A `503` from the second console usually
+means it could not fetch the key set.
 
 ## Running it
 

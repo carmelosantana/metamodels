@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test",
+    "test:aud-script": "bash scripts/aud-isolation.test.sh",
     "report": "playwright show-report"
   },
   "devDependencies": {
