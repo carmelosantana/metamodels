@@ -4,11 +4,13 @@ import { makeFindAccount } from './account.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
 import type { Db } from './db.js'
-import { interactionMiddleware } from './interactions.js'
+import { interactionMiddleware, interactionPolicyWithFreshDeviceLogin } from './interactions.js'
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
 import { accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers } from './resources.js'
-import { DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, prefilledUserCode } from './device-middleware.js'
+import {
+  DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, deviceSwitchAccountMiddleware, prefilledUserCode,
+} from './device-middleware.js'
 import { renderDeviceConfirmPage, renderUserCodePage } from './device-views.js'
 import { authCsp, renderLogoutPage, renderMessagePage } from './views.js'
 
@@ -97,7 +99,10 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     findAccount: makeFindAccount(db),
     // OAuth 2.1: PKCE for every client, confidential ones included.
     pkce: { required: () => true },
-    interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
+    interactions: {
+      url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
+      policy: interactionPolicyWithFreshDeviceLogin(),
+    },
     // The library default, named so devicePrefillMiddleware matches the same path.
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
@@ -179,5 +184,6 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     csp: authCsp([new URL(cfg.consoleUrl).origin]),
   }))
   provider.use(devicePrefillMiddleware())
+  provider.use(deviceSwitchAccountMiddleware())
   return provider
 }

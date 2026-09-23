@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { renderDeviceConfirmPage, renderUserCodePage } from '../src/device-views.js'
+import { renderDeviceConfirmPage, renderSwitchAccountPage, renderUserCodePage } from '../src/device-views.js'
 
 // The exact markup oidc-provider 9.12 hands the two sources (lib/helpers/user_code_form.js),
 // including the inline `onfocus` handler the input form carries.
@@ -91,11 +91,29 @@ describe('renderDeviceConfirmPage', () => {
   })
 })
 
+describe('renderSwitchAccountPage', () => {
+  test('explains the switch and posts the logout step with its xsrf token behind a visible button', () => {
+    const html = renderSwitchAccountPage('http://op.test/session/end/confirm', 'abc123')
+    expect(html).toContain('<h1>Switch account?</h1>')
+    expect(html).toContain('<form id="op.switchAccountForm" method="post" action="http://op.test/session/end/confirm">')
+    expect(html).toContain('<input type="hidden" name="xsrf" value="abc123"/>')
+    expect(html).toContain('<input type="hidden" name="logout" value="yes"/>')
+    expect(html).toContain('<button autofocus type="submit" form="op.switchAccountForm">Continue</button>')
+  })
+
+  test('escapes both values', () => {
+    const html = renderSwitchAccountPage('/x"><script>', '"><script>')
+    expect(html).not.toMatch(/<script/i)
+    expect(html).toContain('action="/x&quot;&gt;&lt;script&gt;"')
+  })
+})
+
 describe('CSP compatibility', () => {
   const pages = [
     renderUserCodePage(INPUT_FORM),
     renderUserCodePage(INPUT_FORM, { name: 'NotFoundError' }),
     renderDeviceConfirmPage(CONFIRM_FORM, 'MetaModels admin CLI', 'BCDF-GHJK'),
+    renderSwitchAccountPage('/session/end/confirm', 'abc123'),
   ]
 
   test('no device page carries inline script, an inline event handler, or inline style', () => {

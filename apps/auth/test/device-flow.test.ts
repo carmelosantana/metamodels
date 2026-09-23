@@ -9,7 +9,7 @@ import {
 import { seedUser } from './helpers/db.js'
 import {
   approveDevice, authorize, CONSOLE_SECRET, CONSOLE_URL, CookieJar, deviceAuthorization, deviceToken, exchangeCode,
-  hiddenFields, opJwks, refreshGrant, send, startTestOp, type DeviceAuthorization, type TestOp,
+  followRedirects, hiddenFields, opJwks, refreshGrant, send, startTestOp, type DeviceAuthorization, type TestOp,
 } from './helpers/flow.js'
 
 const T = 30_000
@@ -149,6 +149,187 @@ describe('device grant, end to end', () => {
     expect(pages.confirm.body).toContain('<link rel="stylesheet" href="/assets/auth.css">')
     expect(pages.confirm.body).not.toContain('Approve</button>')
   }, T)
+})
+
+/**
+ * RFC 8628 §5.4 (remote phishing): whoever starts a device flow can send an operator the link. A
+ * browser that is already signed in must not turn two clicks into a 90-day admin CLI chain, so
+ * every device approval asks for the password within that interaction.
+ */
+describe('device approval needs a fresh password', () => {
+  const A = { email: 'admin@x.io', password: 'hunter2hunter2' }
+  const B = { email: 'other@x.io', password: 'correct-horse-battery' }
+
+  /** A browser with a live OP session for `who`, from an ordinary console sign-in. */
+  async function signedInBrowser(who: { email: string; password: string }) {
+    const out = await authorize(op!, who)
+    if (out.kind !== 'redirect') throw new Error(`console sign-in failed: ${out.status}`)
+    // Control: this browser really does sign the console in with no password now.
+    const silent = await authorize(op!, { jar: out.jar })
+    expect(silent.kind).toBe('redirect')
+    return out.jar
+  }
+
+  async function startDevice() {
+    const auth = await deviceAuthorization(op!, { scope: SCOPE, resource: ADMIN })
+    return auth.json as unknown as DeviceAuthorization
+  }
+
+  test('with a live OP session, Approve leads to the login form, not to "Signed in"', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+
+    const pages = await approveDevice(op, da, { jar })
+    expect(pages.confirm.body).toContain('form="op.deviceConfirmForm">Approve</button>')
+    expect(pages.final.status).toBe(200)
+    expect(pages.final.body).toMatch(/<form method="post" action="\/interaction\/[^"]+\/login">/)
+    expect(pages.final.body).toContain('type="password"')
+    expect(pages.final.body).not.toContain('<h1>Signed in</h1>')
+
+    const poll = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(poll.status).toBe(400)
+    expect(poll.json.error).toBe('authorization_pending')
+  }, T)
+
+  test('with a live OP session: the right password gets the CLI a token, a wrong one does not', async () => {
+    op = await startTestOp()
+    const id = await seedUser(op.db, A)
+    const jar = await signedInBrowser(A)
+
+    const wrong = await startDevice()
+    const refused = await approveDevice(op, wrong, { jar, email: A.email, password: 'not-the-password' })
+    expect(refused.loginSubmitted).toBe(true)
+    expect(refused.final.status).toBe(401)
+    expect(refused.final.body).toContain('Invalid email or password.')
+    const wrongPoll = await deviceToken(op, wrong.device_code, { resource: ADMIN })
+    expect(wrongPoll.status).toBe(400)
+    expect(wrongPoll.json.error).toBe('authorization_pending')
+
+    const right = await startDevice()
+    const approved = await approveDevice(op, right, { jar, ...A })
+    expect(approved.loginSubmitted).toBe(true)
+    expect(approved.final.status).toBe(200)
+    expect(approved.final.body).toContain('<h1>Signed in</h1>')
+    const rightPoll = await deviceToken(op, right.device_code, { resource: ADMIN })
+    expect(rightPoll.status).toBe(200)
+    const { payload } = await jwtVerify(rightPoll.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
+    expect(payload.sub).toBe(id)
+  }, 60_000)
+
+  test('a password typed for one device approval does not carry over to the next', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    const jar = new CookieJar()
+
+    const first = await approveDevice(op, await startDevice(), { jar, ...A })
+    expect(first.final.body).toContain('<h1>Signed in</h1>')
+
+    const second = await startDevice()
+    const pages = await approveDevice(op, second, { jar })
+    expect(pages.final.body).toMatch(/<form method="post" action="\/interaction\/[^"]+\/login">/)
+    expect(pages.final.body).not.toContain('<h1>Signed in</h1>')
+    expect((await deviceToken(op, second.device_code, { resource: ADMIN })).json.error).toBe('authorization_pending')
+  }, 60_000)
+
+  test('the console is unaffected: after a device approval the same browser still signs it in silently', async () => {
+    op = await startTestOp()
+    const id = await seedUser(op.db, A)
+    const jar = new CookieJar()
+    expect((await approveDevice(op, await startDevice(), { jar, ...A })).final.body).toContain('<h1>Signed in</h1>')
+
+    const silent = await authorize(op, { jar })
+    if (silent.kind !== 'redirect') throw new Error(`expected a silent console sign-in, got ${silent.status}`)
+    const token = await exchangeCode(op, silent.url.searchParams.get('code')!, silent.verifier)
+    const { payload } = await jwtVerify(token.json.id_token as string, await opJwks(op), { issuer: op.issuer })
+    expect(payload.sub).toBe(id)
+  }, T)
+
+  test('the login throttle applies to the device-approval login like any other', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    const jar = await signedInBrowser(A)
+    const attacker = { 'x-forwarded-for': '203.0.113.7' }
+
+    for (let i = 0; i < 5; i++) {
+      const out = await approveDevice(op, await startDevice(), { jar, headers: attacker, email: A.email, password: 'wrong' })
+      expect(out.final.status).toBe(401)
+    }
+    const da = await startDevice()
+    const locked = await approveDevice(op, da, { jar, headers: attacker, ...A })
+    expect(locked.loginSubmitted).toBe(true)
+    expect(locked.final.status).toBe(429)
+    expect(locked.final.body).toContain('Too many attempts.')
+    expect((await deviceToken(op, da.device_code, { resource: ADMIN })).json.error).toBe('authorization_pending')
+
+    // Control: the same approval from another address goes through.
+    const other = await startDevice()
+    const ok = await approveDevice(op, other, { jar, headers: { 'x-forwarded-for': '198.51.100.2' }, ...A })
+    expect(ok.final.body).toContain('<h1>Signed in</h1>')
+    expect((await deviceToken(op, other.device_code, { resource: ADMIN })).status).toBe(200)
+  }, 90_000)
+
+  test('a different user signing in: the approval goes to them, and the old OP session is ended', async () => {
+    op = await startTestOp()
+    const idA = await seedUser(op.db, A)
+    const idB = await seedUser(op.db, B)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+
+    const pages = await approveDevice(op, da, { jar, ...B })
+    expect(pages.loginSubmitted).toBe(true)
+    // Our own page, under our CSP, in place of the library's script-only logout step.
+    expect(pages.final.status).toBe(200)
+    expect(pages.final.body).toContain('<h1>Switch account?</h1>')
+    expect(pages.final.body).toContain('<link rel="stylesheet" href="/assets/auth.css">')
+    expect(pages.final.body).not.toMatch(/<script|\son[a-z]+=/i)
+    expect(pages.final.body).not.toContain('<h1>Signed in</h1>')
+    // Nothing is approved yet — for either account.
+    expect((await deviceToken(op, da.device_code, { resource: ADMIN })).json.error).toBe('authorization_pending')
+
+    const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(pages.final.body)![1]
+    const fields = hiddenFields(pages.final.body)
+    expect(fields.logout).toBe('yes')
+    const done = await followRedirects(op, jar, await send(jar, new URL(action, op.issuer).href, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    }))
+    expect(done.status).toBe(200)
+    expect(done.body).toContain('<h1>Signed in</h1>')
+
+    const token = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(token.status).toBe(200)
+    const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
+    expect(payload.sub).toBe(idB)
+    expect(payload.sub).not.toBe(idA)
+
+    // A's OP session is gone: this browser now silently signs the console in as B, not A.
+    const silent = await authorize(op, { jar })
+    if (silent.kind !== 'redirect') throw new Error(`expected a silent console sign-in, got ${silent.status}`)
+    const idToken = await exchangeCode(op, silent.url.searchParams.get('code')!, silent.verifier)
+    expect((await jwtVerify(idToken.json.id_token as string, await opJwks(op), { issuer: op.issuer })).payload.sub).toBe(idB)
+    const sessions = await op.db.select().from(oidcPayload).where(eq(oidcPayload.model, 'Session'))
+    expect(sessions.map((r) => (r.payload as { accountId?: string }).accountId)).not.toContain(idA)
+  }, 60_000)
+
+  test('without the xsrf token the switch-account step is refused', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    await seedUser(op.db, B)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar, ...B })
+    expect(pages.final.body).toContain('<h1>Switch account?</h1>')
+    const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(pages.final.body)![1]
+
+    const forged = await send(jar, new URL(action, op.issuer).href, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ logout: 'yes' }).toString(),
+    })
+    expect(forged.status).toBe(400)
+    expect((await deviceToken(op, da.device_code, { resource: ADMIN })).json.error).toBe('authorization_pending')
+  }, 60_000)
 })
 
 describe('verification_uri_complete', () => {

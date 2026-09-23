@@ -77,3 +77,20 @@ ${withoutInlineHandlers(form)}
 <button autofocus type="submit" form="op.deviceConfirmForm">Approve</button>
 <button class="secondary" type="submit" form="op.deviceConfirmForm" name="abort" value="yes">Cancel</button>`)
 }
+
+/**
+ * Shown when a device approval's login is by a different account than the one this browser's OP
+ * session holds. oidc-provider handles that case by ending the old session first: it posts
+ * `logout=yes` and its xsrf token to its own logout-confirm endpoint, and returns to the device flow
+ * as the new account. It does that with an auto-submitting script page, which our CSP blocks. This
+ * page is the same form, with a button and an explanation.
+ */
+export function renderSwitchAccountPage(action: string, xsrf: string): string {
+  return page('Switch account', `<h1>Switch account?</h1>
+<p>This browser is signed in to MetaModels as a different account. Continue to sign that account out here and approve the CLI as the account you just entered.</p>
+<form id="op.switchAccountForm" method="post" action="${escapeHtml(action)}">
+<input type="hidden" name="xsrf" value="${escapeHtml(xsrf)}"/>
+<input type="hidden" name="logout" value="yes"/>
+</form>
+<button autofocus type="submit" form="op.switchAccountForm">Continue</button>`)
+}

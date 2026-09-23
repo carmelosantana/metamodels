@@ -184,20 +184,22 @@ export interface DeviceAuthorization {
   interval?: number
 }
 
-async function formPost(url: string, fields: Record<string, string>): Promise<{ status: number; json: Record<string, unknown> }> {
+async function formPost(
+  url: string, fields: Record<string, string>, headers: Record<string, string> = {},
+): Promise<{ status: number; json: Record<string, unknown> }> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields).toString(),
   })
   return { status: res.status, json: (await res.json()) as Record<string, unknown> }
 }
 
-/** The CLI's first call: POST /device/auth as the public CLI client. */
+/** The CLI's first call: POST /device/auth as the public CLI client, from the CLI's machine (`headers`). */
 export async function deviceAuthorization(
-  op: TestOp, fields: Record<string, string>, clientId = CLI_CLIENT_ID,
+  op: TestOp, fields: Record<string, string>, clientId = CLI_CLIENT_ID, headers: Record<string, string> = {},
 ): Promise<{ status: number; json: Record<string, unknown> }> {
-  return formPost(`${op.issuer}/device/auth`, { client_id: clientId, ...fields })
+  return formPost(`${op.issuer}/device/auth`, { client_id: clientId, ...fields }, headers)
 }
 
 /** The CLI's poll: the device_code grant at the token endpoint, no client authentication. */
@@ -221,17 +223,30 @@ export interface DevicePages {
   input: { status: number; body: string; csp: string | null }
   confirm: { status: number; body: string; csp: string | null }
   final: { status: number; body: string }
+  /** Whether a login form was shown and submitted on the way to `final`. */
+  loginSubmitted: boolean
   jar: CookieJar
+}
+
+/** Follow redirects in the browser until a page that is not one. */
+export async function followRedirects(
+  op: TestOp, jar: CookieJar, res: Response,
+): Promise<{ status: number; body: string }> {
+  for (let hop = 0; hop < 12; hop++) {
+    if (res.status < 300 || res.status >= 400) return { status: res.status, body: await res.text() }
+    res = await send(jar, new URL(res.headers.get('location')!, op.issuer).href)
+  }
+  throw new Error('followRedirects(): too many redirects')
 }
 
 /**
  * The browser half: open the verification page, type the user code, press Approve (or Cancel, with
- * `cancel`) on the confirm page, then sign in (when `email` is given) and follow redirects to the
- * page the flow ends on.
+ * `cancel`) on the confirm page, then sign in once (when `email` is given and a login form is
+ * shown, sending `headers` with the login POST) and follow redirects to the page the flow ends on.
  */
 export async function approveDevice(
   op: TestOp, auth: DeviceAuthorization,
-  o: { email?: string; password?: string; jar?: CookieJar; cancel?: boolean } = {},
+  o: { email?: string; password?: string; jar?: CookieJar; cancel?: boolean; headers?: Record<string, string> } = {},
 ): Promise<DevicePages> {
   const jar = o.jar ?? new CookieJar()
   const form = { 'content-type': 'application/x-www-form-urlencoded' }
@@ -262,12 +277,12 @@ export async function approveDevice(
     if (login && !submitted && o.email !== undefined) {
       submitted = true
       res = await send(jar, new URL(login, op.issuer).href, {
-        method: 'POST', headers: form,
+        method: 'POST', headers: { ...o.headers, ...form },
         body: new URLSearchParams({ email: o.email, password: o.password ?? '' }).toString(),
       })
       continue
     }
-    return { input, confirm, final: { status: res.status, body }, jar }
+    return { input, confirm, final: { status: res.status, body }, loginSubmitted: submitted, jar }
   }
   throw new Error('approveDevice(): too many redirects')
 }

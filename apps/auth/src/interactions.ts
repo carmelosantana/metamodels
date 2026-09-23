@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { Middleware, ParameterizedContext } from 'koa'
 import type Provider from 'oidc-provider'
-import { errors } from 'oidc-provider'
+import { errors, interactionPolicy } from 'oidc-provider'
 import { verifyLogin } from './account.js'
 import type { Db } from './db.js'
 import type { LoginThrottle } from './login-throttle.js'
@@ -17,6 +17,37 @@ export interface InteractionDeps {
   /** Clients that ARE MetaModels, so consent is implied. Everyone else is refused until M4's consent screen. */
   firstPartyClientIds: ReadonlySet<string>
   csp: string
+}
+
+/** oidc-provider's route names for the browser half of the device grant: the confirm POST, and resuming after an interaction. */
+const DEVICE_APPROVAL_ROUTES: ReadonlySet<string> = new Set(['code_verification', 'device_resume'])
+
+/**
+ * oidc-provider's default interaction policy plus one login check: approving a device requires a
+ * password typed in THIS interaction (RFC 8628 §5.4, remote phishing). An existing OP session does
+ * not count, however recent.
+ *
+ * `ctx.oidc.result` is the result of the interaction being resumed, and exists only on a resume
+ * route. On the confirm POST (`code_verification`) there is none, so the login prompt always
+ * fires. On `device_resume` it is what our handlers submitted for this interaction: `login` is
+ * present only if the login form was submitted here (the consent step keeps it, since it merges
+ * with the last submission). A login in another tab is a different interaction and leaves no
+ * `result.login` here. oidc-provider's own `max_age` check uses the same test.
+ *
+ * Every other route (the console's authorization-code flow) skips the check, so its login
+ * behaves as before.
+ */
+export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.DefaultPolicy {
+  const { Check, base } = interactionPolicy
+  const policy = base()
+  policy.get('login')!.checks.add(new Check(
+    'device_fresh_login',
+    'approving a device requires the password',
+    (ctx) => DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) && !ctx.oidc.result?.login
+      ? Check.REQUEST_PROMPT
+      : Check.NO_NEED_TO_PROMPT,
+  ))
+  return policy
 }
 
 const INTERACTION_PATH = /^\/interaction\/([A-Za-z0-9_-]+)(\/login)?$/
