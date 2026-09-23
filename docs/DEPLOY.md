@@ -239,10 +239,12 @@ Keep at least one active admin — deactivating the last one locks everybody out
 
   Replacing `OIDC_SIGNING_KEY` on its own, with `OIDC_PREVIOUS_SIGNING_KEYS` left empty, is the
   *deliberate* way to invalidate issued tokens. The console refuses them once its cached copy of the
-  keys expires, within 10 minutes, or at once if you then restart the control-plane container, as
+  keys expires, within 10 minutes, or at once if you restart the control-plane container after the
+  sign-in service is running with the new key, as
   [Forcing everyone to sign in again](#forcing-everyone-to-sign-in-again) describes for a leaked
-  key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
-  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
+  key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
+  `SESSION_SECRET`, and sign-in service sessions are database rows behind cookies signed with
+  `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
 
@@ -295,9 +297,9 @@ If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
    10 minutes.
 
 Steps 2 and 3 together cover every place that verifies these tokens. The restart covers the
-control-plane process, which holds two copies of the keys, both in memory: the admin API's, which checks the access tokens clients
-present, and the console sign-in's, which checks only the ID token the console receives straight
-from the sign-in service when someone signs in. The data plane verifies no token from the sign-in
+control-plane process, which holds two copies of the keys, both in memory: the admin API's, which
+checks the access tokens clients present, and the console sign-in's, which checks only the ID token
+the console receives straight from the sign-in service when someone signs in. The data plane verifies no token from the sign-in
 service at all: it authenticates API keys. The sign-in service reads its keys when it starts
 (step 2).
 
