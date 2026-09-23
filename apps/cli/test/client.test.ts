@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import type { StoredCredential } from '../src/credentials.js'
 import { ApiProblemError, callApi, formatProblem, type ApiSession } from '../src/client.js'
+import { SignInAgainError } from '../src/device.js'
 import { startStub, type Reply, type Stub } from './helpers/stub.js'
 
 let stub: Stub | undefined
@@ -114,6 +115,54 @@ describe('callApi', () => {
     expect((err as ApiProblemError).status).toBe(401)
     expect(sess.refreshes).toEqual(['at-1'])
     expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2'])
+  })
+
+  test('a pre-send refresh that fails for a reason other than a refusal still sends a token that has not expired', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => ({ status: 200, json: [] }))
+    const sess = session({ accessExpiresAt: Date.now() + 10_000 })
+    sess.refresh = async (stale) => {
+      sess.refreshes.push(stale.accessToken)
+      throw new Error('the sign-in could not be renewed: the authorization server answered HTTP 503')
+    }
+    const res = await callApi(s.url, sess, { method: 'GET', path: '/flocks' })
+    expect(res.status).toBe(200)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-1'])
+  })
+
+  test('a 401 to a token sent after a failed pre-send refresh surfaces that refresh error, and refreshes nothing more', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unauthorized)
+    const sess = session({ accessExpiresAt: Date.now() + 10_000 })
+    sess.refresh = async (stale) => {
+      sess.refreshes.push(stale.accessToken)
+      throw new Error('the sign-in could not be renewed: the authorization server answered HTTP 503')
+    }
+    await expect(callApi(s.url, sess, { method: 'GET', path: '/flocks' })).rejects.toThrow(/HTTP 503/)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-1'])
+  })
+
+  test('a pre-send refresh that fails for any reason fails the call when the token has expired: nothing is sent', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unauthorized)
+    const sess = session({ accessExpiresAt: Date.now() - 1000 })
+    sess.refresh = async (stale) => {
+      sess.refreshes.push(stale.accessToken)
+      throw new Error('the sign-in could not be renewed: the authorization server answered HTTP 503')
+    }
+    await expect(callApi(s.url, sess, { method: 'GET', path: '/flocks' })).rejects.toThrow(/HTTP 503/)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests).toHaveLength(0)
+  })
+
+  test('a pre-send refresh the OP refuses fails the call even when the token has time left', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => ({ status: 200, json: [] }))
+    const sess = session({ accessExpiresAt: Date.now() + 10_000 })
+    sess.refresh = async (stale) => {
+      sess.refreshes.push(stale.accessToken)
+      throw new SignInAgainError('the sign-in could not be renewed (invalid_grant)')
+    }
+    await expect(callApi(s.url, sess, { method: 'GET', path: '/flocks' })).rejects.toBeInstanceOf(SignInAgainError)
+    expect(s.requests).toHaveLength(0)
   })
 
   test('an expired token with no refresh token is sent as it is: the 401 path says to sign in again, as before', async () => {

@@ -99,6 +99,32 @@ describe('main: API commands', () => {
     expect(readCredentials(w.path, w.op.url)).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2' })
   })
 
+  test('when the OP answers 503 to a pre-send refresh, a token with 10 seconds left is still sent, and kept', async () => {
+    const w = await world()
+    w.signIn({ accessExpiresAt: Date.now() + 10_000 })
+    w.api.on('GET /api/admin/v1/flocks', () => ok([{ id: 'f1' }]))
+    w.op.on('POST /token', () => ({ status: 503, json: { error: 'temporarily_unavailable' } }))
+    expect(await w.run('flocks', 'list')).toBe(0)
+    expect(JSON.parse(w.stdout())).toEqual([{ id: 'f1' }])
+    expect(w.op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
+    expect(w.api.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-1'])
+    expect(readCredentials(w.path, w.op.url)).toMatchObject({ accessToken: 'at-1', refreshToken: 'rt-1' })
+  })
+
+  test('when the OP answers 503 to a pre-send refresh of an expired token, the command fails with that error and sends nothing', async () => {
+    const w = await world()
+    w.signIn({ accessExpiresAt: Date.now() - 60_000 })
+    w.api.on('GET /api/admin/v1/flocks', () => ({ status: 401, json: { title: 'Unauthorized', status: 401 } }))
+    w.op.on('POST /token', () => ({ status: 503, json: { error: 'temporarily_unavailable' } }))
+    expect(await w.run('flocks', 'list')).toBe(1)
+    expect(w.stderr()).toMatch(/could not be renewed: the authorization server answered HTTP 503/)
+    expect(w.stderr()).not.toMatch(/401/)
+    expect(w.op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
+    expect(w.api.requests).toHaveLength(0)
+    // Not refused, so not spent: the next command may retry with it.
+    expect(readCredentials(w.path, w.op.url)).toMatchObject({ accessToken: 'at-1', refreshToken: 'rt-1' })
+  })
+
   test('a fresh stored token is sent without a refresh', async () => {
     const w = await world()
     w.signIn()

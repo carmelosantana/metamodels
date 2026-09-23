@@ -1,5 +1,6 @@
 import { STATUS_CODES } from 'node:http'
 import type { StoredCredential } from './credentials.js'
+import { SignInAgainError } from './device.js'
 
 /**
  * Refresh before sending when the stored access token expires within this long. The margin is on
@@ -96,6 +97,12 @@ function networkCode(e: unknown): string {
  * store re-read under it), so the API never sees it. Without a refresh token there is nothing to
  * refresh with: the token is sent as it is, and a 401 then says to sign in again, as it always did.
  *
+ * If that pre-send refresh fails, what happens depends on why. A `SignInAgainError` (the OP refused
+ * it, and the sign-in is gone) always fails the call. Any other failure (the OP unreachable, a 5xx,
+ * the credentials lock) fails the call only when the token has already expired on this machine's
+ * clock. A token with time left is sent as it is: the refresh was early, not needed yet. If the API
+ * then answers 401, that refresh's error is thrown, and no second refresh is attempted in this call.
+ *
  * On a 401 to a token it has not refreshed, it asks the session for a fresh token once and retries
  * once. A 401 to a token refreshed during this call, before sending or after the first 401, is
  * surfaced as the API's problem, not retried: a token refreshed a moment ago and still refused will
@@ -128,11 +135,22 @@ export async function callApi(
 
   let cred = session.current()
   let refreshed = false
+  /** Set when the pre-send refresh failed and the unexpired token was sent anyway. */
+  let earlyRefreshError: unknown
   if (cred.refreshToken !== undefined && cred.accessExpiresAt - Date.now() <= REFRESH_MARGIN_MS) {
-    cred = await session.refresh(cred)
-    refreshed = true
+    try {
+      cred = await session.refresh(cred)
+      refreshed = true
+    } catch (e) {
+      if (e instanceof SignInAgainError || cred.accessExpiresAt <= Date.now()) throw e
+      earlyRefreshError = e
+    }
   }
   let res = await send(cred)
+  if (res.status === 401 && earlyRefreshError !== undefined) {
+    await res.body?.cancel()
+    throw earlyRefreshError
+  }
   if (res.status === 401 && !refreshed) {
     await res.body?.cancel()
     res = await send(await session.refresh(cred))
