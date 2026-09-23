@@ -48,7 +48,7 @@ Carried forward, unchanged, and re-stated because M2 is where each could plausib
 | D7 | Audit | `credential` on `Actor`; `writeAudit(tx, actor, entry)`; `changed_by` structured text | #4478 |
 | D8 | Key delete | `POST /keys/{id}/revoke`; `DELETE` → **405** | #4479 |
 | D9 | Exposure & CSRF | **No bind change**; bearer required, bearer+cookie → 400, cookie-only → 401 | #4480 |
-| D10 | OpenAPI | **3.1** from `z.toJSONSchema()` defaults; committed, CI-diffed, served unauthenticated | #4481 |
+| D10 | OpenAPI | **3.1**, request-body schemas from `z.toJSONSchema()` (draft-2020-12; details in §8, A11); committed, CI-diffed, served unauthenticated | #4481 |
 | D11 | Coverage | Exactly §6's list; users/invites/licence **not** exposed | #4488 |
 
 ### 2.1 Why `PUT` and never `PATCH` (D1)
@@ -75,7 +75,9 @@ audience instead would invalidate the `aud` of every already-issued token and mo
 also consumes.
 
 Going unversioned and adding `v1` later *is itself* the breaking change; one path segment now is
-free. OpenAPI `info.version` tracks the release tag independently of the path major.
+free. OpenAPI `info.version` is the contract's own version (`1.0.0`), maintained by hand in
+`openapi.ts`: it moves when the document's contract does, independently of the path major and of
+the release tag.
 
 ### 2.3 Why the bearer path always sets `grants` (D4)
 
@@ -116,7 +118,7 @@ never seen real traffic is the wrong trade, and an operator who wants it public 
 
 ### 2.6 A verified correction to the parent spec §4.3 (D10)
 
-The parent spec states that `zod/v4`'s `z.toJSONSchema()` produces `target: 'openapi-3.0'` output.
+The parent spec stated that `zod/v4`'s `z.toJSONSchema()` produces `target: 'openapi-3.0'` output.
 Checked against this repo (`zod@3.25.76`, Node 24.18.0):
 
 ```
@@ -129,11 +131,12 @@ Invalid target: openapi-3.0        # stderr — it does not throw, it falls thro
 which OpenAPI **3.0 forbids** — 3.0 requires `nullable: true`.
 
 The default output is clean draft-2020-12, and **OpenAPI 3.1's Schema Object *is* JSON Schema
-draft-2020-12**. So M2 emits a 3.1 document and drops `z.toJSONSchema()`'s default output straight
-into `components.schemas`: no target string, no warning, no transform, still zero dependencies.
+draft-2020-12**. So M2 emits a 3.1 document from `z.toJSONSchema()`'s draft-2020-12 output: no
+target string, no warning, still zero dependencies. That output is not published untransformed,
+and it is not made from the repo's own schemas: §8, A11 records what the implementation does.
 `@asteasolutions/zod-to-openapi` 8.x/9.x requires `zod@^4.0.0` and was never available.
 
-**The parent spec's §4.3 bullet must be amended to say 3.1.**
+The parent spec's §4.3 bullet now says 3.1 (§6).
 
 ### 2.7 Why half the scope vocabulary is deliberately inert (D11)
 
@@ -269,9 +272,14 @@ same checks as `OIDC_SIGNING_KEY` (RSA, ≥ 2048 bits) and appended **after** it
 oidc-provider signs with the first matching key, so previous keys verify but never sign, and `kid`
 is the RFC 7638 thumbprint so distinct keys get distinct `kid`s with no bookkeeping.
 
-Rotation: promote the current key into `OIDC_PREVIOUS_SIGNING_KEYS`, set the new `OIDC_SIGNING_KEY`,
-restart, drop the previous entry once the window has passed. This is the M1 handoff's *"publish the
-previous key alongside the new one"*, discharged.
+Rotation is **one edit**, made before any redeploy: move the current `OIDC_SIGNING_KEY` into
+`OIDC_PREVIOUS_SIGNING_KEYS` **and** set the new `OIDC_SIGNING_KEY`, together. The two variables
+must never hold the same key, because the auth service refuses to start on a repeated `kid`
+(`apps/auth/src/keys.ts`). Redeploy, wait out the window, then clear `OIDC_PREVIOUS_SIGNING_KEYS`
+and redeploy again. For the admin API the window is **70 minutes**: the 1 h access-token lifetime
+plus the verifier's 10-minute JWKS cache. The operator procedure is
+[Rotating the sign-in keys](../../DEPLOY.md#rotating-the-sign-in-keys). This is the M1 handoff's
+*"publish the previous key alongside the new one"*, discharged.
 
 On the verifying side: exactly **one process-wide `createRemoteJWKSet`**, mirroring what
 `oidc-session.ts` already does for the console's client, with `cacheMaxAge` and `cooldownDuration`
@@ -309,8 +317,9 @@ argument the moment a second client exists. That gate is part of this milestone,
 
 ### 4.5 OpenAPI
 
-A script generates **`docs/api/openapi.json`** — OpenAPI **3.1** — from the Zod input schemas via
-`z.toJSONSchema()`'s default draft-2020-12 output. The file is committed, so every change to the API
+A script generates **`docs/api/openapi.json`** — OpenAPI **3.1**. Its request-body schemas come from
+`z.toJSONSchema()`'s draft-2020-12 output, and its response schemas are hand-written; §8, A11 has
+the details. The file is committed, so every change to the API
 shape is a reviewable diff in the PR, and **CI regenerates it and fails if it is stale**. The same
 document is served at `GET /api/admin/v1/openapi.json`, **unauthenticated**: the repo is AGPL and
 public, so the shape is not a secret, and an unauthenticated schema is what lets a client bootstrap
@@ -339,12 +348,13 @@ console's CSP and a page that breaks on an air-gapped box.
 
 ---
 
-## 6. Amendment required to the parent spec
+## 6. Amendment to the parent spec (made 2026-09-22)
 
 [`2026-09-06-remote-control-surface-design.md`](2026-09-06-remote-control-surface-design.md) §4.3
-states OpenAPI is generated with `target: 'openapi-3.0'`. That target is unrecognised on
-`zod@3.25.76` and its output is illegal 3.0. The bullet must be amended to **OpenAPI 3.1 from the
-default draft-2020-12 output**. See §2.6 for the verifying command.
+stated that OpenAPI is generated with `target: 'openapi-3.0'`. That target is unrecognised on
+`zod@3.25.76` and its output is illegal 3.0. Commit `d45ef73` amended the bullet to **OpenAPI 3.1**,
+generated with `z.toJSONSchema()`'s draft-2020-12 output, and added a row for it to that spec's
+amendments table. See §2.6 for the verifying command, and §8, A11 for how the schemas are built.
 
 ---
 
@@ -368,24 +378,40 @@ Every compose command passes an explicit `-p` project name and non-default host 
 operator stack runs on this machine under the default project name, with host ports 3000/8787/3200
 in use and 3100 held by another process.
 
+**Two items were not met literally** (disclosed 2026-09-23):
+
+- *An unscoped token → 403 naming the capability* is proven by the route-handler tests
+  (`admin-flocks.test.ts` and `admin-paddocks.test.ts`, "a token with no capability scopes is 403"),
+  which call the handlers with a signed token carrying no capability scope. It is not part of the
+  end-to-end run: `mm login` refuses an empty `--scope`, so the least-privileged token the e2e spec
+  holds is a `read`-only one.
+- *The rotation exercise* was run at commit `0292399`. From there to `32bf88e`, the runtime source
+  changed only in comments. The final fix round then changed runtime code (config invalidation after
+  admin mutations, the `Link` target, `mm` argument and error handling), but none in
+  `apps/auth/src` or `admin-token.ts`, the signing and verification code the exercise tests.
+
 ---
 
 ## 8. Amendments (implementation, 2026-09-22 – 2026-09-23)
 
 Where the built milestone differs from, or goes beyond, the text above. Each row was checked
 against the code on `claude/m2-admin-api`. **Owner** is a decision Carmelo made; **controller** is a
-ruling recorded in the M2 execution ledger. Only A1 is also corrected in place (§4.4). The operator
-documentation for each behaviour is [`docs/admin-api.md`](../../admin-api.md).
+ruling recorded in the M2 execution ledger; **spec, as built** is a behaviour this spec required,
+where the row records the shape the implementation gave it. A1 and A11 are also corrected in place
+(§4.4; D10, §2.6 and §4.5), as are two passages that were wrong rather than changed: §2.2's
+`info.version` and §4.3's rotation steps. The operator documentation for each behaviour is
+[`docs/admin-api.md`](../../admin-api.md).
 
 | # | § | Was | Now | Why | Decided by |
 |---|---|---|---|---|---|
-| A1 | 4.4 | The CLI client uses PKCE | No PKCE. `cliClient()` is public (`token_endpoint_auth_method: 'none'`), with no redirect URIs and no response types | RFC 8628 defines no PKCE, and oidc-provider checks PKCE only at the authorization and PAR endpoints, which the CLI never calls | Controller |
-| A2 | 4.4 | ~90-day absolute cap (the plan put it in `rotateRefreshToken`) | The cap is `ttl.RefreshToken` = `refreshTokenTtl`: `min(30d, iiat + 90d − now)`. `iiat` is the chain's first issue time, copied on every rotation. `ttl.Grant` = 90 d + the device-code TTL (was 14 d), so the grant outlives the cap | A `false` from `rotateRefreshToken` only stops rotation: the presented token is reused until its own `exp`, so a cap there is 90 + 30 days. A grant shorter than the cap would end every CLI sign-in first (plan defect 12-C) | Controller |
+| A1 | 4.4 | The CLI client uses PKCE | No PKCE. `cliClient()` is public (`token_endpoint_auth_method: 'none'`), with no redirect URIs and no response types | RFC 8628 defines no PKCE, and oidc-provider requires PKCE only at the authorization and PAR endpoints, and checks it only in the authorization-code grant, none of which the CLI uses | Controller |
+| A2 | 4.4 | ~90-day absolute cap (the plan put it in `rotateRefreshToken`) | The cap is `ttl.RefreshToken` = `refreshTokenTtl`: `min(30d, iiat + 90d − now)`. `iiat` is the chain's first issue time, copied on every rotation. `ttl.Grant` = 90 d + the device-code TTL (was 14 d), so the grant outlives the cap | A `false` from `rotateRefreshToken` only stops rotation: the presented token is reused until its own `exp`, so a cap there is 90 + 30 days (plan defect 12-C). A grant shorter than the cap would end every CLI sign-in first | Controller |
 | A3 | 4.4 | "Gate on the third argument" | `makeGetResourceServerInfo(servers, allowedByClient)`: a resource must be declared *and* listed for the requesting client, or `invalid_target`. A client not in `resourcesByClient` gets no resource. The console keeps its M1 admin-API access | The gate runs on every mint path (authorization, device authorization, token, refresh), so a new client is refused by default rather than trusted by default | Spec, as built |
 | A4 | 4.4 | Device approval reuses the M1 interaction flow | **Every device approval asks for the password**, even with a live OP session (`device_fresh_login` check). The confirm page shows the **requesting machine's IP and user agent**. See [Signing in with the CLI](../../admin-api.md#signing-in-with-the-cli) | RFC 8628 §5.4 remote phishing: with a live session, one click minted a 90-day admin CLI chain for whoever sent the link | Owner |
-| A5 | 4.4 | — | `verification_uri_complete` opens **our** code-entry page with the code prefilled and a visible Continue button, under the unchanged strict CSP. Two route intercepts (`device-middleware.ts`: prefill on `GET /device`, account switch on `device_resume`) replace oidc-provider pages that rely on inline script | Those library pages render blank under `default-src 'none'`. The intercepts depend on oidc-provider internals, pinned to `~9.12.2` and by tests | Owner |
+| A5 | 4.4 | — | `verification_uri_complete` opens **our** code-entry page with the code prefilled and a visible Continue button, under the unchanged strict CSP. Two route intercepts (`device-middleware.ts`: prefill on `GET /device`, account switch on `device_resume`) replace oidc-provider pages that rely on inline script | Those library pages render blank under `default-src 'none'`. The intercepts depend on oidc-provider internals, pinned to `~9.12.2` and by tests | Owner (prefill); the switch page follows from A4 |
 | A6 | 4.4 | — | **A new grant per device approval** (`loadExistingGrant` skips the session's grant on device routes). Signing one machine out, or re-logging in on it, signs no other machine out. See [Signing out](../../admin-api.md#signing-out) | A grant shared by every machine approved in one browser made any revocation all-or-nothing. This project's decision, not an RFC 8628 requirement | Controller |
 | A7 | 4.4 | — | **OP token revocation is enabled** (RFC 7009, a client revokes only its own tokens). `mm logout` revokes the refresh token before deleting it; a re-login revokes the one it replaces | Without it, logout only deleted a file and left a 90-day refresh chain valid for anyone holding a copy | Controller |
-| A8 | 4.4 | — | **The CLI refuses plain `http://` beyond loopback** unless `--allow-insecure-http` or `METAMODELS_ALLOW_INSECURE_HTTP=1`, for the issuer, the console, every discovered OP endpoint and the verification URI. See [Plain http](../../admin-api.md#plain-http) | The CLI sends bearer and refresh tokens, and the operator types a password into the verification page | Controller |
+| A8 | 4.4 | — | **The CLI refuses plain `http://` beyond loopback** unless `--allow-insecure-http` or `METAMODELS_ALLOW_INSECURE_HTTP=1`, for the issuer, the console, the three OP endpoints it uses (token, device authorization, revocation) and the verification URIs. See [Plain http](../../admin-api.md#plain-http) | The CLI sends bearer and refresh tokens, and the operator types a password into the verification page | Controller |
 | A9 | 3.2, 4.3 | — (unknown `kid` unspecified) | **Unknown signing key → 401**, unless the verifier's key set is inside jose's cooldown (fetched < 30 s ago) → **503 `Retry-After: 30`**. An expired token is 401 before any key lookup. `mm` refreshes before sending a token with < 30 s left. See [Authentication](../../admin-api.md#authentication) and [Rotating the token-signing key](../../admin-api.md#rotating-the-token-signing-key) | Reverses a Task 3 ruling (always 503): the end-to-end rotation run showed every retired-key token failing with 503 after a by-the-book rotation, so an idle CLI never renewed | Controller |
 | A10 | 1 | — | **`GET /flocks` and `GET /flocks/{id}` return `upstreamAuth` in plain text** to any token with `read`. Shipped documented ([Routes](../../admin-api.md#routes)); the fix — sealed at rest, never returned — is its own milestone on branch `feat/encrypt-upstream-auth` | Encrypting it needs a migration, a console change and a key-management decision: not an M2 rider | Owner |
+| A11 | 2.6, 4.5, D10 | The schemas are `z.toJSONSchema()`'s default output, placed in `components.schemas` untransformed | **Request bodies** are rendered from five `zod/v4` **mirrors** of the repo's v3 input schemas (`saveFlockInput`, `savePaddockInput`, `saveFenceInput`, `createKeyInput`, `templateDraftSchema`), with `z.toJSONSchema(mirror, { io: 'input' })` and no `target`. `$schema` is deleted, and every `pattern` that sits beside a `format` is dropped (`dropFormatPatterns`). Two results are published as components and `$ref`ed as they are (`CreateKeyInput`, `TemplateDraft`); the other three are used only after a field is removed or per-field prose is layered on. The parity suite in `openapi.test.ts` holds each mirror to its v3 source: the same fields, optionality, required set and default values, and the same accept/reject verdict on probing payloads. **Response schemas**, parameters and headers are hand-written in `openapi.ts` | v4's `toJSONSchema` reads `schema._zod.def`, which a v3 schema does not have (it throws a `TypeError`), and `zod@3.25.76` has no v3-to-v4 bridge; adding one is a dependency. `io: 'input'` keeps a defaulted field out of `required` and leaves out `additionalProperties: false`, since these objects strip unknown keys rather than refuse them. v4's format patterns are stricter than the v3 checks that run (its uuid pattern demands a version nibble). A drizzle row is not a Zod schema, so responses have nothing to generate from | Controller (Task 10) |
