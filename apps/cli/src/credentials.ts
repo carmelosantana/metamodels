@@ -100,9 +100,10 @@ function readStore(path: string): Store {
 
 /**
  * Replace the file in one step: a 0600 temp file in the same directory (so the rename cannot cross
- * a filesystem), flushed, then renamed over the target. A crash leaves either the old file or the
- * new one, never a torn one — which matters because a refresh has already consumed the old token by
- * the time its successor is written.
+ * a filesystem), flushed, then renamed over the target. A process crash leaves either the old file
+ * or the new one, never a torn one — which matters because a refresh has already consumed the old
+ * token by the time its successor is written. The directory is not fsynced after the rename, so
+ * after a power loss the rename itself may not have reached the disk.
  */
 function writeStore(path: string, store: Store): void {
   const dir = dirname(path)
