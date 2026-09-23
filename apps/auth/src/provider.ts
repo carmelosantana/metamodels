@@ -131,6 +131,17 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
           ctx.body = renderMessagePage('Signed in', 'You can close this page and return to your terminal.')
         },
       },
+      // RFC 7009, for `mm logout`: the CLI revokes its refresh token, and with it the grant. (Access
+      // tokens are JWTs, which this endpoint refuses and the admin API verifies offline — they run
+      // out their own lifetime.)
+      revocation: {
+        enabled: true,
+        // A client revokes only its own tokens. Someone else's is answered exactly like a
+        // revocation (200, token untouched), so the endpoint confirms nothing about a token it was
+        // handed. The library default does the same for a public client but answers a confidential
+        // one with invalid_request, and asks to be replaced ("you SHOULD change it") on first use.
+        allowedPolicy: (_ctx, client, token) => token.clientId === client.clientId,
+      },
       rpInitiatedLogout: {
         enabled: true,
         logoutSource: (ctx, form) => {
