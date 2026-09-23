@@ -59,7 +59,10 @@ or page error is tolerated on the device pages.
 | 2 | The CLI creates, reads, replaces and deletes a flock and a paddock, creates a key and revokes it. There is no `mm keys delete` |
 | 3 | A `read`-only token is refused `POST /flocks` with `403` and `capability: resource.write` |
 | 4 | A `viewer` whose token carries `resource.write` is still refused: scopes never exceed the role |
-| 5 | No token → `401` with `WWW-Authenticate: Bearer`; bearer plus `mm_session` cookie → `400`; cookie alone → `401`; the CLI's ID token (another audience) → `401`; `DELETE /keys/{id}` → `405`; `GET /openapi.json` with no token → `200` |
+| 5 | No token → `401` with `WWW-Authenticate: Bearer`; bearer plus `mm_session` cookie → `400`; cookie alone → `401`; an ID token replayed as an access token (wrong `typ`) → `401`; `DELETE /keys/{id}` → `405`; `GET /openapi.json` with no token → `200` |
+
+Step 5's ID token is refused on its `typ` before its `aud` is looked at, so it does not prove the
+audience check. [`scripts/aud-isolation.sh`](#the-audience-check-scriptsaud-isolationsh) does.
 
 It writes to the stack and changes a user's role, so **it runs only against a stack you name
 explicitly**. Unless `E2E_BASE_URL`, `E2E_AUTH_URL`, `E2E_VIEWER_EMAIL` and `E2E_VIEWER_PASSWORD`

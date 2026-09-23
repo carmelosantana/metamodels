@@ -10,7 +10,9 @@ import { OPERATOR_EMAIL, OPERATOR_PASSWORD, RUN_ID } from './helpers/env.js'
 /**
  * The admin API (M2), end to end: the real `mm` CLI signs in with the device grant, approved in a
  * real browser, then drives `/api/admin/v1` the way an operator would. The negative cases prove the
- * boundary: bearer-only, audience-bound, scope intersected with role, keys revoked and never deleted.
+ * boundary: bearer-only, access tokens only (an ID token is refused), scope intersected with role,
+ * keys revoked and never deleted. The audience check is not proven here: that needs a second control
+ * plane with another `CONSOLE_URL`, which `scripts/aud-isolation.sh` starts (apps/e2e/README.md).
  *
  * It creates and deletes resources and changes a user's role, so it runs only against a stack named
  * explicitly. It never falls back to the `localhost` defaults the other specs use: those ports may
@@ -79,6 +81,11 @@ function credential(home: string): Credential {
 /** A JWT's claims. Signature not checked: the admin API is what checks it; this only reads `jti`. */
 function claims(jwt: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'))
+}
+
+/** A JWT's protected header, likewise not verified. This spec reads `typ` from it. */
+function joseHeader(jwt: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(jwt.split('.')[0], 'base64url').toString('utf8'))
 }
 
 /** The CLI exactly as an operator runs it (`pnpm --filter @metamodels/cli start`), minus pnpm. */
@@ -297,7 +304,7 @@ test('a viewer holding resource.write is still refused: the token never exceeds 
   expect(write.body).toMatchObject({ status: 403, capability: 'resource.write' })
 })
 
-test('the boundary: bearer only, this audience only, keys never deleted, the contract public', async () => {
+test('the boundary: bearer only, access tokens only, keys never deleted, the contract public', async () => {
   const noAuth = await api('GET', '/flocks')
   record('no Authorization header', noAuth.status)
   expect(noAuth.status).toBe(401)
@@ -312,9 +319,11 @@ test('the boundary: bearer only, this audience only, keys never deleted, the con
   record('Cookie: mm_session=x alone', cookieOnly.status)
   expect(cookieOnly.status).toBe(401)
 
-  // A real token from the same OP, signed with the same key, for another audience: the CLI's ID
-  // token, whose `aud` is the client. The CLI never stores one, so it comes from a refresh of the
-  // read-only sign-in's refresh token (that sign-in is not used again).
+  // An ID token replayed as an access token: a real token from the same OP, signed with the same key.
+  // The CLI never stores one, so it comes from a refresh of the read-only sign-in's refresh token
+  // (that sign-in is not used again). The API refuses it on `typ` (it must be `at+jwt`), before it
+  // looks at `aud`, so this case proves the `typ` check and NOT the audience check. The audience
+  // check needs a second control plane: `scripts/aud-isolation.sh`.
   const ro = credential(state.readOnly)
   const discovery = await (await fetch(`${ISSUER}/.well-known/openid-configuration`)).json() as { token_endpoint: string }
   const refreshed = await fetch(discovery.token_endpoint, {
@@ -327,10 +336,12 @@ test('the boundary: bearer only, this audience only, keys never deleted, the con
   expect(refreshed.status).toBe(200)
   const idToken = (await refreshed.json() as { id_token?: string }).id_token
   expect(idToken, 'the OP returned no id_token on refresh').toBeTruthy()
+  // The anchor: this really is the CLI's ID token, not an access token.
   expect(claims(idToken!).aud).toBe('metamodels-cli')
-  const wrongAud = await api('GET', '/flocks', { authorization: `Bearer ${idToken}` })
-  record('ID token (aud=metamodels-cli), GET /flocks', wrongAud.status)
-  expect(wrongAud.status).toBe(401)
+  expect(joseHeader(idToken!).typ).not.toBe('at+jwt')
+  const idAsAccess = await api('GET', '/flocks', { authorization: `Bearer ${idToken}` })
+  record('an ID token replayed as an access token (wrong typ), GET /flocks', idAsAccess.status)
+  expect(idAsAccess.status).toBe(401)
 
   const del = await api('DELETE', `/keys/${state.keyId}`, bearer(state.operator))
   record('DELETE /keys/{id}', del.status)
