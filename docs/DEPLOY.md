@@ -165,7 +165,7 @@ error rather than silently booting with a guessable credential:
 | `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
-| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Rotate it via `OIDC_PREVIOUS_SIGNING_KEYS`, or issued tokens stop verifying at once; it does **not** sign anyone out |
+| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Rotate it via `OIDC_PREVIOUS_SIGNING_KEYS`, or issued access tokens stop verifying once the console's 10-minute copy of the keys expires; it does **not** sign anyone out |
 
 Everything else defaults:
 
@@ -222,8 +222,9 @@ Keep at least one active admin — deactivating the last one locks everybody out
 
 - **`OIDC_COOKIE_KEYS`** — prepend a new key (`<new>,<old>`) and redeploy: new cookies are
   signed with it and old ones still verify. Drop the old key after a day.
-- **`OIDC_SIGNING_KEY`** — rotate it with an overlap window, or every ID and access token
-  already issued stops verifying at once:
+- **`OIDC_SIGNING_KEY`** — rotate it with an overlap window, or every access token already issued
+  stops verifying once the console's cached copy of the sign-in service's keys expires, within
+  10 minutes:
 
   1. In a single edit, applied together before any redeploy: move the current `OIDC_SIGNING_KEY`
      value into `OIDC_PREVIOUS_SIGNING_KEYS` **and** set `OIDC_SIGNING_KEY` to the new key. The
@@ -232,12 +233,15 @@ Keep at least one active admin — deactivating the last one locks everybody out
   2. Redeploy the sign-in service. It publishes both keys in its JWKS, the new one first, so new
      tokens are signed with the new key while in-flight tokens still verify against the old one.
   3. Wait out the window: the longest access-token lifetime, plus the console's JWKS cache.
-  4. Clear `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the old key stop
-     verifying.
+  4. Clear `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the sign-in service stop
+     publishing the old key. The console stops accepting it once its cached copy expires, within
+     10 more minutes.
 
   Replacing `OIDC_SIGNING_KEY` on its own, with `OIDC_PREVIOUS_SIGNING_KEYS` left empty, is the
-  *deliberate* way to invalidate issued tokens immediately. Either way it does **not** sign anyone
-  out: console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
+  *deliberate* way to invalidate issued tokens. The console refuses them once its cached copy of the
+  keys expires, within 10 minutes, or at once if you then restart the control-plane container, as
+  [Forcing everyone to sign in again](#forcing-everyone-to-sign-in-again) describes for a leaked
+  key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
   database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
@@ -273,15 +277,33 @@ and `mm` CLI sign-ins.
    those are signed JWTs that the console checks by itself and that are never stored, so each one
    keeps working until it expires, one hour after it was issued at most. To end them sooner,
    replace `OIDC_SIGNING_KEY` outright, as the next paragraph describes: the console then refuses
-   them once its cached copy of the sign-in service's keys expires, within 10 minutes.
+   them once its cached copy of the sign-in service's keys expires, within 10 minutes, or at once
+   if you also restart the control-plane container.
 
-If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright** — set it to a new key and
-make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty, clearing it if a rotation window left a key in it,
-since that key may be the leaked one. Do **not** run the overlap procedure in
-[Rotating the sign-in keys](#rotating-the-sign-in-keys) here: its first step moves the old key into
-`OIDC_PREVIOUS_SIGNING_KEYS`, which would keep publishing the *leaked* key for verification for the
-whole window. A leaked key must stop verifying immediately, and losing the in-flight tokens signed
-with it is the point.
+If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
+
+1. Set `OIDC_SIGNING_KEY` to a new key and make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty,
+   clearing it if a rotation window left a key in it, since that key may be the leaked one.
+2. Redeploy the sign-in service (`auth`), and wait until it is running with the new key.
+3. **Then restart the control-plane container**, for example `docker compose restart control-plane`.
+   Do this even if the control-plane was redeployed with the other secrets, unless that happened
+   after step 2. The console keeps its copy of the sign-in service's published keys in the
+   control-plane process's memory, for up to 10 minutes. Until that copy expires it still accepts
+   admin API access tokens signed with the leaked key, including any forged with it. A restart
+   drops the copy, so the leaked key stops verifying at once. Without the restart it stops within
+   10 minutes.
+
+Steps 2 and 3 together cover every place that verifies these tokens. The restart covers the
+control-plane process, which holds two copies of the keys, both in memory: the admin API's, which checks the access tokens clients
+present, and the console sign-in's, which checks only the ID token the console receives straight
+from the sign-in service when someone signs in. The data plane verifies no token from the sign-in
+service at all: it authenticates API keys. The sign-in service reads its keys when it starts
+(step 2).
+
+Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-the-sign-in-keys)
+here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
+publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
+as soon as possible, and losing the in-flight tokens signed with it is the point.
 
 ### Upgrading from 0.3.x
 
