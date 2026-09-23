@@ -170,4 +170,14 @@ describe('resealUpstreamAuth', () => {
     expect(report.resealed).toBe(1)
     expect(report.unreadable).toEqual([{ id: b.id, name: 'b', reason: 'tampered' }])
   })
+
+  test('a moved envelope already under the current key is still reported, though nothing is rewritten', async () => {
+    const { db, orgId } = await migratedDb()
+    const r = ring(key())
+    const a = await addFlock(db, orgId, 'a', (b) => seal('tok', r, b))
+    const b = await addFlock(db, orgId, 'b', null)
+    await db.update(flock).set({ upstreamAuthEnc: a.upstreamAuthEnc }).where(eq(flock.id, b.id))
+    const report = await resealUpstreamAuth(db, r)
+    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: b.id, name: 'b', reason: 'tampered' }], vacuum: 'not-needed' })
+  })
 })

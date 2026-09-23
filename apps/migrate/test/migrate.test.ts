@@ -27,7 +27,7 @@ describe('describeReseal', () => {
     expect(warn.join('\n')).toMatch(/f-1/)
     expect(warn.join('\n')).toMatch(/gpu box/)
     expect(warn.join('\n')).toMatch(/UPSTREAM_AUTH_PREVIOUS_KEYS/)
-    expect(warn.join('\n')).toMatch(/re-enter/i)
+    expect(warn.join('\n')).toMatch(/PUT \/api\/admin\/v1\/flocks\/f-1/)
   })
 })
 
@@ -37,5 +37,22 @@ describe('describeReseal — a failed VACUUM', () => {
     expect(warn).toHaveLength(1)
     expect(warn[0]).toContain(`psql "$DATABASE_URL" -c 'VACUUM FULL "flock"'`)
     expect(warn[0]).toContain('lock timeout')
+  })
+})
+
+describe('describeReseal — recovery advice depends on why a row will not open', () => {
+  const one = (reason: 'unknown-key' | 'tampered' | 'malformed') =>
+    describeReseal({ sealed: 0, resealed: 0, unreadable: [{ id: 'f-1', name: 'n', reason }], vacuum: 'not-needed' }).warn.join('\n')
+
+  test('unknown-key: the key that sealed it may still exist, so offer both remedies', () => {
+    expect(one('unknown-key')).toMatch(/UPSTREAM_AUTH_PREVIOUS_KEYS/)
+  })
+
+  test('tampered or malformed: no key will help, so only re-entering it does', () => {
+    for (const reason of ['tampered', 'malformed'] as const) {
+      const msg = one(reason)
+      expect(msg).not.toMatch(/UPSTREAM_AUTH_PREVIOUS_KEYS/)
+      expect(msg).toMatch(/PUT \/api\/admin\/v1\/flocks\/f-1/)
+    }
   })
 })

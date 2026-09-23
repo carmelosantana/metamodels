@@ -21,8 +21,14 @@ export function describeReseal(r: ResealReport): { info: string[]; warn: string[
     : []
   const warn = r.unreadable.map((u) =>
     `metamodels: flock ${u.id} (${u.name}): upstream credential cannot be opened (${u.reason}). ` +
-    'Its requests fail until either the key that sealed it is added to UPSTREAM_AUTH_PREVIOUS_KEYS, ' +
-    'or the credential is re-entered on the flock.')
+    (u.reason === 'unknown-key'
+      // Sealed under a key this stack does not hold (a restore under another key): the old key
+      // recovers it, if it still exists.
+      ? 'Its requests fail until either the key that sealed it is added to UPSTREAM_AUTH_PREVIOUS_KEYS, ' +
+        `or a new credential is sent with PUT /api/admin/v1/flocks/${u.id}.`
+      // Moved from another row, altered, or not an envelope: no key opens it, so only a new
+      // credential helps.
+      : `No key will open it. Its requests fail until a new credential is sent with PUT /api/admin/v1/flocks/${u.id}.`))
   if (typeof r.vacuum === 'object') {
     // The re-encryption committed; only the rewrite that clears the old row versions did not, and a
     // re-run will not retry it (it finds nothing left to re-encrypt). So say exactly what to run.

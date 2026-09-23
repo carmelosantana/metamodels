@@ -266,9 +266,18 @@ window:
 2. Redeploy. The `migrate` log reports `re-sealed N under the current key`.
 3. Clear `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy again.
 
-If a deploy's `migrate` log warns that a flock's upstream credential cannot be opened, nothing has
-been lost. `migrate` never modifies a value it cannot open, so putting the right key back into
-`UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploying recovers it. Until then that flock's paddocks answer
+If a rotation's rewrite of the `flock` table fails, `migrate` still succeeds but logs a warning
+with the command to run by hand, and a later deploy will not retry it. Run it with `psql`, or any
+SQL client, against `DATABASE_URL`.
+
+If a deploy's `migrate` log warns that a flock's upstream credential cannot be opened, the reason
+in brackets says what to do. `migrate` never modifies a value it cannot open.
+
+- **`unknown-key`:** the value was sealed under a key this stack does not hold. Putting that key
+  back into `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploying recovers it.
+- **`tampered` or `malformed`:** no key will open it. This covers a value that was altered, and a
+  value copied from another flock's row, since each value is bound to its own flock and org. Send
+  that flock a new credential with `PUT /api/admin/v1/flocks/{id}`. Until then that flock's paddocks answer
 `503 {"error":"upstream credential unavailable"}` rather than calling the flock without its
 credential.
 

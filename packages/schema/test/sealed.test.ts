@@ -129,7 +129,7 @@ describe('needsReseal', () => {
   test('legacy plaintext and an old kid need resealing; the current kid does not', () => {
     const old = k()
     const r = ring(k(), [old])
-    expect(needsReseal('plain', r, ROW)).toBe(true)
+    expect(needsReseal('plain', r)).toBe(true)
     expect(needsReseal(seal('x', ring(old), ROW), r)).toBe(true)
     expect(needsReseal(seal('x', r, ROW), r)).toBe(false)
   })

@@ -53,7 +53,18 @@ export async function resealUpstreamAuth(
       const value = row.value!
       // Every envelope is bound to the row it is stored in; see `sealed.ts`.
       const bind = { orgId: row.orgId, flockId: row.id }
-      if (!needsReseal(value, ring)) continue
+      if (!needsReseal(value, ring)) {
+        // Already under the current key, so there is nothing to rewrite. Still open it once, so that
+        // an envelope moved here from another row is named in the log rather than only surfacing
+        // as a 503 at the data plane.
+        try {
+          openSealed(value, ring, bind)
+        } catch (e) {
+          if (!(e instanceof UnsealError)) throw e
+          report.unreadable.push({ id: row.id, name: row.name, reason: e.reason })
+        }
+        continue
+      }
       let plaintext: string
       if (!isSealed(value)) {
         // Only a pre-0008 row can be here: the check constraint refuses any new unsealed write.
