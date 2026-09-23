@@ -5,8 +5,10 @@ import type { FlockRef } from './breed.js'
  * `Authorization: Bearer <token>` on every call to the flock — the proxy, health probes, model
  * listing and raw uploads alike. No credential, no header.
  *
- * A value stored before that contract may already carry `Bearer `; one such prefix is dropped so it
- * goes upstream once, not twice. New values cannot carry it: the control plane rejects them.
+ * Why one leading `Bearer ` is dropped: legacy rows written before `saveFlockInput` validated a bare
+ * token may carry it, and the reseal pass seals them as they were. Dropping it here, at send time,
+ * is the only normalisation — there is deliberately no second one in the migration — so such a row
+ * goes upstream as `Bearer <token>`, not `Bearer Bearer <token>`. New writes cannot carry it.
  */
 export function upstreamAuthHeaders(flock: Pick<FlockRef, 'upstreamAuth'>): Record<string, string> {
   const token = flock.upstreamAuth?.replace(/^bearer\s+/i, '')
