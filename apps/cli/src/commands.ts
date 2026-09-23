@@ -303,13 +303,13 @@ export async function main(argv: string[], io: MainIo): Promise<number> {
       io.stderr(`mm: ${e.message}\n`)
       return 2
     }
-    io.stderr(`mm: ${describe(e)}\n`)
+    io.stderr(`mm: ${oneLine(e)}\n`)
     return 1
   }
 }
 
 /** An error as one line, with a network failure's cause (`fetch failed` alone says nothing). */
-function describe(e: unknown): string {
+function oneLine(e: unknown): string {
   if (!(e instanceof Error)) return String(e)
   const cause = e.cause instanceof Error ? `: ${e.cause.message}` : ''
   return `${e.message}${cause}`

@@ -170,6 +170,17 @@ describe('main: API commands', () => {
     expect(w.stderr()).toContain('--cursor NEXT')
   })
 
+  test('an unreachable console is exit 1 with the network cause, not a bare "fetch failed"', async () => {
+    const w = await world()
+    const gone = await startStub()
+    await gone.close()
+    w.signIn({ resource: adminApiResource(gone.url) })
+    const io = { ...w.io, env: { ...w.env, METAMODELS_CONSOLE_URL: gone.url } }
+    expect(await main(['flocks', 'list'], io)).toBe(1)
+    expect(w.stderr()).toMatch(/fetch failed: .*ECONNREFUSED/)
+    expect(w.stderr()).not.toContain('at-1')
+  })
+
   test('refuses to send a stored token to a console it was not issued for', async () => {
     const w = await world()
     w.signIn({ resource: 'http://other.test/api/admin' })
