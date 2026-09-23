@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -24,9 +24,12 @@ import {
 const T = 30_000
 const ADMIN = adminApiResource(CONSOLE_URL)
 let op: TestOp | undefined
+let configHome: string | undefined
 afterEach(async () => {
   await op?.close()
   op = undefined
+  if (configHome !== undefined) rmSync(configHome, { recursive: true, force: true })
+  configHome = undefined
 })
 
 /** The grant a refresh token belongs to, as stored by the OP (an opaque token's value is its id). */
@@ -99,8 +102,8 @@ describe('the CLI against the OP', () => {
     await expect(refresh({ issuer, resource: ADMIN, refreshToken: next.refreshToken! })).rejects.toBeInstanceOf(SignInAgainError)
   }, T)
 
-  // RFC 8628: each device authorization is its own. A browser session that already approved one
-  // CLI still gets a new grant for the next, so signing one machine out leaves the other signed in.
+  // Our decision, not RFC 8628's: every device approval gets its own grant, even from a browser
+  // session that already approved one CLI, so signing one machine out leaves the other signed in.
   test('two logins approved from one browser get separate grants: revoking the first\'s refresh token leaves the second\'s working', async () => {
     op = await startTestOp()
     await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
@@ -130,7 +133,7 @@ describe('the CLI against the OP', () => {
     const issuer = op.issuer
     // CONSOLE_URL is plain http to a host that is not loopback, hence the opt-in.
     const env = {
-      XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'mm-cli-')),
+      XDG_CONFIG_HOME: (configHome = mkdtempSync(join(tmpdir(), 'mm-cli-'))),
       METAMODELS_ISSUER: issuer, METAMODELS_CONSOLE_URL: CONSOLE_URL, METAMODELS_ALLOW_INSECURE_HTTP: '1',
     }
     const path = credentialsPath(env)
@@ -151,4 +154,3 @@ describe('the CLI against the OP', () => {
     expect(renewed.refreshToken).not.toBe(current)
   }, T)
 })
-
