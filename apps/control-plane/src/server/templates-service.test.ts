@@ -1,19 +1,20 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { saveTemplate, deleteTemplate, listTemplates } from './templates-service'
 import { NotFoundError } from './fences-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
-type TDb = Awaited<ReturnType<typeof freshDb>>
+const testDb = sharedDb()
+
 const GRAPH = { '4': { class_type: 'CLIPTextEncode', inputs: { text: '' } } }
 const draft = (id: string) => ({
   id, graphText: JSON.stringify(GRAPH),
   params: [{ name: 'prompt', type: 'text', target: { node: '4', input: 'text' } }], cost: 1,
 })
 
-async function comfyPaddock(db: TDb, role: Actor['role'] = 'admin') {
+async function comfyPaddock(db: TestDb, role: Actor['role'] = 'admin') {
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
   const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
@@ -23,7 +24,7 @@ async function comfyPaddock(db: TDb, role: Actor['role'] = 'admin') {
 
 describe('templates-service', () => {
   test('saves a template into the fence constraint_json and audits template.save', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db)
     const tpls = await saveTemplate(db, actor, { paddockId: p.id, draft: draft('txt2img') })
     expect(tpls.map((t) => t.id)).toEqual(['txt2img'])
@@ -34,7 +35,7 @@ describe('templates-service', () => {
   })
 
   test('saving the same id replaces it; a new id appends', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db)
     await saveTemplate(db, actor, { paddockId: p.id, draft: draft('a') })
     await saveTemplate(db, actor, { paddockId: p.id, draft: { ...draft('a'), cost: 9 } })
@@ -45,7 +46,7 @@ describe('templates-service', () => {
   })
 
   test('preserves existing rateLimit/quota when writing templates', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db)
     await db.insert(schema.fence).values({
       orgId: actor.orgId, paddockId: p.id, constraintJson: { templates: [] } as never,
@@ -58,7 +59,7 @@ describe('templates-service', () => {
   })
 
   test('deleteTemplate removes by id and audits template.delete', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db)
     await saveTemplate(db, actor, { paddockId: p.id, draft: draft('a') })
     await saveTemplate(db, actor, { paddockId: p.id, draft: draft('b') })
@@ -69,7 +70,7 @@ describe('templates-service', () => {
   })
 
   test('rejects an invalid draft before any write', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db)
     await expect(saveTemplate(db, actor, {
       paddockId: p.id, draft: { ...draft('x'), params: [{ name: 'p', type: 'text', target: { node: 'NOPE', input: 'text' } }] },
@@ -78,7 +79,7 @@ describe('templates-service', () => {
   })
 
   test('rejects a non-comfyui paddock as not-found', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
@@ -87,7 +88,7 @@ describe('templates-service', () => {
   })
 
   test('rejects a paddock in another org as not-found', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p } = await comfyPaddock(db)
     const other = await seedOrg(db)
     const actor: Actor = { id: 'u2', orgId: other.id, email: 'b@x.io', role: 'admin', credential: 'session' }
@@ -95,7 +96,7 @@ describe('templates-service', () => {
   })
 
   test('viewer cannot save a template', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await comfyPaddock(db, 'viewer')
     await expect(saveTemplate(db, actor, { paddockId: p.id, draft: draft('x') })).rejects.toThrow(ForbiddenError)
   })

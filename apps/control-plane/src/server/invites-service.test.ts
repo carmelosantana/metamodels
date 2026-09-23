@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { inviteUser, listPendingInvites, revokeInvite, hashInviteToken, SeatLimitError, NotFoundError } from './invites-service'
 import { acceptInvite, InviteError } from './invites-service'
 import { verifyPassword } from '@metamodels/schema'
@@ -16,7 +16,7 @@ async function seedAdminUser(db: TestDb, orgId: string): Promise<Actor> {
 
 describe('invites-service', () => {
   test('inviteUser stores only a token hash and returns the token once (seat available)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     const created = await inviteUser(db, admin, { email: 'teammate@x.io', role: 'member' }, 5, NOW)
@@ -36,7 +36,7 @@ describe('invites-service', () => {
   })
 
   test('inviteUser is blocked at the seat limit (base=1, seeded admin fills it)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     // limit=1, one active user → no seat → invite blocked (this is the out-of-the-box 5.7a gate)
@@ -44,7 +44,7 @@ describe('invites-service', () => {
   })
 
   test('a pending invite reserves a seat (second invite blocked at limit=2 with 1 admin + 1 pending)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     await inviteUser(db, admin, { email: 'a@x.io', role: 'member' }, 2, NOW) // used=2 (admin+pending)
@@ -52,7 +52,7 @@ describe('invites-service', () => {
   })
 
   test('inviteUser requires user.manage and validates role', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     const member: Actor = { ...admin, role: 'member' }
@@ -62,7 +62,7 @@ describe('invites-service', () => {
   })
 
   test('listPendingInvites excludes expired/accepted; revokeInvite frees the seat', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     const created = await inviteUser(db, admin, { email: 'p@x.io', role: 'member' }, 5, NOW)
@@ -79,7 +79,7 @@ describe('invites-service', () => {
 
 describe('invites-service acceptInvite', () => {
   test('accepts a valid invite: creates an active user with the invited role + hashed password, marks accepted', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     const created = await inviteUser(db, admin, { email: 'new@x.io', role: 'member' }, 5, NOW)
@@ -105,7 +105,7 @@ describe('invites-service acceptInvite', () => {
   })
 
   test('rejects invalid, expired, and already-accepted tokens', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
 
@@ -122,7 +122,7 @@ describe('invites-service acceptInvite', () => {
   })
 
   test('rejects a too-short password before creating anything', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const admin = await seedAdminUser(db, o.id)
     const created = await inviteUser(db, admin, { email: 'p@x.io', role: 'member' }, 5, NOW)
@@ -134,16 +134,18 @@ describe('invites-service acceptInvite', () => {
 
 import { DuplicateInviteError } from './invites-service'
 
+const testDb = sharedDb()
+
 describe('inviteUser duplicate guard', () => {
   test('rejects an email that already has a pending invite', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const adminA = await seedAdminUser(db, o.id)
     await inviteUser(db, adminA, { email: 'dup@x.io', role: 'member' }, 5, NOW)
     await expect(inviteUser(db, adminA, { email: 'dup@x.io', role: 'member' }, 5, NOW)).rejects.toThrow(DuplicateInviteError)
   })
 
   test('rejects an email that already belongs to an active user', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const adminA = await seedAdminUser(db, o.id)
     await db.insert(schema.user).values({ orgId: o.id, email: 'taken@x.io', passwordHash: 'scrypt$x$y', role: 'member', status: 'active' })
     await expect(inviteUser(db, adminA, { email: 'taken@x.io', role: 'member' }, 5, NOW)).rejects.toThrow(DuplicateInviteError)

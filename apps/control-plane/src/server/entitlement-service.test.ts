@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import {
   getEntitlement, getDecryptedKey, saveEntitlement, updateValidation, clearEntitlement,
   resolveSeatsForVariant, resolveEntitlementSeats, GRACE_MS, listEntitledOrgIds,
@@ -9,13 +9,15 @@ import {
 import { decryptLicenseKey } from './license-crypto'
 import type { Actor } from '../auth/authorize'
 
+const testDb = sharedDb()
+
 const SECRET = 'entitlement-test-secret-16chars-min'
 const NOW = 1_800_000_000_000
 const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'admin@x.io', role: 'admin', credential: 'session' })
 
 describe('entitlement-service', () => {
   test('saveEntitlement encrypts the key (never plaintext), stores last4, and audits', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     await saveEntitlement(db, admin(o.id), {
       licenseKey: 'ABCD-EFGH-IJKL-WXYZ', instanceId: 'inst_1', status: 'active', seats: 5, tier: 'Team 5',
       lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS),
@@ -37,7 +39,7 @@ describe('entitlement-service', () => {
   })
 
   test('saveEntitlement upserts (one row per org)', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const base = { licenseKey: 'K1', instanceId: 'i1', status: 'active', seats: 5, tier: 'Team 5', lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS) }
     await saveEntitlement(db, admin(o.id), base, NOW, SECRET)
     await saveEntitlement(db, admin(o.id), { ...base, licenseKey: 'K2', seats: 10, tier: 'Team 10' }, NOW, SECRET)
@@ -47,7 +49,7 @@ describe('entitlement-service', () => {
   })
 
   test('updateValidation patches status/seats/grace without touching the key; clearEntitlement removes + audits', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     await saveEntitlement(db, admin(o.id), { licenseKey: 'K', instanceId: 'i', status: 'active', seats: 5, tier: 'Team 5', lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS) }, NOW, SECRET)
     await updateValidation(db, o.id, { status: 'expired', seats: 5, instanceId: 'i', graceUntil: new Date(NOW + GRACE_MS) }, NOW + 1000)
     const v = await getEntitlement(db, o.id)
@@ -73,7 +75,7 @@ describe('entitlement-service', () => {
   })
 
   test('listEntitledOrgIds returns every org that has an entitlement, and excludes orgs without one', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o1 = await seedOrg(db, 'org-one@x.io')
     const o2 = await seedOrg(db, 'org-two@x.io')
     const o3 = await seedOrg(db, 'org-three@x.io') // no entitlement — must be excluded

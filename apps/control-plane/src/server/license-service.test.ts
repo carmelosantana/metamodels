@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import type { Db } from './db'
 import { activateLicense, deactivateLicense, revalidateLicense, revalidateAllEntitlements } from './license-service'
 import { getEntitlement, GRACE_MS } from './entitlement-service'
 import { LemonSqueezyClient, type LsResult } from './ls-client'
 import type { Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 const SECRET = 'license-service-secret-16chars-min'
 const NOW = 1_800_000_000_000
@@ -21,7 +23,7 @@ function fakeLs(script: { activate?: LsResult; validate?: LsResult | (() => neve
 
 describe('license-service', () => {
   test('activateLicense stores an active entitlement with tier seats', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const ls = fakeLs({
       activate: { valid: true, status: 'active', instanceId: 'inst_1', variantName: 'Team 5' },
       validate: { valid: true, status: 'active', instanceId: 'inst_1', variantName: 'Team 5' },
@@ -34,7 +36,7 @@ describe('license-service', () => {
   })
 
   test('activateLicense returns {ok:false} on an invalid key and stores nothing', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const ls = fakeLs({ activate: { valid: false, status: 'inactive', instanceId: null, variantName: null } })
     const r = await activateLicense(db, admin(o.id), 'BAD', 'my-box', { ls, secret: SECRET, nowMs: NOW })
     expect(r.ok).toBe(false)
@@ -42,7 +44,7 @@ describe('license-service', () => {
   })
 
   test('activateLicense gates on the confirming validate: activate ok but validate invalid stores nothing', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const ls = fakeLs({
       activate: { valid: true, status: 'active', instanceId: 'inst_1', variantName: 'Team 5' },
       validate: { valid: false, status: 'inactive', instanceId: 'inst_1', variantName: 'Team 5' },
@@ -53,7 +55,7 @@ describe('license-service', () => {
   })
 
   test('revalidate: a transport error keeps the last-good state (offline grace)', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const okLs = fakeLs({
       activate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
       validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
@@ -68,7 +70,7 @@ describe('license-service', () => {
   })
 
   test('revalidate: a definitive valid:false downgrades status (grace clock keeps running)', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const okLs = fakeLs({
       activate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
       validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
@@ -85,7 +87,7 @@ describe('license-service', () => {
   })
 
   test('deactivateLicense clears the entitlement even if LS deactivate fails', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     const okLs = fakeLs({
       activate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
       validate: { valid: true, status: 'active', instanceId: 'i', variantName: 'Team 5' },
@@ -104,7 +106,7 @@ describe('revalidateAllEntitlements', () => {
   })
 
   test('revalidates every entitled org and reports counts', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o1 = await seedOrg(db, 'a@x.io')
     const o2 = await seedOrg(db, 'b@x.io')
     await activateLicense(db, admin(o1.id), 'K1', 'box1', { ls: okLs(), secret: SECRET, nowMs: NOW })
@@ -119,7 +121,7 @@ describe('revalidateAllEntitlements', () => {
   })
 
   test('one org failing does not abort the pass (per-org isolation)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o1 = await seedOrg(db, 'a@x.io')
     const o2 = await seedOrg(db, 'b@x.io')
     await activateLicense(db, admin(o1.id), 'K1', 'box1', { ls: okLs(), secret: SECRET, nowMs: NOW })
@@ -137,7 +139,7 @@ describe('revalidateAllEntitlements', () => {
   })
 
   test('an empty instance revalidates nothing', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const res = await revalidateAllEntitlements(db, { ls: okLs(), secret: SECRET, nowMs: NOW })
     expect(res).toEqual({ total: 0, ok: 0, failed: 0 })
   })

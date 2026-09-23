@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { listKeys, createKey, revokeKey, NotFoundError } from './keys-service'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
@@ -23,7 +25,7 @@ async function paddockIn(db: TestDb, orgId: string, slug: string): Promise<strin
 
 describe('keys-service createKey', () => {
   test('mints an mm_live_ key; plaintext returned once, only hash+prefix stored', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'member')
     const pid = await paddockIn(db, actor.orgId, 'p1')
 
@@ -51,7 +53,7 @@ describe('keys-service createKey', () => {
   })
 
   test('org consistency: linking a paddock in another org is rejected; nothing is written', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const mine = await actorFor(db, 'admin')
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const foreignPid = await paddockIn(db, otherOrg.id, 'foreign')
@@ -64,7 +66,7 @@ describe('keys-service createKey', () => {
   })
 
   test('duplicate paddockIds are de-duplicated into one scope link', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     const created = await createKey(db, actor, { name: 'dup', paddockIds: [pid, pid] })
@@ -73,7 +75,7 @@ describe('keys-service createKey', () => {
   })
 
   test('optional per-key rate override is validated and persisted', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     const created = await createKey(db, actor, {
@@ -88,7 +90,7 @@ describe('keys-service createKey', () => {
   })
 
   test('viewer cannot create a key; nothing is written', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'viewer')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     await expect(createKey(db, actor, { name: 'x', paddockIds: [pid] })).rejects.toThrow(ForbiddenError)
@@ -96,7 +98,7 @@ describe('keys-service createKey', () => {
   })
 
   test('listKeys returns only this org, with prefix/status/paddock slugs, no hash', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     await createKey(db, actor, { name: 'a', paddockIds: [pid] })
@@ -117,7 +119,7 @@ describe('keys-service createKey', () => {
 
 describe('keys-service revokeKey', () => {
   test('flips status to revoked and audits it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     const created = await createKey(db, actor, { name: 'k', paddockIds: [pid] })
@@ -135,7 +137,7 @@ describe('keys-service revokeKey', () => {
   // and returns quietly. It does NOT throw: an already-revoked key is the state the caller asked
   // for, and NotFoundError here would become a 404 on a key the caller just retired.
   test('a second revoke is a silent no-op — still revoked, still exactly one audit row', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const pid = await paddockIn(db, actor.orgId, 'p1')
     const created = await createKey(db, actor, { name: 'k', paddockIds: [pid] })
@@ -155,14 +157,14 @@ describe('keys-service revokeKey', () => {
   // "Matched no row" now means three different things. Already-revoked is a no-op; the other two
   // are still 404, and must not be blurred into it by the fix.
   test('a key id that never existed is still NotFoundError', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await expect(revokeKey(db, actor, crypto.randomUUID())).rejects.toThrow(NotFoundError)
     expect(await db.select().from(schema.auditLog)).toHaveLength(0)
   })
 
   test('cannot revoke a key in another org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const mine = await actorFor(db, 'admin')
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const [foreign] = await db.insert(schema.apiKey).values({
@@ -179,7 +181,7 @@ describe('keys-service revokeKey', () => {
   })
 
   test('viewer cannot revoke', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const admin = await actorFor(db, 'admin')
     const pid = await paddockIn(db, admin.orgId, 'p1')
     const created = await createKey(db, admin, { name: 'k', paddockIds: [pid] })
@@ -200,7 +202,7 @@ describe('keys-service listKeys pagination', () => {
   }
 
   test('listKeys paginates by id and a cursor resumes exactly after it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const byId = await threeKeysEachScopedToTwoPaddocks(db, actor)
 
@@ -213,7 +215,7 @@ describe('keys-service listKeys pagination', () => {
   })
 
   test('listKeys without opts still returns every row (the console path is unchanged)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     // More than one default page of keys, each on two paddocks so the join has twice as many rows
     // as there are keys: a regression that paginated the console's bare call, or limited join rows

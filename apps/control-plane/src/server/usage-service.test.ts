@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { usageMatrix, dailySeries, topKeys, sumDimSince } from './usage-service'
 import { type Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
@@ -26,7 +28,7 @@ async function seedRollup(
 
 describe('usage-service', () => {
   test('usageMatrix pivots key×paddock rows with all five dims, defaulting missing to 0', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const { keyId, paddockId } = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     await seedRollup(db, actor.orgId, keyId, paddockId, '2026-07-25T10', 'tokens_in', 100)
@@ -46,7 +48,7 @@ describe('usage-service', () => {
   })
 
   test('usageMatrix excludes buckets outside the range and other orgs', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const { keyId, paddockId } = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     await seedRollup(db, actor.orgId, keyId, paddockId, '2026-07-25T10', 'tokens_in', 100) // in range
@@ -62,7 +64,7 @@ describe('usage-service', () => {
   })
 
   test('usageMatrix filters by keyId / paddockId when provided', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const a = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     const b = await seedKeyPaddock(db, actor.orgId, 'Beta', 'art')
@@ -76,7 +78,7 @@ describe('usage-service', () => {
   })
 
   test('dailySeries groups a dim by UTC day over the range', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const { keyId, paddockId } = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     await seedRollup(db, actor.orgId, keyId, paddockId, '2026-07-25T09', 'tokens_out', 100)
@@ -92,7 +94,7 @@ describe('usage-service', () => {
   })
 
   test('topKeys ranks keys by summed dim, descending, honoring limit', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const a = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     const b = await seedKeyPaddock(db, actor.orgId, 'Beta', 'art')
@@ -105,7 +107,7 @@ describe('usage-service', () => {
   })
 
   test('sumDimSince sums one dim from a bucket forward, org-scoped', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const { keyId, paddockId } = await seedKeyPaddock(db, actor.orgId, 'Acme', 'chat')
     await seedRollup(db, actor.orgId, keyId, paddockId, '2026-07-28T09', 'tokens_out', 10)

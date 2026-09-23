@@ -2,15 +2,17 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { flock } from '@metamodels/schema'
 import { loadSealKeyring, seal } from '@metamodels/schema/sealed'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { saveFlock } from './flocks-service'
 import { buildBreedRegistry, listFlockModels, testFlockConnection } from './flock-health'
 import type { Actor } from '../auth/authorize'
 
+const testDb = sharedDb()
+
 const registry = buildBreedRegistry()
 afterEach(() => vi.unstubAllGlobals())
 
-async function actorFor(db: Awaited<ReturnType<typeof freshDb>>): Promise<Actor> {
+async function actorFor(db: TestDb): Promise<Actor> {
   const o = await seedOrg(db)
   return { id: 'u1', orgId: o.id, email: 'admin@x.io', role: 'admin', credential: 'session' }
 }
@@ -46,7 +48,7 @@ describe('testFlockConnection', () => {
 
 describe('listFlockModels', () => {
   test('returns the ollama flock’s models, org-scoped', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db)
     const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false })
     vi.stubGlobal('fetch', vi.fn(async () =>
@@ -56,7 +58,7 @@ describe('listFlockModels', () => {
   })
 
   test('a flock in another org is not found (no cross-org read)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const mine = await actorFor(db)
     const otherOrg = await seedOrg(db)
     const stranger: Actor = { id: 'u2', orgId: otherOrg.id, email: 'x@y.io', role: 'admin', credential: 'session' }
@@ -67,7 +69,7 @@ describe('listFlockModels', () => {
   })
 
   test('a comfyui flock reports unsupported (models live in graphs)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db)
     const f = await saveFlock(db, actor, { breed: 'comfyui', name: 'c', baseUrl: 'http://c:8188', tlsTrust: false })
     const r = await listFlockModels(registry, db, actor, f.id)
@@ -75,7 +77,7 @@ describe('listFlockModels', () => {
   })
 
   test('sends the opened credential to the flock', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db)
     const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'up-tok' })
     const fetchMock = vi.fn(async (_u: unknown, _init?: RequestInit) =>
@@ -86,7 +88,7 @@ describe('listFlockModels', () => {
   })
 
   test('a credential no held key opens fails closed, without calling the flock', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db)
     const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
     const id = randomUUID()

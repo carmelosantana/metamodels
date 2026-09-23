@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { listUsers, changeUserRole, setUserStatus, LastAdminError, SelfActionError, SeatLimitError, NotFoundError } from './users-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 const NOW = 1_800_000_000_000
 
@@ -17,7 +19,7 @@ function actor(u: { id: string; orgId: string; email: string }, role: Actor['rol
 
 describe('users-service', () => {
   test('listUsers is org-scoped, ordered, and requires user.manage', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
     await seedUser(db, o.id, 'm@x.io', 'member')
@@ -32,7 +34,7 @@ describe('users-service', () => {
   })
 
   test('changeUserRole updates and audits; cannot demote the last admin', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
     const m = await seedUser(db, o.id, 'm@x.io', 'member')
@@ -51,7 +53,7 @@ describe('users-service', () => {
   })
 
   test('changeUserRole rejects unknown/cross-org target', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
     const other = await seedOrg(db, 'other')
@@ -60,7 +62,7 @@ describe('users-service', () => {
   })
 
   test('setUserStatus: cannot deactivate self or the last admin', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
     await expect(setUserStatus(db, actor(a), a.id, 'deactivated', 5, NOW)).rejects.toThrow(SelfActionError)
@@ -78,7 +80,7 @@ describe('users-service', () => {
   })
 
   test('reactivation is blocked when no seat is free, allowed when seats remain', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
     const m = await seedUser(db, o.id, 'm@x.io', 'member', 'deactivated')

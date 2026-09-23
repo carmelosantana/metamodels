@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { loadSealKeyring, openSealed, seal } from '@metamodels/schema/sealed'
 import { listFlocks, getFlock, getFlockConnection, saveFlock, deleteFlock, CredentialRebindError, NotFoundError } from './flocks-service'
@@ -9,7 +9,9 @@ import { upstreamAuthKeys } from './seal-keys'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
-async function actorFor(db: Awaited<ReturnType<typeof freshDb>>, role: Actor['role']): Promise<Actor> {
+const testDb = sharedDb()
+
+async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
   return { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
 }
@@ -18,7 +20,7 @@ const base = { breed: 'ollama', name: 'f', baseUrl: 'http://a', tlsTrust: false 
 
 describe('flocks-service', () => {
   test('member can create a flock; it is org-scoped and audited', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'member')
     const f = await saveFlock(db, actor, {
       breed: 'ollama', name: 'local', baseUrl: 'http://localhost:11434', tlsTrust: false,
@@ -31,7 +33,7 @@ describe('flocks-service', () => {
   })
 
   test('viewer cannot create (ForbiddenError) and nothing is written', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'viewer')
     await expect(saveFlock(db, actor, {
       breed: 'ollama', name: 'x', baseUrl: 'http://x', tlsTrust: false,
@@ -40,7 +42,7 @@ describe('flocks-service', () => {
   })
 
   test('save with id updates within the org; list returns only this org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const created = await saveFlock(db, actor, { breed: 'ollama', name: 'a', baseUrl: 'http://a', tlsTrust: false })
     const updated = await saveFlock(db, actor, { id: created.id, breed: 'ollama', name: 'a2', baseUrl: 'http://a', tlsTrust: true })
@@ -52,7 +54,7 @@ describe('flocks-service', () => {
   })
 
   test('cannot update or delete a flock in another org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const mine = await actorFor(db, 'admin')
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const [foreign] = await db.insert(schema.flock).values({
@@ -67,7 +69,7 @@ describe('flocks-service', () => {
   })
 
   test('invalid input is rejected before any write', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await expect(saveFlock(db, actor, { breed: 'notabreed', name: '', baseUrl: 'nota url', tlsTrust: false }))
       .rejects.toThrow()
@@ -75,7 +77,7 @@ describe('flocks-service', () => {
   })
 
   test('delete removes an org flock and audits it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { breed: 'ollama', name: 'gone', baseUrl: 'http://g', tlsTrust: false })
     await deleteFlock(db, actor, f.id)
@@ -85,7 +87,7 @@ describe('flocks-service', () => {
   })
 
   test('listFlocks paginates by id and a cursor resumes exactly after it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const made = []
     for (const n of ['a', 'b', 'c']) made.push(await saveFlock(db, actor, { ...base, name: n }))
@@ -99,7 +101,7 @@ describe('flocks-service', () => {
   })
 
   test('listFlocks without opts still returns every row (the console path is unchanged)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     // More than one default page, so a regression that paginated the console's bare call would
     // return DEFAULT_LIMIT rows and fail here.
@@ -111,14 +113,14 @@ describe('flocks-service', () => {
   })
 
   test('an empty cursor is rejected, not quietly treated as page one', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await saveFlock(db, actor, base)
     await expect(listFlocks(db, actor, { limit: 2, cursor: '' })).rejects.toThrow()
   })
 
   test('getFlock is org-scoped — another org 404s rather than leaking', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const mine = await saveFlock(db, actor, base)
     expect((await getFlock(db, actor, mine.id)).id).toBe(mine.id)
@@ -130,11 +132,11 @@ describe('flocks-service', () => {
 })
 
 describe('flocks-service — the upstream credential is write-only and sealed at rest', () => {
-  const rowOf = async (db: Awaited<ReturnType<typeof freshDb>>, id: string) =>
+  const rowOf = async (db: TestDb, id: string) =>
     (await db.select().from(schema.flock).where(eq(schema.flock.id, id)))[0]
 
   test('is stored sealed under the current key, never as plaintext', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     const row = await rowOf(db, f.id)
@@ -143,7 +145,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('no read or write returns it, sealed or not — only whether one is stored', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const saved = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     const bare = await saveFlock(db, actor, { ...base, name: 'bare' })
@@ -160,7 +162,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('an update that omits it leaves the stored credential exactly as it was', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     const before = (await rowOf(db, f.id)).upstreamAuthEnc
@@ -172,7 +174,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('null clears it; a new string replaces it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-1' })
     await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: 'tok-2' })
@@ -183,7 +185,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('the audit row says the credential changed, and never what it is', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     await saveFlock(db, actor, { ...base, id: f.id, name: 'renamed' })
@@ -195,7 +197,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('getFlockConnection opens it for server-side use, org-scoped', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     expect(await getFlockConnection(db, actor, f.id)).toEqual({
@@ -206,7 +208,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('getFlockConnection reports a credential no held key opens, instead of dropping it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
     const id = randomUUID()
@@ -218,7 +220,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('a created credential is bound to the flock\'s own id and org, which the service mints', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     const enc = (await rowOf(db, f.id)).upstreamAuthEnc!
@@ -228,7 +230,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
   })
 
   test('an envelope copied from another flock is not opened for this one', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     const src = await saveFlock(db, actor, { ...base, name: 'src', upstreamAuth: 'tok-src' })
     const dst = await saveFlock(db, actor, { ...base, name: 'dst' })
@@ -244,7 +246,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
    */
   describe('an omitted credential does not follow the flock somewhere new', () => {
     test('changing baseUrl without re-sending it is refused, and nothing is written', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
       const before = await rowOf(db, f.id)
@@ -254,14 +256,14 @@ describe('flocks-service — the upstream credential is write-only and sealed at
     })
 
     test('turning tlsTrust on without re-sending it is refused', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, { ...base, tlsTrust: false, upstreamAuth: 'tok' })
       await expect(saveFlock(db, actor, { ...base, id: f.id, tlsTrust: true })).rejects.toThrow(CredentialRebindError)
     })
 
     test('re-sending it, or clearing it, alongside the change is allowed', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
       const moved = await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', upstreamAuth: 'tok-b' })
@@ -271,21 +273,21 @@ describe('flocks-service — the upstream credential is write-only and sealed at
     })
 
     test('no stored credential, nothing to protect: the change goes through', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, base)
       expect((await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', tlsTrust: true })).baseUrl).toBe('http://b')
     })
 
     test('turning tlsTrust OFF, or leaving baseUrl alone, keeps it without re-sending', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, { ...base, tlsTrust: true, upstreamAuth: 'tok' })
       expect((await saveFlock(db, actor, { ...base, id: f.id, tlsTrust: false, name: 'n2' })).hasUpstreamAuth).toBe(true)
     })
 
     test('another org\'s flock is still a 404, not a rebind refusal that confirms it exists', async () => {
-      const db = await freshDb()
+      const db = testDb()
       const actor = await actorFor(db, 'admin')
       const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
       const other = await seedOrg(db, 'other')
