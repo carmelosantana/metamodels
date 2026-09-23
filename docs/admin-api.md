@@ -65,9 +65,11 @@ password you type into the sign-in page, can be read by anyone on that network.
 ### Where the credentials live
 
 `mm` stores tokens in `$XDG_CONFIG_HOME/metamodels/credentials.json`, or
-`~/.config/metamodels/credentials.json` when `XDG_CONFIG_HOME` is unset. The file is mode `0600`
-and its directory `0700`. `mm` refuses a credentials file that other users can read or write, a
-directory they can write to, and either one if another user owns it. One file holds sign-ins to
+`~/.config/metamodels/credentials.json` when `XDG_CONFIG_HOME` is unset. The file is mode `0600`.
+If the directory does not exist, `mm` creates it with mode `0700`. A directory that already exists
+keeps its mode: other users may be able to read or list it, but `mm` refuses it if they can write to
+it. `mm` also refuses a credentials file that other users can read or write, and either one if
+another user owns it. One file holds sign-ins to
 several MetaModels stacks, one per issuer.
 
 The file holds a one-hour access token and a refresh token. `mm` renews the access token by itself:
