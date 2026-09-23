@@ -360,9 +360,11 @@ test('the boundary: bearer only, access tokens only, keys never deleted, the con
 
   // An ID token replayed as an access token: a real token from the same OP, signed with the same key.
   // The CLI never stores one, so it comes from a refresh of the read-only sign-in's refresh token
-  // (that sign-in is not used again). The API refuses it on `typ` (it must be `at+jwt`), before it
-  // looks at `aud`, so this case proves the `typ` check and NOT the audience check. The audience
-  // check needs a second control plane: `scripts/aud-isolation.sh`.
+  // (that sign-in is not used again). At least two things are wrong with it: its `typ` is not
+  // `at+jwt`, and its `aud` is the CLI's client ID, not the admin API. So this case proves that an ID
+  // token is refused. It does not prove the `typ` check in isolation (with that check gone, `aud` would still
+  // refuse it), nor the audience check (with that gone, `typ` would): the audience check needs a
+  // second control plane, `scripts/aud-isolation.sh`.
   const ro = credential(state.readOnly)
   const discovery = await (await fetch(`${ISSUER}/.well-known/openid-configuration`)).json() as { token_endpoint: string }
   const refreshed = await fetch(discovery.token_endpoint, {
@@ -379,7 +381,7 @@ test('the boundary: bearer only, access tokens only, keys never deleted, the con
   expect(claims(idToken!).aud).toBe('metamodels-cli')
   expect(joseHeader(idToken!).typ).not.toBe('at+jwt')
   const idAsAccess = await api('GET', '/flocks', { authorization: `Bearer ${idToken}` })
-  record('an ID token replayed as an access token (wrong typ), GET /flocks', idAsAccess.status)
+  record('an ID token replayed as an access token (wrong typ and aud), GET /flocks', idAsAccess.status)
   expect(idAsAccess.status).toBe(401)
 
   const del = await api('DELETE', `/keys/${state.keyId}`, bearer(state.operator))
