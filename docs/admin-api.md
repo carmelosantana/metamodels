@@ -69,9 +69,11 @@ and its directory `0700`. `mm` refuses a credentials file that other users can r
 directory they can write to, and either one if another user owns it. One file holds sign-ins to
 several MetaModels stacks, one per issuer.
 
-The file holds a one-hour access token and a refresh token. `mm` renews the access token by itself
-when the API refuses it. A refresh token expires after 30 days of disuse, and 90 days after the
-sign-in at the latest.
+The file holds a one-hour access token and a refresh token. `mm` renews the access token by itself:
+before a command, when the token has expired or expires within 30 seconds, and otherwise when the
+API refuses it. The 30 seconds are measured on your machine's clock, so a machine whose clock runs
+behind may still send an expired token; the renewal on a refusal covers that. A refresh token
+expires after 30 days of disuse, and 90 days after the sign-in at the latest.
 
 **If a renewal fails, sign in again.** A refresh token is used up on every attempt, even a refused
 one, so `mm` forgets the sign-in and tells you to run `mm login`. Retrying would only look like a
@@ -152,13 +154,15 @@ Send the access token as `Authorization: Bearer <token>`. That is the only way i
 - A token for another audience, from another issuer, expired, with a bad signature, or signed with
   a key the sign-in service no longer publishes: `401`. Every rejected token gets the same answer,
   on purpose.
-- The sign-in service's keys cannot be fetched: `503` with `Retry-After: 30`. The token itself was
-  not judged.
-- The token names a signing key missing from the list the console fetched less than 30 seconds ago:
-  also `503` with `Retry-After: 30`. The console may not fetch the list again that soon, and the key
-  could be one the sign-in service has only just started publishing. After 30 seconds the console
-  may fetch the list again, and a retry gets `200` or `401`. If another request made it fetch the
-  list in the meantime, the retry can get `503` again.
+- An expired token: `401`, whatever key signed it. The console checks the expiry before it fetches
+  or looks up any key, so neither `503` case below applies to an expired token.
+- An unexpired token, when the sign-in service's keys cannot be fetched: `503` with
+  `Retry-After: 30`. The token itself was not judged.
+- An unexpired token that names a signing key missing from the list the console fetched less than
+  30 seconds ago: also `503` with `Retry-After: 30`. The console may not fetch the list again that
+  soon, and the key could be one the sign-in service has only just started publishing. After 30
+  seconds the console may fetch the list again, and a retry gets `200` or `401`. If another request
+  made it fetch the list in the meantime, the retry can get `503` again.
 
 ## Routes
 
@@ -252,12 +256,32 @@ console's 10-minute key cache. Leave the previous key in `OIDC_PREVIOUS_SIGNING_
 long after redeploying the sign-in service. After you clear it (step 4), the console may keep
 accepting tokens signed with the old key for up to 10 more minutes, until its cached copy expires.
 
-Once the console's copy no longer lists the old key, a token signed with it is answered `401`, like
-any other rejected token. `mm` then renews its token with its refresh token, so a CLI that was not
-used during the whole window keeps working without a new `mm login`. There is one short gap, the
-30-second case under [Authentication](#authentication): if the console fetched the key list less
-than 30 seconds earlier, the old-key token gets `503` instead. `mm` does not retry a `503`, so run the
-command again after 30 seconds.
+**Dropping the old key this way produces no `503`.** By the time you clear it, 70 minutes after
+the sign-in service began signing with the new key, every token the old key signed has expired. The
+console refuses an expired token with `401` before it looks up the key, so an old-key token gets
+`401` however recently the console fetched the key list. `mm` renews an expired token before
+sending it (a machine whose clock runs behind sends it, gets that `401`, and renews then), so a CLI
+that was not used during the whole window keeps working without a new `mm login`.
+
+**Do not drop the old key early.** Cleared before the window has passed, it leaves old-key tokens
+that have not yet expired. Each of those is the 30-second case under
+[Authentication](#authentication): whenever the console fetched the key list less than 30 seconds
+earlier, it gets `503`, and under steady traffic one request's fetch starts the next 30 seconds.
+`mm` does not retry a `503`. A client holding such a token can see bursts of `503`, up to 30 seconds
+each, until the token expires or a `401` gets it renewed.
+
+The switch-over in step 2 has one narrow case of its own. A token signed with the new key is a
+`503` if it reaches the console less than 30 seconds after a key-list fetch made before the sign-in
+service began publishing that key. A retry after 30 seconds finds the new key.
+
+**This assumes a single `auth` container.** The console treats a key missing from a list it has
+just fetched as retired or forged (`401`). That is only safe if the sign-in service publishes a key
+no later than it first signs with it. One `auth` container does: it publishes both keys from the
+moment it starts signing with the new one. Several `auth` replicas updated one at a time do not: a
+fetch can reach a replica that does not publish the new key yet while another already signs with
+it, and tokens that are valid are then refused with `401`. Scaling `auth` out needs a rollout that
+publishes the new key on every replica before any replica signs with it. This guide does not
+describe one.
 
 **The one exception is a leaked key.** Never use the overlap for it: that would keep publishing the
 leaked key for the whole window. Replace it outright, with `OIDC_PREVIOUS_SIGNING_KEYS` empty, as
