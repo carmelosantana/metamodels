@@ -7,7 +7,9 @@
 # It checks that every `docker compose` call carries exactly `-p mm-m2-e2e` and no other project flag,
 # whatever the caller passes; that a container in another project aborts the run before any request
 # carries the token; that COMPOSE_PROJECT_NAME, in the caller's environment or in the env file,
-# changes no argument; and that the token reaches curl on stdin only.
+# changes no argument; and that the token reaches curl on stdin only. It also feeds the script
+# flag-shaped, injected and out-of-range arguments, which must be refused before any docker or curl
+# call, and runs the real curl once, against a stub server, with a ~/.curlrc that turns on `verbose`.
 #
 # `[[ … ]] && ok … || fail …` is safe here: ok() always returns 0, so fail runs only when the test does.
 # shellcheck disable=SC2015
@@ -179,15 +181,19 @@ want_docker=$(printf '%s\n' \
 [[ $(sort -u "$log/curl-stdin.log") == "Authorization: Bearer $TOKEN" ]] && ok "the token went to curl on stdin" || fail "curl stdin differs"
 check_curl_flags
 
-case_name=label; echo "# the container is in compose project 'metamodels'"
-run_case metamodels '200 401 200' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
-expect_code 2
-check_compose_calls "$work/e2e.env"
-[[ $(curl_calls | wc -l) -eq 1 && -z $(curl_calls | grep -F -- '-H' || true) ]] \
-  && ok "only the port probe ran, with no header: $(curl_calls)" || fail "curl calls after the label check:"$'\n'"$(curl_calls)"
-[[ ! -s $log/curl-stdin.log ]] && ok "no token was sent" || fail "a token was sent"
-[[ $(docker_calls | tail -n1) == 'docker rm -f mm-m2-e2e-aud' ]] && ok "the EXIT trap removed the container" || fail "no rm -f"
-grep -q "compose project 'metamodels'" "$log/out" && ok "says why" || fail "no reason printed"
+# `<no value>` is what `docker inspect` prints for a missing label; `mm-m2-e2e-x` is a near miss.
+i=0
+for bad_label in metamodels '<no value>' mm-m2-e2e-x; do
+  i=$((i + 1)); case_name="label-$i"; echo "# the container's compose project label is '$bad_label'"
+  run_case "$bad_label" '200 401 200' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
+  expect_code 2
+  check_compose_calls "$work/e2e.env"
+  [[ $(curl_calls | wc -l) -eq 1 && -z $(curl_calls | grep -F -- '-H' || true) ]] \
+    && ok "only the port probe ran, with no header: $(curl_calls)" || fail "curl calls after the label check:"$'\n'"$(curl_calls)"
+  [[ ! -s $log/curl-stdin.log ]] && ok "no token was sent" || fail "a token was sent"
+  [[ $(docker_calls | tail -n1) == 'docker rm -f mm-m2-e2e-aud' ]] && ok "the EXIT trap removed the container" || fail "no rm -f"
+  grep -qF "compose project '$bad_label'" "$log/out" && ok "says why" || fail "no reason printed"
+done
 
 case_name=inspect; echo "# docker inspect fails (no label)"
 run_case '' '' FAKE_INSPECT_FAIL=1 -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
@@ -244,6 +250,57 @@ check_compose_calls "$work/e2e.env"
 [[ $(docker_calls | grep -c '^docker compose ') -eq 1 && $(docker_calls | wc -l) -eq 1 ]] \
   && ok "no docker call after the failed run (no inspect, no rm)" || fail "docker calls after the failed run:"$'\n'"$(docker_calls)"
 [[ ! -s $log/curl-stdin.log ]] && ok "no token was sent" || fail "a token was sent"
+
+echo "# '-pmetamodels' in each argument position (a file of that name exists in the working directory)"
+cp "$work/e2e.env" "$work/cwd/-pmetamodels"
+case_name=pflag-1
+run_case mm-m2-e2e '' -- -pmetamodels "$work/e2e.env" "$PORT" http://console.example.test
+refused "'-pmetamodels' as the compose file"
+case_name=pflag-2
+run_case mm-m2-e2e '200 401 200' -- "$repo_compose" -pmetamodels "$PORT" http://console.example.test
+expect_code 0
+check_compose_calls "$work/cwd/-pmetamodels"
+case_name=pflag-3
+run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" -pmetamodels http://console.example.test
+refused "'-pmetamodels' as the port"
+case_name=pflag-4
+run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$PORT" -pmetamodels
+refused "'-pmetamodels' as the console URL"
+
+echo "# flag-shaped compose-file arguments"
+case_name=flagcompose-1
+run_case mm-m2-e2e '' -- "--file=$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
+refused "'--file=<the repo compose file>' as the compose file"
+case_name=flagcompose-2
+run_case mm-m2-e2e '' -- '--project-name=metamodels' "$work/e2e.env" "$PORT" http://console.example.test
+refused "'--project-name=metamodels' (an existing file) as the compose file"
+# A symlink to the repo's compose file, named like a flag: accepted, and passed on resolved.
+ln -sf "$repo_compose" "$work/cwd/-pmetamodels.yml"
+case_name=flagcompose-3
+run_case mm-m2-e2e '200 401 200' -- -pmetamodels.yml "$work/e2e.env" "$PORT" http://console.example.test
+expect_code 0
+check_compose_calls "$work/e2e.env"
+
+echo "# injected port and console URL arguments"
+i=0
+# shellcheck disable=SC2016  # the command substitutions are meant literally: the script must refuse them
+for bad_port in "$PORT -p metamodels" "$PORT;touch pwned" '$(touch pwned)' "$PORT"$'\n-p metamodels'; do
+  i=$((i + 1)); case_name="inject-port-$i"
+  run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$bad_port" http://console.example.test
+  refused "port $(printf %q "$bad_port")"
+done
+i=0
+# shellcheck disable=SC2016  # the command substitutions are meant literally: the script must refuse them
+for bad_url in 'http://x -p metamodels' 'http://x$(touch pwned)' 'http://x`touch pwned`' $'http://x\n-p' 'http://x:13000 -pmetamodels'; do
+  i=$((i + 1)); case_name="inject-url-$i"
+  run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$PORT" "$bad_url"
+  refused "URL $(printf %q "$bad_url")"
+done
+[[ ! -e $work/cwd/pwned ]] && ok "no injected command ran" || fail "an injected command ran"
+
+case_name=fifth; echo "# a fifth argument"
+run_case mm-m2-e2e '' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test -pmetamodels
+refused "a fifth argument"
 
 echo "# host ports: a leading zero, and the edges of 1024-65535"
 for bad_port in 08080 099 0 1023 65536; do
