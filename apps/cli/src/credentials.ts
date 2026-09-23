@@ -35,11 +35,40 @@ export function credentialsPath(env: NodeJS.ProcessEnv): string {
 }
 
 /**
- * The whole store, or `{}` when the file does not exist. Throws when the file is readable by
- * anyone but its owner, or owned by someone else: a credentials file anyone on the box can read is
- * a refresh token anyone on the box can use, and one another user owns is one they can swap.
+ * Refuses a store directory that someone else could swap the file in: one other users can write to
+ * (they could rename their own file over ours, or plant the lock), one another user owns, or a
+ * symlink (judged as itself, by lstat — its target is not what the 0700 was set on). `mkdirSync`'s
+ * mode only applies when it creates the directory, so an existing one is checked on every read.
+ * False when the directory does not exist.
+ */
+function checkDir(dir: string): boolean {
+  let st: Stats
+  try {
+    st = lstatSync(dir)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
+  }
+  if (!st.isDirectory()) throw new Error(`${dir} is not a directory; it must be a 0700 directory you own`)
+  if ((st.mode & 0o022) !== 0) {
+    throw new Error(
+      `${dir} is writable by other users (mode ${(st.mode & 0o777).toString(8)}); run \`chmod 700 ${dir}\``,
+    )
+  }
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new Error(`${dir} is owned by uid ${st.uid}, not by you; refusing to use it. Remove it and sign in again.`)
+  }
+  return true
+}
+
+/**
+ * The whole store, or `{}` when the file does not exist. Throws when its directory fails
+ * `checkDir`, or when the file is readable by anyone but its owner, or owned by someone else: a
+ * credentials file anyone on the box can read is a refresh token anyone on the box can use, and
+ * one another user owns is one they can swap.
  */
 function readStore(path: string): Store {
+  if (!checkDir(dirname(path))) return {}
   let mode: number
   let uid: number
   try {
@@ -179,6 +208,7 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
   const notify = o.notify ?? ((line: string) => { process.stderr.write(`${line}\n`) })
   const lock = `${path}.lock`
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  checkDir(dirname(path))
   let waited = false
   let ours: Stats
   for (;;) {

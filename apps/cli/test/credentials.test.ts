@@ -79,8 +79,43 @@ describe('the store', () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))
     expect(readCredentials(p, 'https://a.test')!.accessToken).toBe('t')
-    vi.spyOn(process as Required<NodeJS.Process>, 'getuid').mockReturnValue(statSync(p).uid + 1)
-    expect(() => readCredentials(p, 'https://a.test')).toThrow(/owned by/)
+    const uid = statSync(p).uid
+    // The directory (checked first) is ours; the file is not.
+    vi.spyOn(process as Required<NodeJS.Process>, 'getuid').mockReturnValueOnce(uid).mockReturnValue(uid + 1)
+    expect(() => readCredentials(p, 'https://a.test')).toThrow(`${p} is owned by uid ${uid}`)
+  })
+
+  test('refuses a directory other users can write to, and says how to fix it', () => {
+    const p = tempStore()
+    const dir = join(p, '..')
+    writeCredentials(p, cred('https://a.test', 't'))
+    for (const mode of [0o770, 0o702, 0o777]) {
+      chmodSync(dir, mode)
+      expect(() => readCredentials(p, 'https://a.test')).toThrow(`chmod 700 ${join(p, '..')}`)
+      expect(() => writeCredentials(p, cred('https://b.test', 'u'))).toThrow(/writable by other users/)
+    }
+    // Group- or world-readable but not writable is not a way to swap the file: allowed.
+    chmodSync(dir, 0o755)
+    expect(readCredentials(p, 'https://a.test')!.accessToken).toBe('t')
+    chmodSync(dir, 0o700)
+    expect(readCredentials(p, 'https://a.test')!.accessToken).toBe('t')
+  })
+
+  test('refuses a directory owned by another user', () => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    const uid = statSync(p).uid
+    vi.spyOn(process as Required<NodeJS.Process>, 'getuid').mockReturnValue(uid + 1)
+    expect(() => readCredentials(p, 'https://a.test')).toThrow(`${join(p, '..')} is owned by uid ${uid}`)
+  })
+
+  test('refuses a symlink where the directory should be', () => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    const real = join(p, '..')
+    const linked = join(real, '..', 'linked')
+    symlinkSync(real, linked)
+    expect(() => readCredentials(join(linked, 'credentials.json'), 'https://a.test')).toThrow(`${linked} is not a directory`)
   })
 
   test('a missing file is null, not an error', () => {
