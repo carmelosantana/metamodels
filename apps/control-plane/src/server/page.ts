@@ -33,10 +33,16 @@ export function decodeCursor(cursor: string): string {
 /**
  * RFC 8288 `Link`. Pagination metadata rides in a header so the body stays a bare array — which is
  * what makes every later response-shape change non-breaking (spec §3.1).
+ *
+ * The target is PATH-RELATIVE, like the POST routes' `Location`, and for the same reason: in a Next
+ * route handler `req.url` carries the server's bind address (`http://localhost:3000` in the
+ * container), not the public host a client reached through a proxy or tunnel. An absolute target
+ * built from it would point a client, and its bearer token, at its own localhost over plain http.
+ * RFC 8288 §3.1 resolves a relative target against the request URL, which is the right host.
  */
 export function linkHeader(url: URL, nextCursor: string | null): Record<string, string> {
   if (!nextCursor) return {}
   const next = new URL(url)
   next.searchParams.set('cursor', nextCursor)
-  return { Link: `<${next.toString()}>; rel="next"` }
+  return { Link: `<${next.pathname}${next.search}>; rel="next"` }
 }

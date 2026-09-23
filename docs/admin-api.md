@@ -255,10 +255,12 @@ errors.
 an [RFC 8288](https://www.rfc-editor.org/rfc/rfc8288) link to the next page:
 
 ```
-Link: <…/api/admin/v1/flocks?limit=50&cursor=…>; rel="next"
+Link: </api/admin/v1/flocks?limit=50&cursor=…>; rel="next"
 ```
 
-Follow it until a response has no `Link`. Treat the cursor as opaque, copied from the link, never
+The target is a path with no host. Resolve it against the URL you requested (RFC 8288 does this
+for a relative target), so the next request goes to the same host as the last. Follow it until a
+response has no `Link`. Treat the cursor as opaque, copied from the link, never
 built by hand. A full page means "there may be more", so a list whose length is an exact multiple of
 `limit` ends with one empty page. `mm` prints `More results: repeat with --cursor …` on stderr when
 there is a next page. The usage reports are not paginated.

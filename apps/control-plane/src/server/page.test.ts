@@ -34,6 +34,15 @@ describe('linkHeader', () => {
   })
   test('carries rel="next" with the cursor, preserving other query params', () => {
     const h = linkHeader(u('?limit=2'), 'CUR')
-    expect(h.Link).toBe('<https://c.test/api/admin/v1/flocks?limit=2&cursor=CUR>; rel="next"')
+    expect(h.Link).toBe('</api/admin/v1/flocks?limit=2&cursor=CUR>; rel="next"')
+  })
+  // Behind a tunnel or proxy, Next's req.url carries the container's bind address, not the public
+  // host. A target built from it would send a client's bearer token to whatever answers on its own
+  // localhost:3000, over plain http. A path-relative target resolves against the URL the client
+  // actually requested (RFC 8288 §3.1 / RFC 3986 §5), so no host appears in the header at all.
+  test('the target is path-relative: no scheme or host from req.url leaks into it', () => {
+    const h = linkHeader(new URL('http://localhost:3000/api/admin/v1/keys?limit=5&cursor=OLD'), 'NEW')
+    expect(h.Link).toBe('</api/admin/v1/keys?limit=5&cursor=NEW>; rel="next"')
+    expect(h.Link).not.toMatch(/localhost|http:|:3000/)
   })
 })

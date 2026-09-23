@@ -127,12 +127,14 @@ describe('/api/admin/v1/paddocks', () => {
     expect((await res.json() as { id: string }[]).map((p) => p.id)).toEqual([ordered[0].id, ordered[1].id])
     const link = res.headers.get('Link')
     expect(link).toMatch(/; rel="next"$/)
+    // Path-relative: `req.url` is the server's bind address behind a proxy, so no host may leak in.
+    expect(link).toMatch(/^<\/api\/admin\/v1\/paddocks\?/)
 
     // Three rows at limit=2, so the page is short of the last row and can only be reached by
     // following the header. A cursor built from the page's FIRST row instead of its last would
     // hand back row two again and loop a client forever — which a shape-only assertion on the
     // header cannot see, and which is the one line every collection route copies verbatim.
-    const next = new URL(link!.slice(1, link!.indexOf('>')))
+    const next = new URL(link!.slice(1, link!.indexOf('>')), 'https://console.test')
     const page2 = await call(collection, 'GET', `/paddocks${next.search}`, t)
     expect((await page2.json() as { id: string }[]).map((p) => p.id)).toEqual([ordered[2].id])
     expect(page2.headers.get('Link')).toBeNull()

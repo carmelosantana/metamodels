@@ -345,7 +345,8 @@ const linkHeaderDoc = (): Record<string, HeaderObject> => ({
   Link: {
     description:
       'RFC 8288. Carries `rel="next"` when this page was full. Pagination metadata rides in a ' +
-      'header so the body stays a bare array.',
+      'header so the body stays a bare array. The target is a path and query with no scheme or ' +
+      'host: resolve it against the URL you requested.',
     schema: { type: 'string' },
   },
 })
