@@ -1,6 +1,6 @@
 import { z } from 'zod/v4'
 import type { z as z3 } from 'zod'
-import { BREED_IDS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
+import { BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
 import { saveFlockInput } from '../lib/flock-schema'
 import { savePaddockInput } from '../lib/paddock-schema'
 import { saveFenceInput } from '../lib/fence-schema'
@@ -266,6 +266,27 @@ const ref = (name: string): JsonSchema => ({ $ref: `#/components/schemas/${name}
 const json = (schema: JsonSchema) => ({ 'application/json': { schema } })
 const arrayOf = (name: string): JsonSchema => ({ type: 'array', items: ref(name) })
 
+/**
+ * The five mirrors as JSON Schema, keyed exactly as `REQUEST_BODY_MIRRORS` is so the parity suite
+ * can hold each generated schema against the v3 schema it claims to describe.
+ *
+ * NOT the same thing as `components.schemas`, and deliberately so. Only two of these five are used
+ * by an operation verbatim (`POST /keys`, `POST /paddocks/{id}/templates`); those two are published
+ * and `$ref`ed. The other three are never referenced, because every operation that uses them first
+ * drops a field or layers on the prose that IS the contract — and two of them would actively
+ * contradict it: a published `SavePaddockInput` still carries `id`, which `POST /paddocks` answers
+ * 422 on, and a bare `status`, which `PUT /paddocks/{id}` ignores. Most generators emit a model for
+ * every `components.schemas` entry, so publishing them would ship an SDK type describing the one
+ * request body no operation accepts. An unreferenced component is not documentation, it is a decoy.
+ */
+export const GENERATED_REQUEST_SCHEMAS: Record<string, JsonSchema> = {
+  SaveFlockInput: schemaOf(saveFlockMirror),
+  SavePaddockInput: schemaOf(savePaddockMirror),
+  SaveFenceInput: schemaOf(saveFenceMirror),
+  CreateKeyInput: schemaOf(createKeyMirror),
+  TemplateDraft: schemaOf(templateDraftMirror),
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared parameters
 // ---------------------------------------------------------------------------------------------
@@ -495,7 +516,10 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
     properties: {
       capability: {
         type: 'string',
-        enum: ['read', 'resource.write', 'user.manage', 'license.manage'],
+        // `CAPABILITIES`, never a hand-typed copy: these are also the OAuth scope values the
+        // resource server accepts, so renaming one is a breaking change to every issued token —
+        // and a literal here would go on publishing the old name without a single test noticing.
+        enum: [...CAPABILITIES],
         description: 'The capability the role ∩ granted-scope intersection denied.',
       },
     },
@@ -537,7 +561,16 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
       baseUrl: { type: 'string', format: 'uri' },
       upstreamAuth: {
         type: ['string', 'null'],
-        description: 'The credential sent upstream, if any.',
+        description:
+          '⚠ **A secret, returned in plaintext.** The credential this control plane sends upstream ' +
+          'to the flock, stored and returned verbatim — not hashed, not redacted, not write-only. ' +
+          'Any token holding only `read` can retrieve it from `GET /flocks` or `GET /flocks/{id}`, ' +
+          'so the whole listing should be treated as credential material: do not log it, cache it ' +
+          'or render it into a page. This is a **known issue, tracked as its own milestone**, and ' +
+          'is documented here rather than fixed — a client that has already been told is better ' +
+          'off than one that finds out. `null` when the flock needs no upstream credential.\n\n' +
+          'Note also that `PUT /flocks/{id}` is a replace: omitting this field writes `null` and ' +
+          'clears the stored credential.',
       },
       tlsTrust: { type: 'boolean' },
       healthOk: {
@@ -634,7 +667,7 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
       id: uuid('The key.'),
       name: { type: 'string' },
       prefix: { type: 'string', description: 'The key\'s public prefix — enough to recognise it in a log.' },
-      status: { type: 'string', enum: ['active', 'revoked'] },
+      status: { type: 'string', enum: [...KEY_STATUS] },
       expiresAt: { type: ['string', 'null'], format: 'date-time' },
       createdAt: timestamp('Creation time.'),
       paddockSlugs: {
@@ -700,19 +733,18 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
     },
     required: ['keyId', 'keyName', 'keyPrefix', 'value'],
   },
-  SaveFlockInput: schemaOf(saveFlockMirror),
-  SavePaddockInput: schemaOf(savePaddockMirror),
-  SaveFenceInput: schemaOf(saveFenceMirror),
-  CreateKeyInput: schemaOf(createKeyMirror),
-  TemplateDraft: schemaOf(templateDraftMirror),
+  // The two generated bodies an operation uses VERBATIM are published as components and `$ref`ed.
+  // The other three are not — see `GENERATED_REQUEST_SCHEMAS`.
+  CreateKeyInput: GENERATED_REQUEST_SCHEMAS.CreateKeyInput!,
+  TemplateDraft: GENERATED_REQUEST_SCHEMAS.TemplateDraft!,
 }
 
 // ---------------------------------------------------------------------------------------------
 // Per-operation bodies
 // ---------------------------------------------------------------------------------------------
 
-const flockBody = COMPONENT_SCHEMAS.SaveFlockInput!
-const paddockBody = COMPONENT_SCHEMAS.SavePaddockInput!
+const flockBody = GENERATED_REQUEST_SCHEMAS.SaveFlockInput!
+const paddockBody = GENERATED_REQUEST_SCHEMAS.SavePaddockInput!
 
 const THEME_NOTE =
   'Defaulted to `plain`. **Omitting it on a PUT therefore RESETS it** — unlike `status`, an absent ' +
@@ -742,7 +774,7 @@ const paddockReplaceBody = annotate(paddockBody, {
   theme: { description: THEME_NOTE },
 })
 
-const fenceBody = annotate(omit(COMPONENT_SCHEMAS.SaveFenceInput!, 'paddockId'), {
+const fenceBody = annotate(omit(GENERATED_REQUEST_SCHEMAS.SaveFenceInput!, 'paddockId'), {
   constraintJson: {
     description:
       'The breed-specific allow-list. **Omitting it PRESERVES the stored constraint** (or, on a ' +
@@ -760,7 +792,7 @@ const fenceBody = annotate(omit(COMPONENT_SCHEMAS.SaveFenceInput!, 'paddockId'),
   },
 })
 
-const templateItemBody = annotate(omit(COMPONENT_SCHEMAS.TemplateDraft!, 'id'), {
+const templateItemBody = annotate(omit(GENERATED_REQUEST_SCHEMAS.TemplateDraft!, 'id'), {
   graphText: { description: 'The ComfyUI prompt graph as JSON text. Parsed and dry-run before storage.' },
 })
 
@@ -1038,7 +1070,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           'from an internal fault by the time it reaches the problem mapper. Known, and documented ' +
           'rather than papered over.',
         parameters: [pathIdParam('paddock')],
-        requestBody: { required: true, content: json(COMPONENT_SCHEMAS.TemplateDraft!) },
+        requestBody: { required: true, content: json(ref('TemplateDraft')) },
         responses: {
           '201': {
             description: 'The full template collection after the write.',
@@ -1108,7 +1140,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           'method is a 405 — so a `Location` would send a client to a dead end. A `paddockIds` ' +
           'entry naming a paddock outside this org is a 404, indistinguishable from one that does ' +
           'not exist.',
-        requestBody: { required: true, content: json(COMPONENT_SCHEMAS.CreateKeyInput!) },
+        requestBody: { required: true, content: json(ref('CreateKeyInput')) },
         responses: {
           '201': { description: 'The new key, including its one and only plaintext.', content: json(ref('CreatedKey')) },
           ...adminErrors('404'),

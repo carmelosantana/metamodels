@@ -2,8 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { getTableColumns } from 'drizzle-orm'
-import { fence, flock, paddock } from '@metamodels/schema'
-import { buildOpenApiDocument, REQUEST_BODY_MIRRORS } from './openapi'
+import {
+  BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES,
+  fence, flock, paddock,
+} from '@metamodels/schema'
+import { GENERATED_REQUEST_SCHEMAS, buildOpenApiDocument, REQUEST_BODY_MIRRORS } from './openapi'
 import type { JsonSchema, Method, OpenApiDocument, OperationObject } from './openapi'
 import { DEFAULT_LIMIT, MAX_LIMIT } from './page'
 
@@ -22,6 +25,29 @@ const bodyPropsOf = (doc: OpenApiDocument, path: string, method: Method): Record
   if (!schema?.properties) throw new Error(`no documented request body for ${method.toUpperCase()} ${path}`)
   return schema.properties
 }
+
+const bodySchemaOf = (doc: OpenApiDocument, path: string, method: Method): JsonSchema =>
+  opAt(doc, path, method).requestBody?.content['application/json']?.schema ?? {}
+
+/** Every `$ref` string anywhere in the document. */
+function refsIn(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    node.forEach((c) => refsIn(c, out))
+    return out
+  }
+  if (node === null || typeof node !== 'object') return out
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (k === '$ref' && typeof v === 'string') out.push(v)
+    else refsIn(v, out)
+  }
+  return out
+}
+
+/**
+ * The two operations whose handlers do NOT go through `withAdmin`. Asserted against the route
+ * modules themselves further down — this list is a claim, not an authority.
+ */
+const UNGUARDED = ['DELETE /keys/{id}', 'GET /openapi.json']
 
 describe('buildOpenApiDocument', () => {
   test('declares OpenAPI 3.1', () => {
@@ -64,12 +90,6 @@ describe('buildOpenApiDocument', () => {
   })
 
   /**
-   * `z.toJSONSchema` emits ITS OWN regex beside a `format`, and v4's uuid regex demands an RFC
-   * version nibble that the classic-v3 `z.string().uuid()` actually guarding these fields does not.
-   * Publishing it would describe an API stricter than the one that runs, so the pattern is dropped
-   * wherever a format sits beside it. A `pattern` alone is a real `.regex()` and stays.
-   */
-  /**
    * There is no OpenAPI validator in this dependency tree and adding one is forbidden, so the
    * structural check this document most needs is done by hand: a `$ref` naming a component that
    * does not exist renders as a blank in every tool that reads it, and nothing else here would
@@ -78,16 +98,7 @@ describe('buildOpenApiDocument', () => {
   test('every $ref resolves to a component that exists', () => {
     const doc = buildOpenApiDocument()
     const components = doc.components as unknown as Record<string, Record<string, unknown>>
-    const refs: string[] = []
-    const walk = (node: unknown): void => {
-      if (Array.isArray(node)) return node.forEach(walk)
-      if (node === null || typeof node !== 'object') return
-      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-        if (k === '$ref' && typeof v === 'string') refs.push(v)
-        else walk(v)
-      }
-    }
-    walk(doc)
+    const refs = refsIn(doc)
     const dangling = refs.filter((r) => {
       const m = /^#\/components\/(\w+)\/(.+)$/.exec(r)
       return !m || components[m[1]!]?.[m[2]!] === undefined
@@ -97,6 +108,69 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(refs).size).toBeGreaterThan(10)
   })
 
+  /**
+   * The other direction, and the one that was wrong: five generated request bodies sat under
+   * `components.schemas` with not a single `$ref` pointing at them, because every operation inlines
+   * its own annotated copy. Two of them actively contradicted the operations — a published
+   * `SavePaddockInput` carrying `id` (which `POST /paddocks` answers 422 on) and a bare `status`
+   * (which `PUT /paddocks/{id}` ignores). Most generators emit a model per `components.schemas`
+   * entry, so that shipped an SDK type describing the one body shape no operation accepts.
+   */
+  test('every published component is referenced — no decoy models', () => {
+    const doc = buildOpenApiDocument()
+    const refs = new Set(refsIn(doc))
+    const published = [
+      ...Object.keys(doc.components.schemas).map((n) => `#/components/schemas/${n}`),
+      ...Object.keys(doc.components.responses).map((n) => `#/components/responses/${n}`),
+    ]
+    expect(published.filter((p) => !refs.has(p))).toEqual([])
+    // Positive anchor: there really are components, so an empty `components` cannot pass this.
+    expect(published.length).toBeGreaterThan(20)
+  })
+
+  test('only the two request bodies an operation uses VERBATIM are published as components', () => {
+    const doc = buildOpenApiDocument()
+    const names = Object.keys(doc.components.schemas)
+    // Generated, used after `omit`/`annotate`, therefore never published: publishing them would
+    // describe a body shape no operation accepts.
+    for (const n of ['SaveFlockInput', 'SavePaddockInput', 'SaveFenceInput']) {
+      expect({ n, published: names.includes(n) }).toEqual({ n, published: false })
+    }
+    // …and the two that ARE used verbatim are published AND pointed at, rather than inlined.
+    expect(names).toEqual(expect.arrayContaining(['CreateKeyInput', 'TemplateDraft']))
+    expect(bodySchemaOf(doc, '/keys', 'post').$ref).toBe('#/components/schemas/CreateKeyInput')
+    expect(bodySchemaOf(doc, '/paddocks/{id}/templates', 'post').$ref)
+      .toBe('#/components/schemas/TemplateDraft')
+  })
+
+  test('the shared enums are imported, not retyped', () => {
+    const doc = buildOpenApiDocument()
+    // Renaming a capability is a breaking change to every issued token; a literal here would go on
+    // publishing the old name silently.
+    expect(doc.components.schemas.ForbiddenProblem?.properties?.capability?.enum).toEqual([...CAPABILITIES])
+    expect(doc.components.schemas.KeySummary?.properties?.status?.enum).toEqual([...KEY_STATUS])
+    expect(doc.components.schemas.Paddock?.properties?.status?.enum).toEqual([...PADDOCK_STATUS])
+    expect(doc.components.schemas.Paddock?.properties?.theme?.enum).toEqual([...PADDOCK_THEMES])
+    expect(doc.components.schemas.Flock?.properties?.breed?.enum).toEqual([...BREED_IDS])
+    expect(doc.components.schemas.QuotaRule?.properties?.dim?.enum).toEqual([...METER_DIMS])
+  })
+
+  test('the one secret the API returns incidentally is flagged as loudly as the one it returns on purpose', () => {
+    const doc = buildOpenApiDocument()
+    const upstream = doc.components.schemas.Flock?.properties?.upstreamAuth?.description ?? ''
+    expect(upstream).toMatch(/plaintext/i)
+    expect(upstream).toMatch(/\bread\b/)
+    expect(upstream).toMatch(/known issue/i)
+    // Anchored against the field that already carried this weight, so "loudly" is comparative.
+    expect(doc.components.schemas.CreatedKey?.properties?.plaintext?.description).toMatch(/once/i)
+  })
+
+  /**
+   * `z.toJSONSchema` emits ITS OWN regex beside a `format`, and v4's uuid regex demands an RFC
+   * version nibble that the classic-v3 `z.string().uuid()` actually guarding these fields does not.
+   * Publishing it would describe an API stricter than the one that runs, so the pattern is dropped
+   * wherever a format sits beside it. A `pattern` alone is a real `.regex()` and stays.
+   */
   test('no format carries a zod-version-specific pattern beside it', () => {
     const offenders: string[] = []
     const walk = (node: unknown, at: string): void => {
@@ -124,8 +198,14 @@ describe('buildOpenApiDocument', () => {
  */
 const V1_DIR = join(import.meta.dirname, '../app/api/admin/v1')
 
-function routeOperationsOnDisk(): string[] {
-  const out: string[] = []
+/** One exported handler: its operation id, and whether its export line goes through `withAdmin`. */
+interface DiskOperation {
+  id: string
+  guarded: boolean
+}
+
+function routeOperationsOnDisk(): DiskOperation[] {
+  const out: DiskOperation[] = []
   const walk = (dir: string, segments: string[]): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
@@ -136,16 +216,19 @@ function routeOperationsOnDisk(): string[] {
         const src = readFileSync(join(dir, entry.name), 'utf8')
         for (const verb of ['GET', 'POST', 'PUT', 'DELETE']) {
           // Both spellings the repo uses: `export const GET = withAdmin(...)` and `export function GET`.
-          if (new RegExp(`^export (?:const|async function|function) ${verb}\\b`, 'm').test(src)) {
-            out.push(`${verb} /${segments.join('/')}`)
-          }
+          const m = new RegExp(`^export (?:const|async function|function) ${verb}\\b(.*)$`, 'm').exec(src)
+          // The wrapper is always applied on the export line itself, so the rest of that line is
+          // the whole question: `= withAdmin(` versus a bare `(): Response {`.
+          if (m) out.push({ id: `${verb} /${segments.join('/')}`, guarded: m[1]!.includes('withAdmin(') })
         }
       }
     }
   }
   walk(V1_DIR, [])
-  return out.sort()
+  return out.sort((a, b) => a.id.localeCompare(b.id))
 }
+
+const diskOperationIds = (): string[] => routeOperationsOnDisk().map((o) => o.id)
 
 function documentedOperations(): string[] {
   const doc = buildOpenApiDocument()
@@ -153,27 +236,56 @@ function documentedOperations(): string[] {
   for (const [path, item] of Object.entries(doc.paths)) {
     for (const method of Object.keys(item)) out.push(`${method.toUpperCase()} ${path}`)
   }
-  return out.sort()
+  return out.sort((a, b) => a.localeCompare(b))
 }
 
 describe('the document describes the routes, not the plan', () => {
   test('the operation set matches the route modules on disk exactly', () => {
-    expect(documentedOperations()).toEqual(routeOperationsOnDisk())
+    expect(documentedOperations()).toEqual(diskOperationIds())
   })
 
   // A positive anchor for the set equality above: an empty walk would make it trivially true.
   test('the disk walk really found the v1 surface', () => {
-    const ops = routeOperationsOnDisk()
+    const ops = diskOperationIds()
     expect(ops.length).toBeGreaterThanOrEqual(25)
     expect(ops).toContain('DELETE /keys/{id}')
     expect(ops).toContain('GET /openapi.json')
     expect(ops).toContain('PUT /paddocks/{id}/templates/{tid}')
   })
+
+  /**
+   * ⚠ THE MOST SECURITY-RELEVANT CLAIM THIS DOCUMENT MAKES, and the one that must NOT be checked
+   * against the document.
+   *
+   * Which operations require a bearer token was previously asserted only from `doc.paths[…].security`
+   * — the document agreeing with itself. Under that, wrapping `openapi.json/route.ts` in `withAdmin`
+   * left every test green while the document went on publishing "deliberately unauthenticated", and
+   * dropping `withAdmin` from any of the other 23 left it going on demanding a bearer. That is the
+   * second source of truth this whole task exists to remove, sitting on the one fact where being
+   * wrong is a security incident rather than a documentation bug.
+   *
+   * So the authority is the route module's own export line, and the document is measured against it.
+   */
+  test('exactly two operations skip withAdmin, and they are the two the document names', () => {
+    expect(routeOperationsOnDisk().filter((o) => !o.guarded).map((o) => o.id)).toEqual(UNGUARDED)
+    // The positive anchor: the walk can tell the two apart, so an all-false read cannot pass.
+    expect(routeOperationsOnDisk().filter((o) => o.guarded).length).toBe(23)
+  })
+
+  test('an operation opts out of the bearer requirement iff its handler skips withAdmin', () => {
+    const doc = buildOpenApiDocument()
+    for (const { id, guarded } of routeOperationsOnDisk()) {
+      const [method, path] = id.split(' ') as [string, string]
+      const op = opAt(doc, path, method.toLowerCase() as Method)
+      // `security` absent = inherits the document-level bearer requirement; `[]` = opts out.
+      expect({ id, optsOut: op.security !== undefined }).toEqual({ id, optsOut: !guarded })
+      if (!guarded) expect(op.security).toEqual([])
+    }
+  })
 })
 
 describe('the authentication and error contract', () => {
   const doc = buildOpenApiDocument()
-  const UNGUARDED = ['GET /openapi.json', 'DELETE /keys/{id}']
   const adminOps = Object.entries(doc.paths)
     .flatMap(([path, item]) =>
       (Object.keys(item) as Method[]).map((m) => ({ id: `${m.toUpperCase()} ${path}`, op: opAt(doc, path, m) })),
@@ -449,6 +561,10 @@ describe('each generated request body still mirrors the schema the service parse
     SavePaddockInput: [
       {},
       { flockId: '00000000-0000-4000-8000-000000000000', name: 'p', slug: 'ok-slug' },
+      // The `max(120)` boundary, previously unprobed here: 121 sits between the real bound and any
+      // plausible wrong one, so widening or narrowing it in one schema alone fails this row.
+      { flockId: '00000000-0000-4000-8000-000000000000', name: 'x'.repeat(121), slug: 'ok-slug' },
+      { flockId: '00000000-0000-4000-8000-000000000000', name: '   ', slug: 'ok-slug' },
       { flockId: '00000000-0000-4000-8000-000000000000', name: 'p', slug: 'ok-slug', status: 'disabled' },
       { flockId: '00000000-0000-4000-8000-000000000000', name: 'p', slug: 'ok-slug', status: 'paused' },
       { flockId: '00000000-0000-4000-8000-000000000000', name: 'p', slug: '-bad' },
@@ -474,6 +590,8 @@ describe('each generated request body still mirrors the schema the service parse
       { name: 'k', paddockIds: ['00000000-0000-4000-8000-000000000000'] },
       { name: 'k', paddockIds: [] },
       { name: '', paddockIds: ['00000000-0000-4000-8000-000000000000'] },
+      // The `max(120)` boundary, previously unprobed on this schema too.
+      { name: 'x'.repeat(121), paddockIds: ['00000000-0000-4000-8000-000000000000'] },
       { name: 'k', paddockIds: ['nope'] },
       { name: 'k', paddockIds: ['00000000-0000-4000-8000-000000000000'], expiresAt: '2026-01-01T00:00:00Z' },
       { name: 'k', paddockIds: ['00000000-0000-4000-8000-000000000000'], expiresAt: 'tomorrow' },
@@ -490,6 +608,11 @@ describe('each generated request body still mirrors the schema the service parse
       {},
       { id: 't', graphText: '{}', params: [], cost: 0 },
       { id: '', graphText: '{}', params: [], cost: 0 },
+      // `graphText` is a bare `z.string()` with NO minimum — it is the route's job to reject an
+      // unparseable graph, not the draft schema's. An empty one must be ACCEPTED by both, so a
+      // mirror that helpfully added `.min(1)` fails here rather than publishing a constraint the
+      // service does not enforce.
+      { id: 't', graphText: '', params: [], cost: 0 },
       { id: 't', graphText: '{}', params: [], cost: -1 },
       { id: 't', graphText: '{}', params: [{ name: 'p', type: 'text', target: { node: '1', input: 'x' } }], cost: 0 },
       { id: 't', graphText: '{}', params: [{ name: 'p', type: 'text', target: { node: '', input: 'x' } }], cost: 0 },
@@ -503,13 +626,84 @@ describe('each generated request body still mirrors the schema the service parse
     ],
   }
 
-  test.each(Object.keys(REQUEST_BODY_MIRRORS))('%s has the source schema\'s field set', (name) => {
-    const { source, mirror } = REQUEST_BODY_MIRRORS[name as keyof typeof REQUEST_BODY_MIRRORS]
+  const MIRROR_NAMES = Object.keys(REQUEST_BODY_MIRRORS)
+
+  /**
+   * Optionality, asked of the field itself. Structurally typed rather than reaching for a zod type,
+   * because the two halves of each pair are different major versions of zod — a v3 `ZodTypeAny` and
+   * a v4 `$ZodType` — and `safeParse(undefined)` is the one question both answer the same way.
+   */
+  const acceptsUndefined = (field: unknown): boolean =>
+    (field as { safeParse: (v: unknown) => { success: boolean } }).safeParse(undefined).success
+
+  /** A classic-v3 field's `.default()` value, if it has one. */
+  const v3DefaultOf = (field: unknown): { has: boolean; value?: unknown } => {
+    const def = (field as { _def?: { typeName?: string; defaultValue?: () => unknown } })._def
+    return def?.typeName === 'ZodDefault' && typeof def.defaultValue === 'function'
+      ? { has: true, value: def.defaultValue() }
+      : { has: false }
+  }
+
+  test.each(MIRROR_NAMES)('%s has the source schema\'s field set, field by field', (name) => {
+    const { source, mirror } = REQUEST_BODY_MIRRORS[name]!
     expect(Object.keys(mirror.shape).sort()).toEqual(Object.keys(source.shape).sort())
+    /**
+     * Names alone are not the shape. `Object.keys` parity plus samples that are mostly
+     * all-fields-present is blind to a required field turning optional — measured against
+     * `SaveFlockInput.tlsTrust`, which flipped without either half noticing. Optionality is
+     * whether the field accepts `undefined`, so ask each field directly.
+     */
+    for (const key of Object.keys(source.shape)) {
+      expect(`${key}: accepts undefined = ${acceptsUndefined(mirror.shape[key])}`)
+        .toBe(`${key}: accepts undefined = ${acceptsUndefined(source.shape[key])}`)
+    }
   })
 
-  test.each(Object.keys(REQUEST_BODY_MIRRORS))('%s accepts and rejects exactly what the source does', (name) => {
-    const { source, mirror } = REQUEST_BODY_MIRRORS[name as keyof typeof REQUEST_BODY_MIRRORS]
+  /**
+   * ⚠ THE BRIDGE FROM "PARSES THE SAME" TO "DESCRIBES THE SAME".
+   *
+   * Everything else in this suite compares parse verdicts, which makes it blind by construction to
+   * anything that changes the emitted JSON Schema without changing accept/reject. Default VALUES are
+   * the live case, and they are load-bearing: the whole documented "omitting `theme` RESETS it"
+   * contract rests on the published `"default": "plain"` literal. Change the source default to
+   * `'metaboy'` and both schemas go on accepting and rejecting identically while the document keeps
+   * publishing `plain` — a client omitting the field would be told the wrong thing about what it
+   * just wrote. So the published literal is compared to the v3 schema's own `defaultValue()`.
+   */
+  test.each(MIRROR_NAMES)('%s publishes the source schema\'s own default values', (name) => {
+    const { source } = REQUEST_BODY_MIRRORS[name]!
+    const fromSource = Object.entries(source.shape)
+      .flatMap(([k, f]) => { const d = v3DefaultOf(f); return d.has ? [[k, d.value] as const] : [] })
+    const published = Object.entries(GENERATED_REQUEST_SCHEMAS[name]?.properties ?? {})
+      .flatMap(([k, s]) => ('default' in s ? [[k, s.default] as const] : []))
+    expect(Object.fromEntries(published)).toEqual(Object.fromEntries(fromSource))
+  })
+
+  // The positive anchor for the bridge above: without a single defaulted field anywhere, that
+  // table compares two empty objects five times and proves nothing.
+  test('the default bridge is exercised — SavePaddockInput.theme really carries one', () => {
+    expect(v3DefaultOf(REQUEST_BODY_MIRRORS.SavePaddockInput!.source.shape.theme))
+      .toEqual({ has: true, value: 'plain' })
+    expect(GENERATED_REQUEST_SCHEMAS.SavePaddockInput?.properties?.theme?.default).toBe('plain')
+  })
+
+  /**
+   * The same bridge for optionality: what the ARTIFACT publishes as `required`, against what the v3
+   * schema actually demands. The field-by-field check above ties the mirror to the source; this ties
+   * the emitted JSON Schema to the source, which is what a client reads.
+   */
+  test.each(MIRROR_NAMES)('%s publishes the source schema\'s own required set', (name) => {
+    const { source } = REQUEST_BODY_MIRRORS[name]!
+    const requiredInSource = Object.entries(source.shape)
+      .filter(([, f]) => !acceptsUndefined(f))
+      .map(([k]) => k)
+      .sort()
+    const published = [...((GENERATED_REQUEST_SCHEMAS[name]?.required as string[] | undefined) ?? [])].sort()
+    expect(published).toEqual(requiredInSource)
+  })
+
+  test.each(MIRROR_NAMES)('%s accepts and rejects exactly what the source does', (name) => {
+    const { source, mirror } = REQUEST_BODY_MIRRORS[name]!
     const samples = SAMPLES[name]!
     // The positive anchor: a mirror and a source that both reject everything would agree perfectly
     // and describe nothing, so the sample set must exercise both verdicts.
