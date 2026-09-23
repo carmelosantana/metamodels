@@ -1,6 +1,6 @@
 # Remote control surface — unified OIDC auth, admin API, per-paddock MCP
 
-**Status:** design settled; M1 and M3 planned. Amended 2026-09-15 — see §7. **Date:** 2026-09-06.
+**Status:** design settled; M1, M2 and M3 planned. Amended 2026-09-15 and 2026-09-22 — see §7. **Date:** 2026-09-06.
 **Wayfinding map:** Kanboard #3871 (project 142).
 **Research:** [`2026-09-06-mcp-remote-research.md`](../briefs/2026-09-06-mcp-remote-research.md) ·
 [`2026-09-06-admin-api-patterns-research.md`](../briefs/2026-09-06-admin-api-patterns-research.md)
@@ -253,9 +253,16 @@ Three supporting changes:
   define `DELETE` semantics for keys explicitly rather than inherit the asymmetry. *(Surfaced
   2026-09-15 by the provisioning-plugin port, whose teardown tripped on it.)*
 - **OpenAPI is generated, not hand-written.** Verified: `zod@3.25.76` resolves for all four packages,
-  and the permanently-available `zod/v4` subpath exports `z.toJSONSchema()` producing valid
-  draft-2020-12 *and* `target: 'openapi-3.0'` output. **Zero new dependencies.** Every
-  `@asteasolutions/zod-to-openapi` 8.x/9.x requires `zod@^4.0.0`, which `3.25.76` does not satisfy.
+  and the permanently-available `zod/v4` subpath exports `z.toJSONSchema()`, whose default output is
+  JSON Schema draft-2020-12 — which *is* the OpenAPI **3.1** Schema Object. So the document is
+  OpenAPI 3.1, with that default output placed in `components.schemas` untransformed. **Zero new
+  dependencies.** Every `@asteasolutions/zod-to-openapi` 8.x/9.x requires `zod@^4.0.0`, which
+  `3.25.76` does not satisfy. *(Amended 2026-09-22. This bullet claimed `target: 'openapi-3.0'`
+  output. On `zod@3.25.76` that target is unrecognised — `Invalid target: openapi-3.0` on stderr,
+  no throw — and a nullable field comes out as `anyOf` with `{type: 'null'}`, which OpenAPI 3.0
+  forbids. The M2 spec's §2.6 records the check.
+  `apps/control-plane/scripts/gen-openapi.ts` generates `docs/api/openapi.json`, and CI
+  (`.github/workflows/ci.yml`) regenerates it and fails when the committed document is stale.)*
 
 ### 4.4 Breed contract
 
@@ -297,6 +304,13 @@ a tunnel; only the dev and generic compose files bind `0.0.0.0`. M1 gives the ne
 same loopback default in production (`AUTH_BIND`). Whether the admin API and the OP become publicly
 reachable is decided in M2 (admin API) and M4 (MCP clients must reach the OP), not inherited.
 
+**Amended 2026-09-22.** M2 decided the admin API's half: it **inherits the console's bind,
+unchanged**. `/api/admin/v1/*` is served by the console's own Next listener, so it cannot be
+published without the console. Production stays loopback plus a tunnel
+(`${CONTROL_PLANE_BIND:-127.0.0.1}`), with no new variable and no new default. See
+[M2 spec §2.5, D9](2026-09-22-m2-admin-api-design.md#25-why-the-exposure-posture-does-not-change-d9).
+Whether the OP becomes publicly reachable is still M4's decision.
+
 `api.metamodels.cc` currently resolves to `168.231.74.113`, not the GPU host, so every public URL
 (`OIDC_ISSUER`, `CONSOLE_URL`) is configuration — never derived and never hardcoded.
 
@@ -319,7 +333,7 @@ reachable is decided in M2 (admin API) and M4 (MCP clients must reach the OP), n
 | M | Milestone | Contents |
 |---|---|---|
 | **M1** | Auth foundation | `auth` service (oidc-provider, Postgres adapter, `findAccount`, login view, first-party auto-consent, resource indicators + the JWT access-token contract); console cut over to relying party — password login leaves the console, `session.ts` stays as the RP session |
-| **M2** | Admin API | `/api/admin/*` Route Handlers, scopes ∩ role, audit `changed_by`, key-delete semantics, device grant for the admin CLI, OpenAPI from Zod, bind/exposure decision |
+| **M2** | Admin API | `/api/admin/*` Route Handlers, scopes ∩ role, audit `changed_by`, key-delete semantics, device grant for the admin CLI, OpenAPI from Zod, bind/exposure decision. *Non-interactive/CI auth explicitly deferred (M2 spec §2.4, D5); users, invites and licence not exposed in v1 (M2 spec §2.7, D11)* |
 | **M3** | Breed prep | `toMcp` return typed as `McpToolDef[]`; both breeds implement |
 | **M4** | MCP endpoint | `/p/<slug>/mcp`, Streamable HTTP, RFC 9728 on both resource servers, CIMD, consent screen |
 
@@ -345,7 +359,7 @@ no key 401, unfenced route 403.
 
 ---
 
-## 7. Amendments (2026-09-15)
+## 7. Amendments (2026-09-15, 2026-09-22)
 
 Made while planning, each verified against `main` at `185c5be`:
 
@@ -360,3 +374,15 @@ Made while planning, each verified against `main` at `185c5be`:
 Plans: [`2026-09-15-m1-auth-foundation.md`](../plans/2026-09-15-m1-auth-foundation.md) ·
 [`2026-09-15-m3-breed-mcp-tooldefs.md`](../plans/2026-09-15-m3-breed-mcp-tooldefs.md).
 M2 and M4 are planned once M1's token contract exists as code.
+
+Made by M2's design, 2026-09-22, each recorded in
+[`2026-09-22-m2-admin-api-design.md`](2026-09-22-m2-admin-api-design.md):
+
+| § | Was | Now |
+|---|---|---|
+| 4.3 | OpenAPI from `z.toJSONSchema()` with `target: 'openapi-3.0'` | OpenAPI 3.1 from the default draft-2020-12 output; generated by `gen-openapi.ts`, committed, stale-checked in CI (M2 §2.6, D10) |
+| 4.6 | Admin-API exposure to be decided in M2 | Decided: the admin API inherits the console's bind, unchanged (M2 §2.5, D9) |
+| 6 | M2: device grant for the admin CLI | Interactive only; non-interactive/CI auth explicitly deferred (M2 §2.4, D5) |
+| 6 | M2: admin API over the provisioning surface | Users, invites and licence not exposed in v1 (M2 §2.7, D11) |
+
+Plan: [`2026-09-22-m2-admin-api.md`](../plans/2026-09-22-m2-admin-api.md).
