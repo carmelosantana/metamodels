@@ -192,10 +192,28 @@ function record(what: string, status: number) {
   console.log(`[admin-api] ${what} -> ${status}`)
 }
 
+/** Every flock this run named: `FLOCK_NAME` itself, or it plus a `-` suffix (`-renamed`, `-denied`…). */
+const ownFlock = (name: unknown) => typeof name === 'string' && (name === FLOCK_NAME || name.startsWith(`${FLOCK_NAME}-`))
+
 test.afterAll(async () => {
-  // Fixtures a failed run left behind. Deleting the flock cascades to its paddock.
-  if (state.operator && state.flockId) {
-    await api('DELETE', `/flocks/${state.flockId}`, bearer(state.operator)).catch(() => {})
+  // Fixtures a failed run left behind: the main flock, and any `-denied` / `-viewer` flock a refused
+  // write created after all. Deleting a flock cascades to its paddocks. The revoked key and the
+  // demoted viewer are left as they are, by design (apps/e2e/README.md).
+  if (state.operator) {
+    try {
+      const ids = new Set<string>(state.flockId ? [state.flockId] : [])
+      let url: string | null = `${API}/flocks?limit=200`
+      while (url !== null) {
+        const res: Response = await fetch(url, { headers: bearer(state.operator) })
+        if (!res.ok) break
+        for (const f of await res.json() as Array<{ id: string; name: unknown }>) if (ownFlock(f.name)) ids.add(f.id)
+        const next = /<([^>]+)>;\s*rel="?next"?/.exec(res.headers.get('link') ?? '')?.[1]
+        url = next === undefined ? null : new URL(next, url).href
+      }
+      for (const id of ids) await api('DELETE', `/flocks/${id}`, bearer(state.operator)).catch(() => {})
+    } catch {
+      // Best effort: a cleanup failure must not hide the test failure that left the fixture.
+    }
   }
   for (const home of state.homes) rmSync(home, { recursive: true, force: true })
 })

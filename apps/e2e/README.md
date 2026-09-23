@@ -77,6 +77,12 @@ OPERATOR_EMAIL=viewer@example.test OPERATOR_PASSWORD=<a password> \
   docker compose run --rm -e OPERATOR_EMAIL -e OPERATOR_PASSWORD control-plane pnpm seed
 ```
 
+On teardown the spec deletes every flock this run named: `e2e-admin-flock-<run id>` itself, and
+that name followed by `-` (the `-renamed` flock, and any `-denied` or `-viewer` flock a refused
+write created after all). Deleting a flock deletes its paddocks. It leaves two things by design:
+the key it revoked, because the admin API cannot delete a key, only revoke it; and the second user,
+left as a `viewer`, which the next run reuses (the demotion is skipped when it is one already).
+
 Each run prints the `jti` of its token and the `audit_log` targets it touched. Each of those rows
 must carry `changed_by = token:metamodels-cli:<jti>`. The spec does not query the database, so check
 this from the stack:
