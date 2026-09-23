@@ -132,15 +132,16 @@ instead:
    sign-in that set it. Choose one:
    - **Wait.** Keep the user deactivated for 12 hours. A deactivated user cannot sign in, so every
      cookie they hold was set before the deactivation, and 12 hours after it every one has expired.
-   - **Rotate `SESSION_SECRET`.** This ends the cookie at once, but it signs **every** operator out
-     of the console, not only this user. See step 1 of
+   - **Rotate `SESSION_SECRET`.** The cookie stops working as soon as the control-plane runs with
+     the new secret, but so does every other console session: this signs **every** operator out of
+     the console, not only this user. See step 1 of
      [Forcing everyone to sign in again](DEPLOY.md#forcing-everyone-to-sign-in-again).
 4. Reactivate the user in **Team**, and have them run `mm login` again on each machine they still
    have.
 
-The cost falls on that user alone, unless you rotated `SESSION_SECRET`: every one of their machines
-is signed out of `mm` and of the sign-in service, not only the lost one, and while deactivated they
-cannot use the console or the admin API either. Other users are not affected.
+The cost falls on that user: every one of their machines is signed out of `mm` and of the sign-in
+service, not only the lost one, and while deactivated they cannot use the console or the admin API
+either. Other users are not affected, unless you chose to rotate `SESSION_SECRET`.
 
 ### Commands
 
