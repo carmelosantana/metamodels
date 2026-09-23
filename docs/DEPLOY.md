@@ -271,8 +271,9 @@ and `mm` CLI sign-ins.
    Each `mm` then has its next renewal refused and asks for `mm login`. The console holds no
    refresh tokens, so this step is for `mm` only. It does not end **access tokens** already issued:
    those are signed JWTs that the console checks by itself and that are never stored, so each one
-   keeps working until it expires, one hour after it was issued at most. To end them at once as
-   well, replace `OIDC_SIGNING_KEY` outright, as the next paragraph describes.
+   keeps working until it expires, one hour after it was issued at most. To end them sooner,
+   replace `OIDC_SIGNING_KEY` outright, as the next paragraph describes: the console then refuses
+   them once its cached copy of the sign-in service's keys expires, within 10 minutes.
 
 If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright** — set it to a new key and
 make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty, clearing it if a rotation window left a key in it,
