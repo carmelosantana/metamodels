@@ -100,6 +100,32 @@ most), and `mm logout` says when that is.
 Each machine's sign-in is independent. Every approval creates its own sign-in, so logging out on one
 machine, or running `mm login` again there, does not sign any other machine out.
 
+### Cutting off a lost machine
+
+If a machine signed in with `mm` is lost or stolen, `mm logout` cannot be run on it, and this guide
+has no way to pick out that one machine's sign-in from the user's others. Cut off the **user**
+instead:
+
+1. In the console, open **Team** and **Deactivate** the user. This takes effect at once, on every
+   machine. The admin API reads the user again on every request, so each of their access tokens
+   gets `401` from the next request on. The sign-in service reads the user again on every renewal,
+   so each of their refresh tokens is refused.
+2. **Before you reactivate the user**, delete their CLI sign-ins. A renewal refused because the
+   user is deactivated does not use up the refresh token, so without this step a copy of the lost
+   machine's refresh token works again the moment the user is active again:
+
+   ```sql
+   DELETE FROM oidc_payload WHERE model IN ('RefreshToken', 'Grant') AND payload->>'accountId' = '<user-id>';
+   ```
+
+   `<user-id>` is the user's id: `SELECT id FROM "user" WHERE email = '<email>';`
+3. Reactivate the user in **Team**, and have them run `mm login` again on each machine they still
+   have.
+
+The cost falls on that user alone: every one of their machines is signed out, not only the lost
+one, and while deactivated they cannot use the console or the admin API either. Other users are not
+affected.
+
 ### Commands
 
 `mm --help` lists every command. They map one to one onto the routes below, except

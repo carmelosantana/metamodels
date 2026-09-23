@@ -244,7 +244,8 @@ Keep at least one active admin — deactivating the last one locks everybody out
 
 ### Forcing everyone to sign in again
 
-After a suspected leak, end both kinds of session:
+After a suspected leak, end all three kinds of sign-in: console sessions, sign-in service sessions,
+and `mm` CLI sign-ins.
 
 1. **Rotate `SESSION_SECRET`** (`openssl rand -hex 32`). Every console session cookie stops
    verifying, so every operator is signed out of the console.
@@ -258,6 +259,20 @@ After a suspected leak, end both kinds of session:
    ```sql
    DELETE FROM oidc_payload WHERE model = 'Session';
    ```
+
+5. **End every `mm` sign-in.** Steps 1 to 4 do not touch these. A CLI sign-in is a grant stored in
+   the sign-in service's database, and its refresh token keeps renewing for up to 90 days whatever
+   happens to the secrets above. Delete every refresh token and grant:
+
+   ```sql
+   DELETE FROM oidc_payload WHERE model IN ('RefreshToken', 'Grant');
+   ```
+
+   Each `mm` then has its next renewal refused and asks for `mm login`. The console holds no
+   refresh tokens, so this step is for `mm` only. It does not end **access tokens** already issued:
+   those are signed JWTs that the console checks by itself and that are never stored, so each one
+   keeps working until it expires, one hour after it was issued at most. To end them at once as
+   well, replace `OIDC_SIGNING_KEY` outright, as the next paragraph describes.
 
 If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright** — set it to a new key and
 make sure `OIDC_PREVIOUS_SIGNING_KEYS` is empty, clearing it if a rotation window left a key in it,
