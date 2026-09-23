@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { and, asc, eq, gt, sql } from 'drizzle-orm'
 import { flock, type Flock } from '@metamodels/schema'
 import { openSealed, seal, UnsealError, type UnsealReason } from '@metamodels/schema/sealed'
@@ -101,7 +102,7 @@ export async function getFlockConnection(db: Db, actor: Actor, id: string): Prom
   const conn = { breed: row.breed, baseUrl: row.baseUrl, tlsTrust: row.tlsTrust }
   if (row.enc === null) return { ...conn, upstreamAuth: null }
   try {
-    return { ...conn, upstreamAuth: openSealed(row.enc, upstreamAuthKeys()) }
+    return { ...conn, upstreamAuth: openSealed(row.enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: id }) }
   } catch (e) {
     if (!(e instanceof UnsealError)) throw e
     return { ...conn, upstreamAuth: null, upstreamAuthError: e.reason }
@@ -116,9 +117,18 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
   // replace semantics (omitted → null) would make every GET → edit → PUT round trip silently
   // destroy it. Omitted: untouched (null on INSERT, the column default). `null`: cleared. A string:
   // sealed under the current key, replacing whatever was there.
+  //
+  // The envelope is bound to the row it is written to (`flock:<orgId>:<flockId>`, see `sealed.ts`),
+  // so the id must exist before the INSERT: a create mints it here rather than leaving it to the
+  // column default. On an update the id is the caller's, and a foreign-org id matches no row below.
+  const flockId = data.id ?? randomUUID()
   const credential = data.upstreamAuth === undefined
     ? {}
-    : { upstreamAuthEnc: data.upstreamAuth === null ? null : seal(data.upstreamAuth, upstreamAuthKeys()) }
+    : {
+      upstreamAuthEnc: data.upstreamAuth === null
+        ? null
+        : seal(data.upstreamAuth, upstreamAuthKeys(), { orgId: actor.orgId, flockId }),
+    }
   const values = {
     breed: data.breed,
     name: data.name,
@@ -161,7 +171,7 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
   }
 
   return db.transaction(async (tx) => {
-    const [created] = await tx.insert(flock).values({ orgId: actor.orgId, ...values }).returning(flockView)
+    const [created] = await tx.insert(flock).values({ id: flockId, orgId: actor.orgId, ...values }).returning(flockView)
     await writeAudit(tx, actor, {
       action: 'flock.create',
       target: `flock:${created.id}`, detail: { name: created.name, breed: created.breed, ...credentialAudit },

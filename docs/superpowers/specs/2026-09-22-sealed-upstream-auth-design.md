@@ -56,8 +56,13 @@ properties this use cannot accept:
   bytes. A key is generated, not chosen, and malformed input fails at boot with the variable
   named, never the value.
 
-The envelope header, `sealed:v1:<kid>`, is the GCM additional authenticated data, so re-labelling
-a value with a different kid fails authentication.
+The GCM additional authenticated data is the row the value belongs to: `flock:<orgId>:<flockId>`,
+both UUIDs, so no pair of ids can spell another pair's. An envelope copied onto another flock, or
+into another org, then fails authentication instead of being sent to that flock's upstream. Anyone
+with database write access can already change `base_url`, so the binding matters most across
+tenants. So that the id exists before the INSERT, `saveFlock` mints it with `randomUUID()` on create
+rather than leaving it to the column default. Re-labelling the kid needs no binding of its own,
+because a different kid means a different key.
 
 ### 2.2 Why the re-encryption runs in `migrate` (S3, S4)
 

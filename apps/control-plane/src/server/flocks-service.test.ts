@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { loadSealKeyring, openSealed, seal } from '@metamodels/schema/sealed'
 import { listFlocks, getFlock, getFlockConnection, saveFlock, deleteFlock, CredentialRebindError, NotFoundError } from './flocks-service'
 import { upstreamAuthKeys } from './seal-keys'
@@ -139,7 +139,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
     const row = await rowOf(db, f.id)
     expect(row.upstreamAuthEnc).not.toContain('tok-secret')
-    expect(openSealed(row.upstreamAuthEnc!, upstreamAuthKeys())).toBe('tok-secret')
+    expect(openSealed(row.upstreamAuthEnc!, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-secret')
   })
 
   test('no read or write returns it, sealed or not — only whether one is stored', async () => {
@@ -176,7 +176,7 @@ describe('flocks-service — the upstream credential is write-only and sealed at
     const actor = await actorFor(db, 'admin')
     const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-1' })
     await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: 'tok-2' })
-    expect(openSealed((await rowOf(db, f.id)).upstreamAuthEnc!, upstreamAuthKeys())).toBe('tok-2')
+    expect(openSealed((await rowOf(db, f.id)).upstreamAuthEnc!, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-2')
     const cleared = await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: null })
     expect(cleared.hasUpstreamAuth).toBe(false)
     expect((await rowOf(db, f.id)).upstreamAuthEnc).toBeNull()
@@ -209,11 +209,32 @@ describe('flocks-service — the upstream credential is write-only and sealed at
     const db = await freshDb()
     const actor = await actorFor(db, 'admin')
     const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
     const [f] = await db.insert(schema.flock).values({
-      orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://a',
-      upstreamAuthEnc: seal('tok', foreign),
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://a',
+      upstreamAuthEnc: seal('tok', foreign, { orgId: actor.orgId, flockId: id }),
     }).returning()
     expect(await getFlockConnection(db, actor, f.id)).toMatchObject({ upstreamAuth: null, upstreamAuthError: 'unknown-key' })
+  })
+
+  test('a created credential is bound to the flock\'s own id and org, which the service mints', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    const enc = (await rowOf(db, f.id)).upstreamAuthEnc!
+    expect(openSealed(enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-secret')
+    expect(() => openSealed(enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: randomUUID() })).toThrow(/authentication/)
+    expect(() => openSealed(enc, upstreamAuthKeys(), { orgId: randomUUID(), flockId: f.id })).toThrow(/authentication/)
+  })
+
+  test('an envelope copied from another flock is not opened for this one', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const src = await saveFlock(db, actor, { ...base, name: 'src', upstreamAuth: 'tok-src' })
+    const dst = await saveFlock(db, actor, { ...base, name: 'dst' })
+    await db.update(schema.flock).set({ upstreamAuthEnc: (await rowOf(db, src.id)).upstreamAuthEnc })
+      .where(eq(schema.flock.id, dst.id))
+    expect(await getFlockConnection(db, actor, dst.id)).toMatchObject({ upstreamAuth: null, upstreamAuthError: 'tampered' })
   })
 
   /**

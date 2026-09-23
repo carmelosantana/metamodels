@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { flock } from '@metamodels/schema'
 import { loadSealKeyring, seal } from '@metamodels/schema/sealed'
 import { freshDb, seedOrg } from '../test/db'
@@ -89,8 +89,10 @@ describe('listFlockModels', () => {
     const db = await freshDb()
     const actor = await actorFor(db)
     const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
     const [f] = await db.insert(flock).values({
-      orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://o', upstreamAuthEnc: seal('t', foreign),
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('t', foreign, { orgId: actor.orgId, flockId: id }),
     }).returning()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

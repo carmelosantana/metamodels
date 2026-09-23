@@ -5,8 +5,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as schema from '@metamodels/schema'
 import { hashApiKey } from '@metamodels/schema'
-import { randomBytes } from 'node:crypto'
-import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { loadSealKeyring, type SealBinding, type SealKeyring } from '@metamodels/schema/sealed'
 
 /** A keyring for tests: fresh per process, so nothing sealed here can open anywhere else. */
 export const testRing = (): SealKeyring => loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
@@ -29,11 +29,15 @@ export interface Fixture {
   keyPlaintext: string; keyHash: string; slug: string
 }
 
-export async function seedFixture(db: TestDb, opts: { upstreamAuthEnc?: string } = {}): Promise<Fixture> {
+/** `sealFor` builds the flock's stored credential for the ids it is stored under (see `sealed.ts`). */
+export async function seedFixture(
+  db: TestDb, opts: { sealFor?: (bind: SealBinding) => string } = {},
+): Promise<Fixture & { flockId: string }> {
   const [org] = await db.insert(schema.org).values({ name: 'default' }).returning()
+  const flockId = randomUUID()
   const [flock] = await db.insert(schema.flock).values({
-    orgId: org.id, breed: 'ollama', name: 'local', baseUrl: 'http://fake.ollama',
-    upstreamAuthEnc: opts.upstreamAuthEnc ?? null,
+    id: flockId, orgId: org.id, breed: 'ollama', name: 'local', baseUrl: 'http://fake.ollama',
+    upstreamAuthEnc: opts.sealFor ? opts.sealFor({ orgId: org.id, flockId }) : null,
   }).returning()
   const [paddock] = await db.insert(schema.paddock).values({
     orgId: org.id, flockId: flock.id, slug: 'small', name: 'Small models',
@@ -49,5 +53,5 @@ export async function seedFixture(db: TestDb, opts: { upstreamAuthEnc?: string }
     orgId: org.id, name: 'test', prefix: keyPlaintext.slice(0, 12), hash: keyHash, status: 'active',
   }).returning()
   await db.insert(schema.keyPaddock).values({ keyId: key.id, paddockId: paddock.id })
-  return { orgId: org.id, paddockId: paddock.id, keyId: key.id, keyPlaintext, keyHash, slug: 'small' }
+  return { orgId: org.id, flockId: flock.id, paddockId: paddock.id, keyId: key.id, keyPlaintext, keyHash, slug: 'small' }
 }

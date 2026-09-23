@@ -16,8 +16,10 @@ import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } f
  *    purpose would not yield the same AES key;
  *  - a strict 32-byte key rather than any string of 16+ characters: a key is generated, not chosen.
  *
- * Envelope: `sealed:v1:<kid>:<iv>:<ciphertext>:<tag>`, each part base64url. The `sealed:v1:<kid>`
- * header is the GCM additional data, so it cannot be relabelled without failing authentication.
+ * Envelope: `sealed:v1:<kid>:<iv>:<ciphertext>:<tag>`, each part base64url. The GCM additional
+ * data is the row the value belongs to, `flock:<orgId>:<flockId>`, so an envelope copied onto
+ * another flock, or into another org, fails authentication instead of being sent to that flock's
+ * upstream. (Relabelling the kid needs no binding of its own: another kid is another key.)
  */
 
 const PREFIX = 'sealed:v1:'
@@ -34,6 +36,18 @@ export interface SealKeyring {
 }
 
 export type UnsealReason = 'malformed' | 'unknown-key' | 'tampered'
+
+/** The row a sealed value belongs to. Both ids are required to seal or to open it. */
+export interface SealBinding { readonly orgId: string; readonly flockId: string }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// UUIDs only: they cannot contain the `:` separator, so no pair of ids can spell another pair's
+// additional data. A programming error, not a data error, so a plain Error rather than UnsealError.
+function aad({ orgId, flockId }: SealBinding): Buffer {
+  if (!UUID_RE.test(orgId) || !UUID_RE.test(flockId)) throw new Error('seal binding ids must be uuids')
+  return Buffer.from(`flock:${orgId.toLowerCase()}:${flockId.toLowerCase()}`, 'utf8')
+}
 
 /** Why a value would not open. Never carries the value, the plaintext or any key material. */
 export class UnsealError extends Error {
@@ -77,17 +91,19 @@ export function isSealed(value: string): boolean {
   return ENVELOPE_RE.test(value)
 }
 
-export function seal(plaintext: string, ring: SealKeyring): string {
+export function seal(plaintext: string, ring: SealKeyring, bind: SealBinding): string {
+  const additional = aad(bind)
   const { kid, key } = ring.current
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
-  cipher.setAAD(Buffer.from(`${PREFIX}${kid}`, 'utf8'))
+  cipher.setAAD(additional)
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
   const b = (buf: Buffer) => buf.toString('base64url')
   return `${PREFIX}${kid}:${b(iv)}:${b(ct)}:${b(cipher.getAuthTag())}`
 }
 
-export function openSealed(envelope: string, ring: SealKeyring): string {
+export function openSealed(envelope: string, ring: SealKeyring, bind: SealBinding): string {
+  const additional = aad(bind)
   const m = ENVELOPE_RE.exec(envelope)
   if (!m) throw new UnsealError('malformed', 'not a sealed:v1 envelope')
   const [, kid, iv, ct, tag] = m
@@ -96,11 +112,12 @@ export function openSealed(envelope: string, ring: SealKeyring): string {
   try {
     // The envelope regex already pins the tag at 16 bytes; this refuses a short one on its own too.
     const decipher = createDecipheriv('aes-256-gcm', key.key, Buffer.from(iv, 'base64url'), { authTagLength: 16 })
-    decipher.setAAD(Buffer.from(`${PREFIX}${kid}`, 'utf8'))
+    decipher.setAAD(additional)
     decipher.setAuthTag(Buffer.from(tag, 'base64url'))
     return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8')
   } catch {
-    throw new UnsealError('tampered', `envelope under key ${kid} failed authentication`)
+    // Tampered, or moved here from another row: the additional data cannot tell them apart.
+    throw new UnsealError('tampered', `envelope under key ${kid} failed authentication for this flock`)
   }
 }
 

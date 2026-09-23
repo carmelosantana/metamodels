@@ -51,7 +51,8 @@ export class DrizzleConfigStore implements ConfigStore {
     let upstreamAuthError: UnsealReason | undefined
     if (row.flock.upstreamAuthEnc !== null) {
       try {
-        upstreamAuth = openSealed(row.flock.upstreamAuthEnc, this.ring)
+        // Bound to this row: an envelope copied here from another flock or org will not open.
+        upstreamAuth = openSealed(row.flock.upstreamAuthEnc, this.ring, { orgId: row.flock.orgId, flockId: row.flock.id })
       } catch (e) {
         if (!(e instanceof UnsealError)) throw e
         // Resolved, not thrown: the caller must still run the key and scope gates first, so that an

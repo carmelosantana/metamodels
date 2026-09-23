@@ -45,12 +45,14 @@ export async function resealUpstreamAuth(
   const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' }
   await db.transaction(async (tx) => {
     const rows = await tx
-      .select({ id: flock.id, name: flock.name, value: flock.upstreamAuthEnc })
+      .select({ id: flock.id, orgId: flock.orgId, name: flock.name, value: flock.upstreamAuthEnc })
       .from(flock)
       .where(isNotNull(flock.upstreamAuthEnc))
       .for('update')
     for (const row of rows) {
       const value = row.value!
+      // Every envelope is bound to the row it is stored in; see `sealed.ts`.
+      const bind = { orgId: row.orgId, flockId: row.id }
       if (!needsReseal(value, ring)) continue
       let plaintext: string
       if (!isSealed(value)) {
@@ -59,7 +61,7 @@ export async function resealUpstreamAuth(
         report.sealed++
       } else {
         try {
-          plaintext = openSealed(value, ring)
+          plaintext = openSealed(value, ring, bind)
         } catch (e) {
           if (!(e instanceof UnsealError)) throw e
           report.unreadable.push({ id: row.id, name: row.name, reason: e.reason })
@@ -67,7 +69,7 @@ export async function resealUpstreamAuth(
         }
         report.resealed++
       }
-      await tx.update(flock).set({ upstreamAuthEnc: seal(plaintext, ring) }).where(eq(flock.id, row.id))
+      await tx.update(flock).set({ upstreamAuthEnc: seal(plaintext, ring, bind) }).where(eq(flock.id, row.id))
     }
     await tx.execute(sql`ALTER TABLE "flock" VALIDATE CONSTRAINT "flock_upstream_auth_sealed"`)
   })

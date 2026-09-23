@@ -5,7 +5,7 @@ import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
-import { seal } from '@metamodels/schema/sealed'
+import { seal, type SealBinding } from '@metamodels/schema/sealed'
 import { makeDb, seedFixture, TEST_RING, testRing, type Fixture } from './helpers/seed.js'
 
 let fx: Fixture
@@ -93,9 +93,9 @@ describe('data-plane /p/:slug', () => {
 })
 
 describe('data-plane /p/:slug — the sealed upstream credential', () => {
-  async function appWith(upstreamAuthEnc: string) {
+  async function appWith(sealFor: (bind: SealBinding) => string) {
     const db = await makeDb()
-    const f = await seedFixture(db, { upstreamAuthEnc })
+    const f = await seedFixture(db, { sealFor })
     const seen: (string | null)[] = []
     const fake = createFakeOllama()
     const { app } = createApp({
@@ -115,14 +115,14 @@ describe('data-plane /p/:slug — the sealed upstream credential', () => {
   }
 
   test('sends the opened credential upstream', async () => {
-    const { f, seen, req } = await appWith(seal('upstream-tok', TEST_RING))
+    const { f, seen, req } = await appWith((b) => seal('upstream-tok', TEST_RING, b))
     const res = await req(f.keyPlaintext)
     expect(res.status).toBe(200)
     expect(seen).toEqual(['Bearer upstream-tok'])
   })
 
   test('fails closed with a 503 when the credential cannot be opened, and never calls upstream', async () => {
-    const { f, seen, req } = await appWith(seal('upstream-tok', testRing()))
+    const { f, seen, req } = await appWith((b) => seal('upstream-tok', testRing(), b))
     const res = await req(f.keyPlaintext)
     expect(res.status).toBe(503)
     expect(await res.json()).toEqual({ error: 'upstream credential unavailable' })
@@ -130,7 +130,7 @@ describe('data-plane /p/:slug — the sealed upstream credential', () => {
   })
 
   test('the 503 comes after the key check, so an unauthenticated caller cannot probe for it', async () => {
-    const { seen, req } = await appWith(seal('upstream-tok', testRing()))
+    const { seen, req } = await appWith((b) => seal('upstream-tok', testRing(), b))
     expect((await req('mm_live_wrong')).status).toBe(401)
     expect(seen).toEqual([])
   })
