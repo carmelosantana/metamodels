@@ -15,7 +15,7 @@ import {
   TokenError,
   verifyAdminToken,
 } from './admin-token'
-import { problemForError } from './problem'
+import { problemForError, resetKeySetUnavailableLog } from './problem'
 
 describe('grantsFromScope', () => {
   test('returns a concrete set even for an absent scope (never undefined)', () => {
@@ -231,7 +231,8 @@ describe('verifyAdminToken', () => {
 
     published = [jwkC, jwkA, jwkB]
     const newSigner = await mint({ aud }, { key: keyC, kid: KID_C })
-    await expect(verifyAdminToken(newSigner)).rejects.toBeInstanceOf(KeySetUnavailableError)
+    // `cooldownMiss` is what `problem.ts` rate-limits the log line on.
+    await expect(verifyAdminToken(newSigner)).rejects.toMatchObject({ name: 'KeySetUnavailableError', cooldownMiss: true })
     expect(jwksRequests).toBe(primed)
 
     advanceClock(PAST_COOLDOWN_MS)
@@ -306,6 +307,7 @@ describe('verifyAdminToken', () => {
     const err = await verifyAdminToken(newSigner).then(() => undefined, (e: unknown) => e)
     expect(err).toBeInstanceOf(KeySetUnavailableError)
 
+    resetKeySetUnavailableLog()
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(problemForError(err).status).toBe(503)
     expect(log).toHaveBeenCalledTimes(1)
@@ -354,6 +356,8 @@ describe('verifyAdminToken', () => {
         (e: unknown) => e,
       )
       expect(err).toBeInstanceOf(KeySetUnavailableError)
+      // A fetch failure is logged every time, never rate-limited.
+      expect((err as KeySetUnavailableError).cooldownMiss).toBe(false)
       expect((err as Error).name).not.toBe('TokenError')
       // The cause is kept for server-side logging; the message stays free of token specifics.
       expect((err as Error).cause).toBeDefined()

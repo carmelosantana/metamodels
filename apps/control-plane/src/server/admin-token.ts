@@ -7,7 +7,8 @@ import type { Db } from './db'
 
 /** Rotation window as OUR number, not jose's default — see spec §4.3. */
 const JWKS_CACHE_MAX_AGE_MS = 10 * 60 * 1000
-const JWKS_COOLDOWN_MS = 30 * 1000
+/** Exported for `problem.ts`, which logs the cooldown-miss 503 at most once per this window. */
+export const JWKS_COOLDOWN_MS = 30 * 1000
 
 /**
  * The presented token was judged and refused. The caller answers 401.
@@ -36,13 +37,19 @@ export class TokenError extends Error {
  * may be fine (and, when the OP is down, hit the same unreachable OP), and an operator watching a
  * wave of 401s would never learn the OP was down. As with `TokenError`,
  * `reason` and `cause` are for server-side logging only.
+ *
+ * `cooldownMiss` is true for the second case. Anyone can cause it by sending a token with an unknown
+ * `kid` while the set is cooling down, so `problem.ts` rate-limits its log line; a fetch failure is
+ * logged every time.
  */
 export class KeySetUnavailableError extends Error {
   readonly reason: string
-  constructor(reason: string, options?: { cause?: unknown }) {
-    super(`admin token key set unavailable: ${reason}`, options)
+  readonly cooldownMiss: boolean
+  constructor(reason: string, options?: { cause?: unknown; cooldownMiss?: boolean }) {
+    super(`admin token key set unavailable: ${reason}`, options?.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'KeySetUnavailableError'
     this.reason = reason
+    this.cooldownMiss = options?.cooldownMiss ?? false
   }
 }
 
@@ -184,7 +191,7 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
     if (e instanceof joseErrors.JWKSNoMatchingKey) {
       if (wasCoolingDown) {
         throw new KeySetUnavailableError(
-          'the token `kid` is not in a key set fetched too recently to refetch', { cause: e })
+          'the token `kid` is not in a key set fetched too recently to refetch', { cause: e, cooldownMiss: true })
       }
       throw new TokenError('the token `kid` is not in a key set fetched during this verification', { cause: e })
     }

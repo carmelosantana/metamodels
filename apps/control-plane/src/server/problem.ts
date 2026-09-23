@@ -1,6 +1,6 @@
 import { ZodError } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
-import { KeySetUnavailableError, TokenError } from './admin-token'
+import { JWKS_COOLDOWN_MS, KeySetUnavailableError, TokenError } from './admin-token'
 import { NotFoundError } from './flocks-service'
 import { SlugTakenError } from './paddocks-service'
 
@@ -11,6 +11,23 @@ import { SlugTakenError } from './paddocks-service'
  * so for an unreachable OP every request fetches again and 30 s only paces the client.
  */
 const KEY_SET_RETRY_AFTER_SECONDS = '30'
+
+/**
+ * The cooldown-miss 503's log is rate-limited: at most one line per `JWKS_COOLDOWN_MS`, measured
+ * from the last line logged. A made-up token with an unknown `kid` and a future `exp`, sent while the
+ * set is cooling down, is enough to cause that 503, so without a limit anyone could write a log line
+ * per request. The count of lines left out goes on the next cooldown-miss line logged. Fetch-failure
+ * 503s are not limited: each is a fetch that really failed. While the OP cannot be reached, that
+ * still means one line per request that gets as far as resolving a key, whatever its token.
+ */
+let cooldownMissLoggedAt: number | undefined
+let cooldownMissSuppressed = 0
+
+/** Forgets the rate limit's state. For tests: the state is per process, like the key set. */
+export function resetKeySetUnavailableLog(): void {
+  cooldownMissLoggedAt = undefined
+  cooldownMissSuppressed = 0
+}
 
 /** RFC 9457 Problem Details. `type: 'about:blank'` per §4.2.1 when no dereferenceable type exists. */
 export function problem(
@@ -43,20 +60,34 @@ export function unauthorized(detail: string): Response {
 }
 
 /**
- * The server-side record of every admin-API 503: `KeySetUnavailableError` is thrown only by token
- * verification and answered only by `problemForError`, so it is logged here, once. Strings only,
+ * The server-side record of the admin API's 503s: `KeySetUnavailableError` is thrown only by token
+ * verification and answered only by `problemForError`, so it is logged here: a fetch failure every
+ * time, a cooldown miss at most once per window (above). Strings only,
  * as `logSignInFailure` does: the reason and the cause's name, `code` and message, never an error
  * object (jose errors can carry token claims) and never the token. The `code` is there because a
  * production build minifies jose's class names, so `name` alone can read `l`. Every logged string
  * goes through `loggable`, so a message cannot forge a second log line or drive a terminal.
  */
 function logKeySetUnavailable(e: KeySetUnavailableError): void {
+  let suppressed: string[] = []
+  if (e.cooldownMiss) {
+    const now = Date.now()
+    if (cooldownMissLoggedAt !== undefined && now - cooldownMissLoggedAt < JWKS_COOLDOWN_MS) {
+      cooldownMissSuppressed++
+      return
+    }
+    if (cooldownMissSuppressed > 0) {
+      suppressed = [`(${cooldownMissSuppressed} more like this since the last line, not logged)`]
+    }
+    cooldownMissLoggedAt = now
+    cooldownMissSuppressed = 0
+  }
   const c = e.cause
   const rawCode = c instanceof Error ? (c as Error & { code?: unknown }).code : undefined
   const code = typeof rawCode === 'string' ? ` [${rawCode}]` : ''
   const cause = c === undefined ? 'no cause'
     : c instanceof Error ? `${c.name}${code}: ${c.message}` : String(c)
-  console.error('[admin-api] 503, key set unavailable:', loggable(e.reason), loggable(cause))
+  console.error('[admin-api] 503, key set unavailable:', loggable(e.reason), loggable(cause), ...suppressed)
 }
 
 /**

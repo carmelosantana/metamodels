@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
 import { KeySetUnavailableError, TokenError } from './admin-token'
 import { NotFoundError } from './flocks-service'
 import { SlugTakenError } from './paddocks-service'
-import { problem, problemForError } from './problem'
+import { problem, problemForError, resetKeySetUnavailableLog } from './problem'
 // The three real producers whose `ZodError`s this module has to answer 422.
 import { readJsonObject } from './json-body'
 import { parsePathId } from './path-id'
@@ -193,6 +193,70 @@ describe('problemForError', () => {
       expect(reason).toBe('timed out [31m fetching')
       expect(logged).toBe('TypeError: a b c [2Jd e f g h i')
       for (const a of log.mock.calls[0]!) expect(a).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/)
+    })
+  })
+
+  describe('the cooldown-miss 503 log is rate-limited', () => {
+    const WINDOW_MS = 30 * 1000
+    const miss = () => new KeySetUnavailableError(
+      'the token `kid` is not in a key set fetched too recently to refetch', { cooldownMiss: true })
+    const fetchFailure = () => new KeySetUnavailableError(
+      'the key set endpoint could not be reached', { cause: new TypeError('fetch failed') })
+
+    beforeEach(() => {
+      resetKeySetUnavailableLog()
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-09-23T00:00:00Z'))
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    })
+
+    test('logged at most once per cooldown window; the next logged line counts the ones left out', () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      problemForError(miss())
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(log.mock.calls[0]).toHaveLength(3)
+
+      vi.setSystemTime(Date.now() + 10_000)
+      for (let i = 0; i < 3; i++) {
+        const res = problemForError(miss())
+        // The answer is unchanged: only the log line is left out.
+        expect(res.status).toBe(503)
+        expect(res.headers.get('retry-after')).toBe('30')
+      }
+      vi.setSystemTime(Date.now() + WINDOW_MS - 10_001)
+      problemForError(miss())
+      expect(log).toHaveBeenCalledTimes(1)
+
+      vi.setSystemTime(Date.now() + 1)
+      problemForError(miss())
+      expect(log).toHaveBeenCalledTimes(2)
+      expect(log.mock.calls[1]!.slice(0, 2)).toEqual(log.mock.calls[0]!.slice(0, 2))
+      expect(log.mock.calls[1]![3]).toBe('(4 more like this since the last line, not logged)')
+
+      // The window restarts at the line just logged, and the count starts again from zero.
+      vi.setSystemTime(Date.now() + 1000)
+      problemForError(miss())
+      expect(log).toHaveBeenCalledTimes(2)
+      vi.setSystemTime(Date.now() + WINDOW_MS)
+      problemForError(miss())
+      expect(log.mock.calls[2]![3]).toBe('(1 more like this since the last line, not logged)')
+    })
+
+    test('a fetch-failure 503 is logged every time, inside a cooldown-miss window too, and does not use it up', () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      problemForError(fetchFailure())
+      problemForError(fetchFailure())
+      expect(log).toHaveBeenCalledTimes(2)
+      problemForError(miss())
+      expect(log).toHaveBeenCalledTimes(3)
+      problemForError(miss())
+      problemForError(fetchFailure())
+      problemForError(fetchFailure())
+      expect(log).toHaveBeenCalledTimes(5)
+      for (const call of log.mock.calls) expect(call).toHaveLength(3)
     })
   })
 
