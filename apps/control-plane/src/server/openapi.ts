@@ -1366,7 +1366,8 @@ export function buildOpenApiDocument(): OpenApiDocument {
           scheme: 'bearer',
           bearerFormat: 'JWT',
           description:
-            'An RFC 9068 `at+jwt` access token. The scheme token is matched case-insensitively ' +
+            'An RFC 9068 `at+jwt` access token issued to the admin CLI (`client_id` `metamodels-cli`); ' +
+            'a token issued to any other client is a 401. The scheme token is matched case-insensitively ' +
             '(RFC 9110 §11.1), so `bearer <jwt>` is admitted. Presenting this **and** a console ' +
             'session cookie is a 400.',
         },

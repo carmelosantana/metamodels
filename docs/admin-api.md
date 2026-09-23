@@ -38,7 +38,9 @@ pnpm --filter @metamodels/cli start -- login \
 Instead of the flags you can set `METAMODELS_ISSUER` and `METAMODELS_CONSOLE_URL`. There is no
 default host. `--scope` defaults to `read`.
 
-Signing in uses the OAuth device flow. It never asks you to paste a token:
+Signing in uses the OAuth device flow. It never asks you to paste a token. `mm` is the only way to
+get a token for the admin API: the sign-in service issues one to no other client, the console
+included, and the admin API refuses a token issued to any other client.
 
 1. `mm login` prints a link to the sign-in service and a code, then waits.
 2. Open the link in any browser. It shows the code filled in. Check that it matches the code in
@@ -202,9 +204,9 @@ Send the access token as `Authorization: Bearer <token>`. That is the only way i
   is a `401`. A request with a bearer token **and** the cookie is a `400`, before the token is looked
   at. A browser adds the cookie by itself and a script does not, so a request carrying both looks
   like a browser being tricked into making it.
-- A token for another audience, from another issuer, expired, with a bad signature, or signed with
-  a key the sign-in service no longer publishes: `401`. Every rejected token gets the same answer,
-  on purpose.
+- A token for another audience, from another issuer, expired, with a bad signature, signed with
+  a key the sign-in service no longer publishes, or issued to any client but `mm`
+  (`metamodels-cli`): `401`. Every rejected token gets the same answer, on purpose.
 - An expired token: `401`, whatever key signed it. The console checks the expiry before it fetches
   or looks up any key, so neither `503` case below applies to an expired token.
 - An unexpired token, when the sign-in service's keys cannot be fetched: `503` with
