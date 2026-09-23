@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { eq, sql } from 'drizzle-orm'
-import { adminApiResource, oidcPayload, user } from '@metamodels/schema'
+import { adminApiResource, CONSOLE_CLIENT_ID, oidcPayload, user } from '@metamodels/schema'
 import { seedUser } from './helpers/db.js'
 import {
-  approveDevice, authorize, CONSOLE_URL, deviceAuthorization, deviceToken, refreshGrant, startTestOp,
+  approveDevice, authorize, CONSOLE_URL, deviceAuthorization, deviceToken, exchangeCode, refreshGrant, startTestOp,
   type CookieJar, type DeviceAuthorization, type TestOp,
 } from './helpers/flow.js'
 
@@ -104,6 +104,32 @@ describe('ending CLI sign-ins', () => {
 
     expect(await refresh(a)).toEqual({ ok: false, error: 'invalid_grant' })
     expect(await refresh(b)).toEqual({ ok: false, error: 'invalid_grant' })
+  }, T)
+
+  test('DEPLOY.md: the statement deletes the console\'s grants too, and the console signs in again without them', async () => {
+    const everyone = statementIn('DEPLOY.md')
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'a@x.io', password: PASSWORD })
+    const consoleGrants = async () => (await op!.db.select({ id: oidcPayload.id }).from(oidcPayload)
+      .where(sql`${oidcPayload.model} = 'Grant' AND ${oidcPayload.payload}->>'clientId' = ${CONSOLE_CLIENT_ID}`)).length
+    const browser = await browserSignIn('a@x.io')
+    expect(await consoleGrants()).toBe(1)
+
+    await op.db.execute(sql.raw(everyone))
+    expect(await consoleGrants()).toBe(0)
+
+    /** A console sign-in that completes: the OP redirects back with a code, and the code buys an ID token. */
+    const completes = async (out: Awaited<ReturnType<typeof authorize>>) => {
+      if (out.kind !== 'redirect') throw new Error(`console sign-in stopped at a ${out.status} page`)
+      const token = await exchangeCode(op!, out.url.searchParams.get('code')!, out.verifier)
+      expect(token.status).toBe(200)
+      expect(typeof token.json.id_token).toBe('string')
+    }
+    // The browser whose sign-in service session survived (only this statement was run): no page at all.
+    await completes(await authorize(op, { jar: browser }))
+    // A fresh browser: the password, and nothing after it.
+    await completes(await authorize(op, { email: 'a@x.io', password: PASSWORD }))
+    expect(await consoleGrants()).toBeGreaterThan(0)
   }, T)
 
   test('admin-api.md: deactivating a user stops their refreshes at once, but reactivating revives every chain', async () => {

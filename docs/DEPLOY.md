@@ -273,12 +273,13 @@ and `mm` CLI sign-ins.
    ```
 
    Each `mm` then has its next renewal refused and asks for `mm login`. The console holds no
-   refresh tokens, so this step is for `mm` only. It does not end **access tokens** already issued:
-   those are signed JWTs that the console checks by itself and that are never stored, so each one
-   keeps working until it expires, one hour after it was issued at most. To end them sooner,
-   replace `OIDC_SIGNING_KEY` outright, as the next paragraph describes: the console then refuses
-   them once its cached copy of the sign-in service's keys expires, within 10 minutes, or at once
-   if you also restart the control-plane container.
+   refresh tokens, so this step is for `mm` only. It also deletes the console's grants, which does
+   no harm: the console's next sign-in creates a new grant, with no extra prompt. The step does not
+   end **access tokens** already issued: those are signed JWTs that the console checks by itself
+   and that are never stored, so each one keeps working until it expires, one hour after it was
+   issued at most. To end them sooner, replace `OIDC_SIGNING_KEY` outright, as the next paragraph
+   describes: the console then refuses them once its cached copy of the sign-in service's keys
+   expires, within 10 minutes, or at once if you also restart the control-plane container.
 
 If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
 
