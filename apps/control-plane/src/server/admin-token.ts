@@ -179,14 +179,14 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
      * - Cooling down → 503. The set was fetched under `JWKS_COOLDOWN_MS` ago and jose refetched
      *   nothing, so the `kid` may belong to a signer the OP began publishing since. A token whose
      *   numeric `exp` had passed never gets here: it was refused before the key set was consulted
-     *   (`expiredBeforeVerifying`). The cooldown ends
-     *   within the 30 s `Retry-After`. A retry after that refetches, unless another verification's
-     *   miss refetched first and started a new cooldown.
+     *   (`expiredBeforeVerifying`). The cooldown ends within the 30 s `Retry-After`. A retry after
+     *   that may refetch, but another request may start a new cooldown first: any successful fetch
+     *   starts one, including an ordinary request's `cacheMaxAge` reload.
      *
-     * Two races, each within one turn of the event loop. If the cooldown ends between the read above
-     * and jose's check, jose refetches and the answer is still 503. If a concurrent verification's
-     * load lands between jose's miss and its check, jose skips its own reload without consulting the
-     * new set, and the answer is 401.
+     * Two races. `jwtVerify` awaits between the read above and jose's cooldown check, so other
+     * requests run in between. If the cooldown ends in that gap, jose refetches and the answer is
+     * still 503. If a concurrent verification's load lands between jose's miss and its check, jose
+     * skips its own reload without consulting the new set, and the answer is 401.
      */
     if (e instanceof joseErrors.JWKSNoMatchingKey) {
       if (wasCoolingDown) {

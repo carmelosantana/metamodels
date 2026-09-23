@@ -6,9 +6,11 @@ import { SlugTakenError } from './paddocks-service'
 
 /**
  * How long a client should wait before retrying a 503. 30 s is `JWKS_COOLDOWN_MS` (`admin-token.ts`).
- * For a `kid` missing from a set that is still cooling down, the cooldown ends within 30 s, and a
- * retry after it refetches unless another miss refetched first and started a new one. A failed fetch starts no cooldown (jose records the fetch time only on success),
- * so for an unreachable OP every request fetches again and 30 s only paces the client.
+ * For a `kid` missing from a set that is still cooling down, the cooldown ends within 30 s. A retry
+ * after that may refetch, but another request may start a new cooldown first: any successful fetch
+ * starts one, including the `cacheMaxAge` reload of an ordinary request. A failed fetch starts no
+ * cooldown (jose records the fetch time only on success), so for an unreachable OP every request
+ * fetches again and 30 s only paces the client.
  */
 const KEY_SET_RETRY_AFTER_SECONDS = '30'
 
