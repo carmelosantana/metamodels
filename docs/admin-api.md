@@ -352,4 +352,5 @@ describe one.
 **The one exception is a leaked key.** Never use the overlap for it: that would keep publishing the
 leaked key for the whole window. Replace it outright, with `OIDC_PREVIOUS_SIGNING_KEYS` empty, as
 [Forcing everyone to sign in again](DEPLOY.md#forcing-everyone-to-sign-in-again) describes. Every
-token signed with the old key then stops working, which is the point.
+token signed with the old key then stops working, within 10 minutes, or at once after a
+control-plane restart (see DEPLOY.md), which is the point.

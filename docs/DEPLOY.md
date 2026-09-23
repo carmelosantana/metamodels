@@ -299,9 +299,9 @@ If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
 Steps 2 and 3 together cover every place that verifies these tokens. The restart covers the
 control-plane process, which holds two copies of the keys, both in memory: the admin API's, which
 checks the access tokens clients present, and the console sign-in's, which checks only the ID token
-the console receives straight from the sign-in service when someone signs in. The data plane verifies no token from the sign-in
-service at all: it authenticates API keys. The sign-in service reads its keys when it starts
-(step 2).
+the console receives straight from the sign-in service when someone signs in. The data plane
+verifies no token from the sign-in service at all: it authenticates API keys. The sign-in service
+reads its keys when it starts (step 2).
 
 Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-the-sign-in-keys)
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
