@@ -43,6 +43,51 @@ The auth service's throttle refuses every login from an address after five failu
 15 minutes, even a correct one, so a sixth run inside that window fails at sign-in. Wait for
 the window to pass, or restart the auth container (the throttle is in memory).
 
+### Admin API (`specs/admin-api.spec.ts`)
+
+The admin API ([`docs/admin-api.md`](../../docs/admin-api.md)) driven through the real `mm` CLI.
+The spec runs `apps/cli` as a child process, reads the verification link it prints, and approves
+the sign-in in Chromium the way a person would: Continue, check the code and the requesting
+machine's IP and user agent, Approve, then type the password. It asserts `mm login` exits 0 and
+leaves a `0600` credential file in a `0700` directory. Every sign-in uses a fresh temporary
+`XDG_CONFIG_HOME`, so your own `~/.config/metamodels` is never read or written. No CSP violation
+or page error is tolerated on the device pages.
+
+| Step | Claim under test |
+|------|------------------|
+| 1 | A device login ends in a stored, resource-bound token with the scopes asked for |
+| 2 | The CLI creates, reads, replaces and deletes a flock and a paddock, creates a key and revokes it. There is no `mm keys delete` |
+| 3 | A `read`-only token is refused `POST /flocks` with `403` and `capability: resource.write` |
+| 4 | A `viewer` whose token carries `resource.write` is still refused: scopes never exceed the role |
+| 5 | No token → `401` with `WWW-Authenticate: Bearer`; bearer plus `mm_session` cookie → `400`; cookie alone → `401`; the CLI's ID token (another audience) → `401`; `DELETE /keys/{id}` → `405`; `GET /openapi.json` with no token → `200` |
+
+It writes to the stack and changes a user's role, so **it runs only against a stack you name
+explicitly**. Unless `E2E_BASE_URL`, `E2E_AUTH_URL`, `E2E_VIEWER_EMAIL` and `E2E_VIEWER_PASSWORD`
+are all set, it skips. It never falls back to the `localhost` defaults. Point it at a throwaway
+stack, not one with real data.
+
+The viewer is a second user, seeded the same way as the operator. The spec demotes it to `viewer`
+on the console's Team page:
+
+```bash
+OPERATOR_EMAIL=viewer@example.test OPERATOR_PASSWORD=<a password> \
+  docker compose run --rm -e OPERATOR_EMAIL -e OPERATOR_PASSWORD control-plane pnpm seed
+```
+
+Each run prints the `jti` of its token and the `audit_log` targets it touched. Each of those rows
+must carry `changed_by = token:metamodels-cli:<jti>`. The spec does not query the database, so check
+this from the stack:
+
+```bash
+docker compose exec -T postgres psql -U metamodels -d metamodels \
+  -c "select action, target, changed_by from audit_log order by created_at desc limit 10;"
+```
+
+The spec does not cover the signing-key rotation overlap. That check recreates the sign-in service
+with a changed key, and a committed test should never do that: one wrong environment variable and it
+rotates a real stack's key. Run it by hand, following
+[Rotating the sign-in keys](../../docs/DEPLOY.md#rotating-the-sign-in-keys).
+
 ## Running it
 
 The suite drives a stack that is already running — it does not start one.
@@ -71,6 +116,18 @@ still runs.
 | `E2E_PROXY_URL` | `http://localhost:8787` | Data-plane |
 | `E2E_AUTH_URL` | `http://localhost:3100` | Auth service. Must equal the stack's `OIDC_ISSUER` |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | `admin@example.com` / `change-me` | The seeded operator |
+| `E2E_VIEWER_EMAIL` / `E2E_VIEWER_PASSWORD` | *(unset — admin-api spec skips)* | A second seeded user, demoted to `viewer` by `admin-api.spec.ts` |
+
+`admin-api.spec.ts` ignores the `E2E_BASE_URL` and `E2E_AUTH_URL` defaults above: both must be set
+explicitly or it skips. The CLI it runs accepts plain http only to a loopback host. For a plain-http
+stack elsewhere, also set `METAMODELS_ALLOW_INSECURE_HTTP=1`.
+
+```bash
+E2E_BASE_URL=http://localhost:13000 E2E_AUTH_URL=http://localhost:13100 \
+E2E_VIEWER_EMAIL=viewer@example.test E2E_VIEWER_PASSWORD=<its password> \
+OPERATOR_EMAIL=<seeded operator> OPERATOR_PASSWORD=<its password> \
+  pnpm exec playwright test specs/admin-api.spec.ts
+```
 
 ## Notes for whoever changes this next
 
