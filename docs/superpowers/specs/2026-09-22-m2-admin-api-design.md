@@ -1,6 +1,6 @@
 # M2 — the admin API: `/api/admin/v1/*`, the device-grant CLI, and the audit credential
 
-**Status:** design settled; ready to plan. **Date:** 2026-09-22.
+**Status:** design settled; ready to plan. Amended during implementation — see §8. **Date:** 2026-09-22.
 **Wayfinding map:** Kanboard #4471 (project 142) — cruxes #4472–#4481, #4488, all closed.
 **Parent design:** [`2026-09-06-remote-control-surface-design.md`](2026-09-06-remote-control-surface-design.md)
 — this spec settles that document's M2 row (§6) and its deferred §4.3 / §4.6 questions.
@@ -286,8 +286,9 @@ types), run as `pnpm --filter @metamodels/cli start -- <cmd>`. Publishing it wit
 pure addition later. Bundling it into the control-plane image was rejected — that reproduces exactly
 the `docker exec` problem M2 exists to remove.
 
-- **OAuth client:** public (no secret), PKCE, `urn:ietf:params:oauth:grant-type:device_code` plus
-  `refresh_token`, statically registered alongside the console.
+- **OAuth client:** public (no secret), no redirect URIs, `urn:ietf:params:oauth:grant-type:device_code`
+  plus `refresh_token`, statically registered alongside the console. No PKCE: RFC 8628 has none
+  (§8, A1).
 - **Lifetime:** requests `offline_access`; refresh tokens **rotate** (each use issues a new one and
   invalidates its predecessor, so reuse detects theft), bounded by an idle window (~30 days) and an
   absolute cap (~90 days). Access tokens stay 1h from the resource server. The console's 12h
@@ -366,3 +367,25 @@ at minimum:
 Every compose command passes an explicit `-p` project name and non-default host ports: a real
 operator stack runs on this machine under the default project name, with host ports 3000/8787/3200
 in use and 3100 held by another process.
+
+---
+
+## 8. Amendments (implementation, 2026-09-22 – 2026-09-23)
+
+Where the built milestone differs from, or goes beyond, the text above. Each row was checked
+against the code on `claude/m2-admin-api`. **Owner** is a decision Carmelo made; **controller** is a
+ruling recorded in the M2 execution ledger. Only A1 is also corrected in place (§4.4). The operator
+documentation for each behaviour is [`docs/admin-api.md`](../../admin-api.md).
+
+| # | § | Was | Now | Why | Decided by |
+|---|---|---|---|---|---|
+| A1 | 4.4 | The CLI client uses PKCE | No PKCE. `cliClient()` is public (`token_endpoint_auth_method: 'none'`), with no redirect URIs and no response types | RFC 8628 defines no PKCE, and oidc-provider checks PKCE only at the authorization and PAR endpoints, which the CLI never calls | Controller |
+| A2 | 4.4 | ~90-day absolute cap (the plan put it in `rotateRefreshToken`) | The cap is `ttl.RefreshToken` = `refreshTokenTtl`: `min(30d, iiat + 90d − now)`. `iiat` is the chain's first issue time, copied on every rotation. `ttl.Grant` = 90 d + the device-code TTL (was 14 d), so the grant outlives the cap | A `false` from `rotateRefreshToken` only stops rotation: the presented token is reused until its own `exp`, so a cap there is 90 + 30 days. A grant shorter than the cap would end every CLI sign-in first (plan defect 12-C) | Controller |
+| A3 | 4.4 | "Gate on the third argument" | `makeGetResourceServerInfo(servers, allowedByClient)`: a resource must be declared *and* listed for the requesting client, or `invalid_target`. A client not in `resourcesByClient` gets no resource. The console keeps its M1 admin-API access | The gate runs on every mint path (authorization, device authorization, token, refresh), so a new client is refused by default rather than trusted by default | Spec, as built |
+| A4 | 4.4 | Device approval reuses the M1 interaction flow | **Every device approval asks for the password**, even with a live OP session (`device_fresh_login` check). The confirm page shows the **requesting machine's IP and user agent**. See [Signing in with the CLI](../../admin-api.md#signing-in-with-the-cli) | RFC 8628 §5.4 remote phishing: with a live session, one click minted a 90-day admin CLI chain for whoever sent the link | Owner |
+| A5 | 4.4 | — | `verification_uri_complete` opens **our** code-entry page with the code prefilled and a visible Continue button, under the unchanged strict CSP. Two route intercepts (`device-middleware.ts`: prefill on `GET /device`, account switch on `device_resume`) replace oidc-provider pages that rely on inline script | Those library pages render blank under `default-src 'none'`. The intercepts depend on oidc-provider internals, pinned to `~9.12.2` and by tests | Owner |
+| A6 | 4.4 | — | **A new grant per device approval** (`loadExistingGrant` skips the session's grant on device routes). Signing one machine out, or re-logging in on it, signs no other machine out. See [Signing out](../../admin-api.md#signing-out) | A grant shared by every machine approved in one browser made any revocation all-or-nothing. This project's decision, not an RFC 8628 requirement | Controller |
+| A7 | 4.4 | — | **OP token revocation is enabled** (RFC 7009, a client revokes only its own tokens). `mm logout` revokes the refresh token before deleting it; a re-login revokes the one it replaces | Without it, logout only deleted a file and left a 90-day refresh chain valid for anyone holding a copy | Controller |
+| A8 | 4.4 | — | **The CLI refuses plain `http://` beyond loopback** unless `--allow-insecure-http` or `METAMODELS_ALLOW_INSECURE_HTTP=1`, for the issuer, the console, every discovered OP endpoint and the verification URI. See [Plain http](../../admin-api.md#plain-http) | The CLI sends bearer and refresh tokens, and the operator types a password into the verification page | Controller |
+| A9 | 3.2, 4.3 | — (unknown `kid` unspecified) | **Unknown signing key → 401**, unless the verifier's key set is inside jose's cooldown (fetched < 30 s ago) → **503 `Retry-After: 30`**. An expired token is 401 before any key lookup. `mm` refreshes before sending a token with < 30 s left. See [Authentication](../../admin-api.md#authentication) and [Rotating the token-signing key](../../admin-api.md#rotating-the-token-signing-key) | Reverses a Task 3 ruling (always 503): the end-to-end rotation run showed every retired-key token failing with 503 after a by-the-book rotation, so an idle CLI never renewed | Controller |
+| A10 | 1 | — | **`GET /flocks` and `GET /flocks/{id}` return `upstreamAuth` in plain text** to any token with `read`. Shipped documented ([Routes](../../admin-api.md#routes)); the fix — sealed at rest, never returned — is its own milestone on branch `feat/encrypt-upstream-auth` | Encrypting it needs a migration, a console change and a key-management decision: not an M2 rider | Owner |
