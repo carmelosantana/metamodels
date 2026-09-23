@@ -171,6 +171,18 @@ describe('buildOpenApiDocument', () => {
     expect(put).toMatch(/`null`.*clear/i)
   })
 
+  // Every upstream call sends `Authorization: Bearer <upstreamAuth>`. Both bodies that write it say
+  // so, and publish the pattern that rejects a scheme, so a client never stores `Bearer abc`.
+  test('upstreamAuth says it is a bare token, sent upstream as `Bearer <token>`', () => {
+    const doc = buildOpenApiDocument()
+    for (const [path, method] of [['/flocks', 'post'], ['/flocks/{id}', 'put']] as const) {
+      const field = bodySchemaOf(doc, path, method).properties?.upstreamAuth
+      expect(field?.description, `${method} ${path}`).toMatch(/bare token/i)
+      expect(field?.description, `${method} ${path}`).toContain('Authorization: Bearer <token>')
+      expect(JSON.stringify(field), `${method} ${path}`).toContain('"pattern"')
+    }
+  })
+
   /**
    * `z.toJSONSchema` emits ITS OWN regex beside a `format`, and v4's uuid regex demands an RFC
    * version nibble that the classic-v3 `z.string().uuid()` actually guarding these fields does not.

@@ -262,6 +262,12 @@ function omit(base: JsonSchema, ...fields: string[]): JsonSchema {
   return out
 }
 
+/** How every call to a flock sends `upstreamAuth`, said once so both request bodies agree. */
+const UPSTREAM_AUTH_FORMAT =
+  'A **bare token**: every call MetaModels makes to the flock sends it as ' +
+  '`Authorization: Bearer <token>`. Send `abc`, not `Bearer abc`; a value with a scheme, ' +
+  'whitespace or a control character is a 422.'
+
 const ref = (name: string): JsonSchema => ({ $ref: `#/components/schemas/${name}` })
 const json = (schema: JsonSchema) => ({ 'application/json': { schema } })
 const arrayOf = (name: string): JsonSchema => ({ type: 'array', items: ref(name) })
@@ -864,9 +870,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
               upstreamAuth: {
                 writeOnly: true,
                 description:
-                  'The credential to send upstream. **Write-only**: sealed at rest and never ' +
-                  'returned — responses carry `hasUpstreamAuth` instead. Omit it, or send `null`, ' +
-                  'for a flock that needs none.',
+                  `The credential to send upstream. ${UPSTREAM_AUTH_FORMAT} **Write-only**: sealed ` +
+                  'at rest and never returned — responses carry `hasUpstreamAuth` instead. Omit it, ' +
+                  'or send `null`, for a flock that needs none.',
               },
             }),
           ),
@@ -913,8 +919,8 @@ export function buildOpenApiDocument(): OpenApiDocument {
               upstreamAuth: {
                 writeOnly: true,
                 description:
-                  'The credential to send upstream. **Write-only**: sealed at rest and never ' +
-                  'returned. Omitted, the stored credential is left alone — unlike every other ' +
+                  `The credential to send upstream. ${UPSTREAM_AUTH_FORMAT} **Write-only**: sealed ` +
+                  'at rest and never returned. Omitted, the stored credential is left alone — unlike every other ' +
                   'field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a ' +
                   'string replaces it. Omitting it while changing `baseUrl` or enabling ' +
                   '`tlsTrust` is a 409.',
