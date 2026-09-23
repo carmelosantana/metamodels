@@ -44,17 +44,24 @@ export function devicePrefillMiddleware(): Middleware {
 const DEVICE_RESUME_PATH = new RegExp(`^${DEVICE_VERIFICATION_PATH}/[A-Za-z0-9_-]+$`)
 
 /**
- * Registered with `provider.use()`. Handles exactly `GET /device/:uid` (oidc-provider's
- * `device_resume`), and changes its response in one case only.
+ * Registered with `provider.use()`. Runs around `GET /device/:uid` (oidc-provider's `device_resume`).
  *
  * Every device approval asks for a password (see `interactionPolicyWithFreshDeviceLogin`), so a
  * browser signed in as account A can now submit account B's credentials. On resume, oidc-provider
  * will not continue as B while A's session is live. It saves a logout step in the session
- * (`state.postLogoutRedirectUri`, pointing back to this resume) and renders an auto-submitting
- * script page that posts `logout=yes` to its logout-confirm endpoint. That POST ends A's session and
- * redirects back here, and the resume then continues as B. Our CSP blocks the script, so the page
- * would be blank. This keeps the library's decision and its xsrf secret, and renders the same POST
- * as our page with a button.
+ * (`state = { secret, clientId, postLogoutRedirectUri }`, the URI pointing back to this resume) and
+ * renders an auto-submitting script page that posts `logout=yes` and that secret to its
+ * logout-confirm endpoint. That POST ends A's session and redirects back here, and the resume then
+ * continues as B. Our CSP blocks the script, so the page would be blank. This keeps the library's
+ * decision and its xsrf secret, and renders the same POST as our page with a button.
+ *
+ * It replaces the response only when both are true:
+ * - the session's `postLogoutRedirectUri` is this resume's own URL, exactly as resume.js writes it
+ * - the library's response carries the state's secret, which resume.js generates fresh each time,
+ *   so the step was written by this request
+ * Every other resume response passes through unchanged. That includes one made while an older
+ * logout step sits in the session, whether the console's sign-out left it (end_session writes its
+ * own `post_logout_redirect_uri` there) or an earlier, abandoned switch did.
  */
 export function deviceSwitchAccountMiddleware(): Middleware {
   return async (ctx, next) => {
@@ -63,7 +70,12 @@ export function deviceSwitchAccountMiddleware(): Middleware {
     const { oidc } = ctx as unknown as Partial<KoaContextWithOIDC>
     if (oidc?.route !== 'device_resume') return
     const state = oidc.session?.state
-    if (typeof state?.postLogoutRedirectUri !== 'string' || typeof state.secret !== 'string') return
+    if (typeof state?.secret !== 'string') return
+    // Exactly what resume.js writes for an account switch (`urlFor(route, ctx.params)`).
+    if (state.postLogoutRedirectUri !== oidc.urlFor('device_resume', { uid: ctx.params.uid })) return
+    // Written by this request: form_post puts the secret, a nanoid (`[A-Za-z0-9_-]`, which htmlSafe
+    // leaves as is), in its xsrf input. A response that continued normally does not carry it.
+    if (typeof ctx.body !== 'string' || !ctx.body.includes(`name="xsrf" value="${state.secret}"`)) return
     ctx.status = 200
     ctx.type = 'html'
     ctx.body = renderSwitchAccountPage(oidc.urlFor('end_session_confirm'), state.secret)

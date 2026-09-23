@@ -101,8 +101,9 @@ ${withoutInlineHandlers(form)}
 }
 
 /**
- * Shown when a device approval's login is by a different account than the one this browser's OP
- * session holds. oidc-provider handles that case by ending the old session first: the browser posts
+ * Shown by `deviceSwitchAccountMiddleware`, only on a device resume where oidc-provider has just
+ * refused to continue as the account that signed in, because this browser's OP session holds a
+ * different one. oidc-provider handles that case by ending the old session first: the browser posts
  * `logout=yes` and the library's xsrf token to its logout-confirm endpoint, which redirects back to
  * the device flow, now as the new account. The library sends that POST from an auto-submitting
  * script page, which our CSP blocks. This page is the same form, with a button and an explanation.

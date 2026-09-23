@@ -341,6 +341,71 @@ describe('device approval needs a fresh password', () => {
     expect(sessions.map((r) => (r.payload as { accountId?: string }).accountId)).not.toContain(idA)
   }, 60_000)
 
+  /** Submit the device approval's login form (the page `approveDevice` stopped on) as `who`. */
+  async function submitLogin(jar: CookieJar, loginPage: string, who: { email: string; password: string }) {
+    const action = /<form method="post" action="(\/interaction\/[^"]+\/login)">/.exec(loginPage)![1]
+    return followRedirects(op!, jar, await send(jar, new URL(action, op!.issuer).href, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(who).toString(),
+    }))
+  }
+
+  test('an abandoned console sign-out does not turn a same-account approval into "Switch account?"', async () => {
+    op = await startTestOp()
+    const idA = await seedUser(op.db, A)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar })
+    expect(pages.final.body).toMatch(/<form method="post" action="\/interaction\/[^"]+\/login">/)
+
+    // Another tab: the console's sign-out opens the OP's logout confirm page, which is left unanswered.
+    // That leaves a logout step (with the console's post_logout_redirect_uri) in the OP session.
+    const end = new URL(`${op.issuer}/session/end`)
+    end.search = new URLSearchParams({ client_id: CONSOLE_CLIENT_ID, post_logout_redirect_uri: `${CONSOLE_URL}/login` }).toString()
+    const confirm = await send(jar, end.href)
+    expect(confirm.status).toBe(200)
+    expect(await confirm.text()).toContain('op.logoutForm')
+
+    // Back in the first tab, A types A's own password: an ordinary approval, no account switch.
+    const done = await submitLogin(jar, pages.final.body, A)
+    expect(done.status).toBe(200)
+    expect(done.body).toContain('<h1>Signed in</h1>')
+    expect(done.body).not.toContain('<h1>Switch account?</h1>')
+    const token = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(token.status).toBe(200)
+    const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
+    expect(payload.sub).toBe(idA)
+
+    // A's OP session is intact: the console still signs in silently, as A.
+    const silent = await authorize(op, { jar })
+    if (silent.kind !== 'redirect') throw new Error(`expected a silent console sign-in, got ${silent.status}`)
+    const idToken = await exchangeCode(op, silent.url.searchParams.get('code')!, silent.verifier)
+    expect((await jwtVerify(idToken.json.id_token as string, await opJwks(op), { issuer: op.issuer })).payload.sub).toBe(idA)
+  }, 60_000)
+
+  test('an abandoned account switch does not turn a later same-account login into "Switch account?"', async () => {
+    op = await startTestOp()
+    const idA = await seedUser(op.db, A)
+    await seedUser(op.db, B)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar })
+
+    // B's password: the library asks to end A's session first. The operator does not continue.
+    const switched = await submitLogin(jar, pages.final.body, B)
+    expect(switched.body).toContain('<h1>Switch account?</h1>')
+
+    // Back to the same login form, now with A's own password: no switch is needed any more.
+    const done = await submitLogin(jar, pages.final.body, A)
+    expect(done.status).toBe(200)
+    expect(done.body).toContain('<h1>Signed in</h1>')
+    expect(done.body).not.toContain('<h1>Switch account?</h1>')
+    const token = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(token.status).toBe(200)
+    const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
+    expect(payload.sub).toBe(idA)
+  }, 60_000)
+
   test('without the xsrf token the switch-account step is refused', async () => {
     op = await startTestOp()
     await seedUser(op.db, A)
