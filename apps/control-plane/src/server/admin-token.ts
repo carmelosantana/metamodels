@@ -184,9 +184,10 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
      *   starts one, including an ordinary request's `cacheMaxAge` reload.
      *
      * Two races. `jwtVerify` awaits between the read above and jose's cooldown check, so other
-     * requests run in between. If the cooldown ends in that gap, jose refetches and the answer is
-     * still 503. If a concurrent verification's load lands between jose's miss and its check, jose
-     * skips its own reload without consulting the new set, and the answer is 401.
+     * requests run in between. If the cooldown ends in that gap, jose runs `reload()` and looks the
+     * `kid` up again: the token verifies if the OP now publishes that key, and the answer is 503 only
+     * if the `kid` is still missing. If a concurrent verification's load lands between jose's miss
+     * and its check, jose skips its own reload without consulting the new set, and the answer is 401.
      */
     if (e instanceof joseErrors.JWKSNoMatchingKey) {
       if (wasCoolingDown) {
