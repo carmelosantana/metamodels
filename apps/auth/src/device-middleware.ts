@@ -64,13 +64,17 @@ export function devicePrefillMiddleware(): Middleware {
  * continues as B. Our CSP blocks the script, so the page would be blank. This keeps the library's
  * decision and its xsrf secret, and renders the same POST as our page with a button.
  *
- * It replaces the response only when both are true:
- * - the session's `postLogoutRedirectUri` is this resume's own URL, exactly as resume.js writes it
- * - the library's response carries the state's secret, which resume.js generates fresh each time,
- *   so the step was written by this request
- * Every other resume response passes through unchanged. That includes one made while an older
- * logout step sits in the session, whether the console's sign-out left it (end_session writes its
- * own `post_logout_redirect_uri` there) or an earlier, abandoned switch did.
+ * It replaces the response only when both are true, and each excludes a case the other does not:
+ * - the library's response carries the state's secret. Every writer makes a new random secret, so
+ *   some state was written by this request. That excludes a stale state left by an earlier or
+ *   abandoned request: the console's abandoned sign-out (end_session writes its own
+ *   `post_logout_redirect_uri` there), or an abandoned switch, whose URI is this same resume's.
+ * - the session's `postLogoutRedirectUri` is this resume's own URL, exactly as resume.js writes it.
+ *   That excludes the other writer in this request: on any `device_resume` error, such as a missing
+ *   or expired resume cookie (a reload of "Signed in" is one), oidc-provider's
+ *   `lib/shared/error_handler.js` sets the state to `{ secret }` alone and re-renders
+ *   `userCodeInputSource` with that secret in its xsrf input, so the secret check passes there.
+ * Every other resume response passes through unchanged.
  */
 export function deviceSwitchAccountMiddleware(): Middleware {
   return async (ctx, next) => {
@@ -79,10 +83,14 @@ export function deviceSwitchAccountMiddleware(): Middleware {
     if (oidc?.route !== 'device_resume') return
     const state = oidc.session?.state
     if (typeof state?.secret !== 'string') return
-    // Exactly what resume.js writes for an account switch (`urlFor(route, ctx.params)`).
+    // Exactly what resume.js writes for an account switch (`urlFor(route, ctx.params)`). The
+    // error handler's `{ secret }` has no URI, so this rejects its re-render, which carries the
+    // secret too.
     if (state.postLogoutRedirectUri !== oidc.urlFor('device_resume', { uid: ctx.params.uid })) return
-    // Written by this request: form_post puts the secret, a nanoid (`[A-Za-z0-9_-]`, which htmlSafe
-    // leaves as is), in its xsrf input. A response that continued normally does not carry it.
+    // Some state was written by this request: resume.js's form_post (or the error handler's
+    // form, excluded above) puts the secret in its xsrf input. The secret is a nanoid
+    // (`[A-Za-z0-9_-]`), or hex from the error handler, which htmlSafe leaves as is. A stale
+    // state's secret is not in this response.
     if (typeof ctx.body !== 'string' || !ctx.body.includes(`name="xsrf" value="${state.secret}"`)) return
     ctx.status = 200
     ctx.type = 'html'
