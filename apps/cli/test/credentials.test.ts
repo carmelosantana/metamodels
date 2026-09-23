@@ -161,6 +161,34 @@ describe('withCredentialsLock', () => {
     expect(existsSync(`${p}.lock`)).toBe(false)
   })
 
+  test('does not remove a stale lock that became a fresh one before the takeover — even at the same inode', async () => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    const lock = `${p}.lock`
+    writeFileSync(lock, 'crashed')
+    const old = new Date(Date.now() - 10 * 60_000)
+    utimesSync(lock, old, old)
+    const ino = lstatSync(lock).ino
+    let ran = false
+    let waits = 0
+    // Between judging the lock stale and removing it, it is replaced by a fresh lock at the same
+    // inode — what a filesystem reusing the freed inode for another waiter's new lock looks like.
+    const pending = withCredentialsLock(p, async () => { ran = true }, {
+      staleMs: 60_000, pollMs: 5,
+      onStale: () => { const now = new Date(); utimesSync(lock, now, now) },
+      onWait: () => { waits++ },
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(existsSync(lock)).toBe(true)
+    expect(lstatSync(lock).ino).toBe(ino)
+    expect(ran).toBe(false)
+    expect(waits).toBeGreaterThan(0)
+    const { unlinkSync } = await import('node:fs')
+    unlinkSync(lock)
+    await pending
+    expect(ran).toBe(true)
+  })
+
   test('does not take over a fresh lock', async () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))

@@ -124,9 +124,16 @@ export interface LockOptions {
   pollMs?: number
   /** Called each time the lock is found held — for tests. */
   onWait?: () => void
+  /** Called when a lock has been judged stale, just before it is re-checked and removed — for tests. */
+  onStale?: () => void
 }
 
 export const LOCK_STALE_MS = 60_000
+
+/** The same lock file: same inode, and not rewritten since (a lock is written once, when taken). */
+function sameLock(a: Stats, b: Stats): boolean {
+  return a.ino === b.ino && a.mtimeMs === b.mtimeMs
+}
 
 /**
  * Run `fn` holding an exclusive lock file beside the store (`<path>.lock`, created with `wx`), and
@@ -134,21 +141,25 @@ export const LOCK_STALE_MS = 60_000
  * refresh token would present it twice, and the second presentation is a reuse that revokes the
  * whole grant.
  *
- * Stale-lock takeover is best effort: two waiters that judge the same stale lock in the same instant
- * can both proceed. The cost of losing that race is one "sign in again", never a leaked token.
+ * A lock is identified by its inode AND its mtime: a new lock always has a fresh mtime, so a lock
+ * created at a reused inode does not pass for the one it replaced.
+ *
+ * Stale-lock takeover is still best effort. The re-check and the unlink are two system calls, so a
+ * lock created between them is removed as if it were the stale one, and two waiters can then both
+ * proceed. The cost of losing that race is one "sign in again", never a leaked token.
  */
 export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>, o: LockOptions = {}): Promise<T> {
   const staleMs = o.staleMs ?? LOCK_STALE_MS
   const pollMs = o.pollMs ?? 100
   const lock = `${path}.lock`
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  let ours: number
+  let ours: Stats
   for (;;) {
     try {
       const fd = openSync(lock, 'wx', 0o600)
       try {
         writeSync(fd, `${process.pid}\n`)
-        ours = fstatSync(fd).ino
+        ours = fstatSync(fd)
       } finally {
         closeSync(fd)
       }
@@ -170,9 +181,9 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
       throw new Error(`${lock} is not a regular file; remove it and run the command again`)
     }
     if (Date.now() - held.mtimeMs > staleMs) {
-      // Remove the lock we judged stale, not one a faster waiter has since created. Compared by
-      // inode, which a filesystem may reuse: best effort, as above.
-      try { if (lstatSync(lock).ino === held.ino) unlinkSync(lock) } catch { /* already gone */ }
+      o.onStale?.()
+      // Remove the lock we judged stale, not one a faster waiter has since created (best effort, as above).
+      try { if (sameLock(lstatSync(lock), held)) unlinkSync(lock) } catch { /* already gone */ }
       continue
     }
     o.onWait?.()
@@ -182,6 +193,6 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
     return await fn()
   } finally {
     // If we overran staleMs and another process took the lock over, it is theirs now: leave it.
-    try { if (lstatSync(lock).ino === ours) unlinkSync(lock) } catch { /* already gone */ }
+    try { if (sameLock(lstatSync(lock), ours)) unlinkSync(lock) } catch { /* already gone */ }
   }
 }
