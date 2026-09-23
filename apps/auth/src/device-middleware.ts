@@ -16,8 +16,17 @@ export function prefilledUserCode(ctx: object): string | undefined {
 }
 
 /**
+ * The request paths oidc-provider's router (`lib/helpers/router.js`) sends to `code_verification`.
+ * It compares paths case-insensitively: its `fold` uppercases but never maps a non-ASCII character
+ * onto ASCII, which is what a non-unicode `i` regex does too. If there is no exact match, it strips one
+ * trailing slash and tries again. (`DEVICE_VERIFICATION_PATH` has no regex metacharacters.)
+ */
+const DEVICE_VERIFICATION_ROUTE = new RegExp(`^${DEVICE_VERIFICATION_PATH}/?$`, 'i')
+
+/**
  * Registered with `provider.use()`, so it runs before oidc-provider's routes. Handles exactly one
- * request shape: `GET /device?user_code=…`.
+ * request shape: `GET /device?user_code=…`, in every spelling the router accepts for that route
+ * (`DEVICE_VERIFICATION_ROUTE`, and `HEAD`, which the router serves on every `GET` route).
  *
  * oidc-provider answers that with its auto-submitting form_post page, whose inline script our CSP
  * (`default-src 'none'`, no `script-src`) blocks. The `<noscript>` button does not show either,
@@ -28,7 +37,7 @@ export function prefilledUserCode(ctx: object): string | undefined {
  */
 export function devicePrefillMiddleware(): Middleware {
   return async (ctx, next) => {
-    if (ctx.method === 'GET' && ctx.path === DEVICE_VERIFICATION_PATH) {
+    if ((ctx.method === 'GET' || ctx.method === 'HEAD') && DEVICE_VERIFICATION_ROUTE.test(ctx.path)) {
       const query = new URLSearchParams(ctx.querystring)
       const code = query.get('user_code')
       if (code !== null) {
@@ -41,10 +50,10 @@ export function devicePrefillMiddleware(): Middleware {
   }
 }
 
-const DEVICE_RESUME_PATH = new RegExp(`^${DEVICE_VERIFICATION_PATH}/[A-Za-z0-9_-]+$`)
-
 /**
- * Registered with `provider.use()`. Runs around `GET /device/:uid` (oidc-provider's `device_resume`).
+ * Registered with `provider.use()`. Runs around every request and acts only on those oidc-provider
+ * routed to `device_resume` (`GET` or `HEAD /device/:uid`, in any spelling its router accepts). It keys on
+ * `ctx.oidc.route`, which the router sets from the matched route, not on the path.
  *
  * Every device approval asks for a password (see `interactionPolicyWithFreshDeviceLogin`), so a
  * browser signed in as account A can now submit account B's credentials. On resume, oidc-provider
@@ -65,7 +74,6 @@ const DEVICE_RESUME_PATH = new RegExp(`^${DEVICE_VERIFICATION_PATH}/[A-Za-z0-9_-
  */
 export function deviceSwitchAccountMiddleware(): Middleware {
   return async (ctx, next) => {
-    if (ctx.method !== 'GET' || !DEVICE_RESUME_PATH.test(ctx.path)) return next()
     await next()
     const { oidc } = ctx as unknown as Partial<KoaContextWithOIDC>
     if (oidc?.route !== 'device_resume') return

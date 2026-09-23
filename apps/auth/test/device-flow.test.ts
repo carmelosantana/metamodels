@@ -406,6 +406,53 @@ describe('device approval needs a fresh password', () => {
     expect(payload.sub).toBe(idA)
   }, 60_000)
 
+  // oidc-provider's router matches paths case-insensitively and with a trailing slash stripped, so
+  // these spellings reach `device_resume` too. (A real browser would not send the resume cookie to
+  // /DEVICE/…, whose Path attribute is the lowercase resume path; this test's jar ignores Path.)
+  test.each([
+    ['/DEVICE/:uid', (path: string) => path.replace(/^\/device\//, '/DEVICE/')],
+    ['/device/:uid/', (path: string) => `${path}/`],
+  ])('the switch-account page also answers the router\'s other spelling %s', async (_, respell) => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    const idB = await seedUser(op.db, B)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar })
+    const action = /<form method="post" action="(\/interaction\/[^"]+\/login)">/.exec(pages.final.body)![1]
+
+    let res = await send(jar, new URL(action, op.issuer).href, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(B).toString(),
+    })
+    let respelled = 0
+    while (res.status >= 300 && res.status < 400) {
+      const next = new URL(res.headers.get('location')!, op.issuer)
+      if (/^\/device\/[^/]+$/.test(next.pathname)) {
+        next.pathname = respell(next.pathname)
+        respelled++
+      }
+      res = await send(jar, next.href)
+    }
+    const body = await res.text()
+    expect(respelled).toBe(1)
+    expect(res.status).toBe(200)
+    expect(body).toContain('<h1>Switch account?</h1>')
+    expect(body).not.toMatch(/<script|\son[a-z]+=/i)
+
+    // Continue goes back to the canonical resume, which finishes as B.
+    const cont = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(body)![1]
+    const done = await followRedirects(op, jar, await send(jar, new URL(cont, op.issuer).href, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(hiddenFields(body)).toString(),
+    }))
+    expect(done.body).toContain('<h1>Signed in</h1>')
+    const token = await deviceToken(op, da.device_code, { resource: ADMIN })
+    expect(token.status).toBe(200)
+    const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
+    expect(payload.sub).toBe(idB)
+  }, 60_000)
+
   test('without the xsrf token the switch-account step is refused', async () => {
     op = await startTestOp()
     await seedUser(op.db, A)
@@ -488,6 +535,31 @@ describe('verification_uri_complete', () => {
       expect(b.match(/<input type="hidden" name="xsrf" value="[0-9a-f]{48}"\/>/g)).toHaveLength(1)
       expect(b.match(/<form /g)).toHaveLength(1)
     }
+  }, T)
+
+  // oidc-provider's router matches the route case-insensitively, with a trailing slash stripped,
+  // and serves HEAD on GET routes. Each spelling it routes to code_verification gets our page.
+  test.each(['/DEVICE', '/device/', '/Device/'])('%s?user_code=… gets the same prefilled entry page', async (path) => {
+    op = await startTestOp()
+    const res = await send(new CookieJar(), `${op.issuer}${path}?user_code=BCDF-GHJK`)
+    const body = await res.text()
+    expect(res.status).toBe(200)
+    expect(body).toContain('<h1>Connect the MetaModels CLI</h1>')
+    expect(typedCode(body)).toBe('BCDF-GHJK')
+    expect(hiddenFields(body).xsrf).toMatch(/^[0-9a-f]{48}$/)
+    expect(body).not.toMatch(/<script|\son[a-z]+=/i)
+  }, T)
+
+  test('HEAD /device?user_code=… is answered like the GET: our page, not the script form_post', async () => {
+    op = await startTestOp()
+    const url = `${op.issuer}/device?user_code=BCDF-GHJK`
+    const get = await send(new CookieJar(), url)
+    const getBody = await get.text()
+    expect(getBody).toContain('<h1>Connect the MetaModels CLI</h1>')
+    const head = await send(new CookieJar(), url, { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    // Same page, same length (the xsrf token differs per request but not in length).
+    expect(head.headers.get('content-length')).toBe(String(Buffer.byteLength(getBody)))
   }, T)
 
   test('plain /device is unchanged: the empty entry page', async () => {
