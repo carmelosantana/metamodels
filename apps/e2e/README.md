@@ -136,7 +136,11 @@ takes no wrapper and no compose flags, and it runs only in the throwaway compose
   as octal), refuses one something already answers on, and publishes the second control plane on
   `127.0.0.1` only. `--no-deps` leaves the running stack alone.
 - Its only destructive call is `docker rm -f mm-m2-e2e-aud`, in an `EXIT` trap, so it also runs when
-  the script fails or is interrupted. The name `mm-m2-e2e-aud` is reserved for this script.
+  the script fails or is interrupted after `run` has succeeded. If `run` itself fails, for example
+  because a container named `mm-m2-e2e-aud` already exists, the script removes nothing: that container
+  is not this run's. The same goes for an interrupt before `run` returns, which can leave a container
+  behind; check what it is before removing it by hand. The name `mm-m2-e2e-aud` is reserved for this
+  script.
 - It reads the token from `AUD_ACCESS_TOKEN` into an unexported variable and unsets
   `AUD_ACCESS_TOKEN` before starting any process, so the token is in no argument list and no child
   environment. It reaches `curl` on stdin. The script's own process keeps the environment it was

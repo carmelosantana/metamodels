@@ -35,6 +35,8 @@ cat >"$work/bin/docker" <<'EOF'
 env >>"$FAKE_LOG/child-env.log"
 case $1 in
   compose)
+    [[ ${FAKE_RUN_FAIL:-0} == 1 ]] && {
+      echo 'Error response from daemon: Conflict. The container name "/mm-m2-e2e-aud" is already in use' >&2; exit 1; }
     # FAKE_STUB_PORT: stand in for the started control plane with a stub HTTP server (real-curl case).
     if [[ -n ${FAKE_STUB_PORT:-} ]]; then
       nohup node "$FAKE_STUB_JS" "$FAKE_STUB_PORT" "$FAKE_LOG/statuses" >"$FAKE_LOG/stub.out" 2>&1 &
@@ -234,6 +236,14 @@ refused() {
   [[ $code -eq 2 && -z $(docker_calls) && -z $(curl_calls) ]] && ok "refused $1: exit 2, no docker or curl call" \
     || { fail "$1: exit $code, docker: '$(docker_calls)', curl: '$(curl_calls)'"; sed 's/^/    | /' "$log/out"; }
 }
+
+case_name=runfail; echo "# compose run fails (the name mm-m2-e2e-aud is taken): the other container is left alone"
+run_case mm-m2-e2e '' FAKE_RUN_FAIL=1 -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
+[[ $code -ne 0 ]] && ok "exit $code" || fail "exit 0 after compose run failed"
+check_compose_calls "$work/e2e.env"
+[[ $(docker_calls | grep -c '^docker compose ') -eq 1 && $(docker_calls | wc -l) -eq 1 ]] \
+  && ok "no docker call after the failed run (no inspect, no rm)" || fail "docker calls after the failed run:"$'\n'"$(docker_calls)"
+[[ ! -s $log/curl-stdin.log ]] && ok "no token was sent" || fail "a token was sent"
 
 echo "# host ports: a leading zero, and the edges of 1024-65535"
 for bad_port in 08080 099 0 1023 65536; do

@@ -87,9 +87,12 @@ status_of() {
 }
 
 # --- The second control plane -------------------------------------------------------------------------
-# Removes this exact container name, on every exit. The only destructive call in this script.
+# Removes this exact container name on exit, but only once `compose run` has succeeded: if `run`
+# fails, say because a container of that name already exists, that container is not this run's. The
+# only destructive call in this script.
+started=0
 # shellcheck disable=SC2317  # invoked by the EXIT trap
-cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+cleanup() { [[ $started == 1 ]] || return 0; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 # An interrupt becomes an ordinary exit, so the EXIT trap runs for it too.
 trap 'exit 130' INT
@@ -101,6 +104,7 @@ echo "aud-isolation: starting ${CONTAINER}: CONSOLE_URL=${OTHER_CONSOLE_URL}, on
 # `run` is that publish flag, not a project flag.
 compose run -d --rm --no-deps --name "$CONTAINER" \
   -e "CONSOLE_URL=${OTHER_CONSOLE_URL}" -p "127.0.0.1:${port}:3000" control-plane >/dev/null
+started=1
 
 # The container compose actually started must belong to the throwaway project. Checked before any
 # request to it and before the token is sent anywhere.
