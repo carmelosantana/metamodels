@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite'
+import { afterAll, beforeAll, beforeEach } from 'vitest'
 import { drizzle } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
 import { dirname, resolve } from 'node:path'
@@ -29,6 +30,18 @@ export async function resetDb(db: TestDb): Promise<void> {
     EXECUTE (SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ')
       || ' RESTART IDENTITY CASCADE' FROM pg_tables WHERE schemaname = 'public');
   END $$`)
+}
+
+/**
+ * One database for the enclosing file (or `describe`), emptied before each case and closed after
+ * the last. Call it once at the top level; each case reads its database from the returned getter.
+ */
+export function sharedDb(): () => TestDb {
+  let db: TestDb | undefined
+  beforeAll(async () => { db = await freshDb() })
+  beforeEach(async () => { await resetDb(db!) })
+  afterAll(async () => { await db?.$client.close() })
+  return () => db!
 }
 
 export async function seedOrg(db: TestDb, name = 'default') {
