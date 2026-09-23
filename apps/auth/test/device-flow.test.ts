@@ -341,13 +341,18 @@ describe('device approval needs a fresh password', () => {
     expect(sessions.map((r) => (r.payload as { accountId?: string }).accountId)).not.toContain(idA)
   }, 60_000)
 
-  /** Submit the device approval's login form (the page `approveDevice` stopped on) as `who`. */
-  async function submitLogin(jar: CookieJar, loginPage: string, who: { email: string; password: string }) {
+  /** Submit the device approval's login form as `who`; return the first response, redirects not followed. */
+  async function postLogin(jar: CookieJar, loginPage: string, who: { email: string; password: string }) {
     const action = /<form method="post" action="(\/interaction\/[^"]+\/login)">/.exec(loginPage)![1]
-    return followRedirects(op!, jar, await send(jar, new URL(action, op!.issuer).href, {
+    return send(jar, new URL(action, op!.issuer).href, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(who).toString(),
-    }))
+    })
+  }
+
+  /** Submit the device approval's login form (the page `approveDevice` stopped on) as `who`. */
+  async function submitLogin(jar: CookieJar, loginPage: string, who: { email: string; password: string }) {
+    return followRedirects(op!, jar, await postLogin(jar, loginPage, who))
   }
 
   test('an abandoned console sign-out does not turn a same-account approval into "Switch account?"', async () => {
@@ -406,30 +411,39 @@ describe('device approval needs a fresh password', () => {
     expect(payload.sub).toBe(idA)
   }, 60_000)
 
-  // oidc-provider's router matches paths case-insensitively and with a trailing slash stripped, so
-  // these spellings reach `device_resume` too. (A real browser would not send the resume cookie to
-  // /DEVICE/…, whose Path attribute is the lowercase resume path; this test's jar ignores Path.)
-  test.each([
-    ['/DEVICE/:uid', (path: string) => path.replace(/^\/device\//, '/DEVICE/')],
-    ['/device/:uid/', (path: string) => `${path}/`],
-  ])('the switch-account page also answers the router\'s other spelling %s', async (_, respell) => {
+  /**
+   * The cookies oidc-provider scoped to a device resume path (`Path=/device/:uid`: the resume cookie
+   * and its signature), and that path. This jar ignores `Path`; a browser does not.
+   */
+  function resumeCookies(jar: CookieJar) {
+    const names = new Set<string>()
+    let path: string | undefined
+    for (const line of jar.setCookieLines) {
+      const scoped = /;\s*path=(\/device\/[^;]+)/i.exec(line)?.[1]
+      if (!scoped) continue
+      names.add(line.slice(0, line.indexOf('=')).trim())
+      path = scoped
+    }
+    if (!path) throw new Error('no cookie was scoped to a device resume path')
+    return { names, path }
+  }
+
+  // oidc-provider's router strips one trailing slash before matching, so this spelling reaches
+  // `device_resume` too. The resume cookie's Path is a prefix of it, so a browser sends the cookie.
+  test('the switch-account page also answers the router\'s other spelling /device/:uid/', async () => {
     op = await startTestOp()
     await seedUser(op.db, A)
     const idB = await seedUser(op.db, B)
     const jar = await signedInBrowser(A)
     const da = await startDevice()
     const pages = await approveDevice(op, da, { jar })
-    const action = /<form method="post" action="(\/interaction\/[^"]+\/login)">/.exec(pages.final.body)![1]
 
-    let res = await send(jar, new URL(action, op.issuer).href, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(B).toString(),
-    })
+    let res = await postLogin(jar, pages.final.body, B)
     let respelled = 0
     while (res.status >= 300 && res.status < 400) {
       const next = new URL(res.headers.get('location')!, op.issuer)
       if (/^\/device\/[^/]+$/.test(next.pathname)) {
-        next.pathname = respell(next.pathname)
+        next.pathname = `${next.pathname}/`
         respelled++
       }
       res = await send(jar, next.href)
@@ -451,6 +465,66 @@ describe('device approval needs a fresh password', () => {
     expect(token.status).toBe(200)
     const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op), { issuer: op.issuer, audience: ADMIN })
     expect(payload.sub).toBe(idB)
+  }, 60_000)
+
+  // Any device resume that arrives without the resume cookie fails in resume.js, and oidc-provider's
+  // error handler (lib/shared/error_handler.js) answers it: it writes a fresh `{ secret }` to the
+  // session state and re-renders the entry page with that secret in its xsrf input. Only the
+  // switch-account guard's postLogoutRedirectUri check tells that apart from a logout step.
+  test('reloading "Signed in" after the resume cookie is cleared shows the entry page, not "Switch account?"', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    const jar = new CookieJar()
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar, ...A })
+    expect(pages.final.body).toContain('<h1>Signed in</h1>')
+    // The resume cleared its cookie, so the reload is sent without it, as a browser would send it.
+    const { names, path } = resumeCookies(jar)
+    const sent = jar.header().split('; ').map((c) => c.slice(0, c.indexOf('=')))
+    expect(sent.filter((name) => names.has(name))).toEqual([])
+
+    const reload = await send(jar, new URL(path, op.issuer).href)
+    const body = await reload.text()
+    expect(reload.status).toBe(400)
+    expect(body).toContain('<h1>Connect the MetaModels CLI</h1>')
+    expect(body).not.toContain('<h1>Switch account?</h1>')
+    // The approval stands.
+    expect((await deviceToken(op, da.device_code, { resource: ADMIN })).status).toBe(200)
+  }, 60_000)
+
+  // The router matches paths case-insensitively, so /DEVICE/:uid reaches `device_resume` too. But
+  // cookie paths are case-sensitive, so a browser does not send the lowercase-path resume cookie there.
+  test('an account switch resumed at /DEVICE/:uid, without the resume cookie, shows the entry page, not "Switch account?"', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, A)
+    await seedUser(op.db, B)
+    const jar = await signedInBrowser(A)
+    const da = await startDevice()
+    const pages = await approveDevice(op, da, { jar })
+
+    let res = await postLogin(jar, pages.final.body, B)
+    let respelled = 0
+    while (res.status >= 300 && res.status < 400) {
+      const next = new URL(res.headers.get('location')!, op.issuer)
+      if (!/^\/device\/[^/]+$/.test(next.pathname)) {
+        res = await send(jar, next.href)
+        continue
+      }
+      next.pathname = next.pathname.replace(/^\/device\//, '/DEVICE/')
+      respelled++
+      const { names } = resumeCookies(jar)
+      const all = jar.header().split('; ')
+      const kept = all.filter((c) => !names.has(c.slice(0, c.indexOf('='))))
+      expect(kept.length).toBeLessThan(all.length) // the jar held the resume cookie; the browser leaves it out
+      res = await fetch(next.href, { headers: { cookie: kept.join('; ') }, redirect: 'manual' })
+      jar.store(res)
+    }
+    const body = await res.text()
+    expect(respelled).toBe(1)
+    expect(res.status).toBe(400)
+    expect(body).toContain('<h1>Connect the MetaModels CLI</h1>')
+    expect(body).not.toContain('<h1>Switch account?</h1>')
+    expect((await deviceToken(op, da.device_code, { resource: ADMIN })).json.error).toBe('authorization_pending')
   }, 60_000)
 
   test('without the xsrf token the switch-account step is refused', async () => {
