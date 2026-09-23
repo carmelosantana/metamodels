@@ -96,6 +96,15 @@ describe('callApi', () => {
     expect(res.next).toBe('CUR+1')
   })
 
+  test('resolves a relative Link target against the request URL (RFC 8288 §3.1)', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => ({
+      status: 200, json: [{ id: 'f1' }],
+      headers: { link: '</api/admin/v1/flocks?limit=1&cursor=REL%2B2>; rel="next"' },
+    }))
+    await expect(callApi(s.url, session(), { method: 'GET', path: '/flocks', query: { limit: '1' } }))
+      .resolves.toMatchObject({ next: 'REL+2' })
+  })
+
   test('does not follow a redirect', async () => {
     const s = await api('GET /api/admin/v1/flocks', () => ({ status: 302, headers: { location: 'http://elsewhere.test/' } }))
     await expect(callApi(s.url, session(), { method: 'GET', path: '/flocks' })).rejects.toThrow(/redirect/)

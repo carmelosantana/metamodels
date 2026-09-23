@@ -53,11 +53,12 @@ export function formatProblem(status: number, problem: unknown): string {
   return lines.join('\n')
 }
 
-function nextCursor(link: string | null): string | undefined {
+/** The next page's cursor. A relative target resolves against the request URL (RFC 8288 §3.1). */
+function nextCursor(link: string | null, base: URL): string | undefined {
   if (link === null) return undefined
   for (const part of link.split(',')) {
     const m = /^\s*<([^>]*)>\s*;\s*rel="?next"?\s*$/.exec(part)
-    if (m) return new URL(m[1]).searchParams.get('cursor') ?? undefined
+    if (m) return new URL(m[1], base).searchParams.get('cursor') ?? undefined
   }
   return undefined
 }
@@ -123,6 +124,6 @@ export async function callApi(
   }
   const body = await readBody(res)
   if (!res.ok) throw new ApiProblemError(res.status, body)
-  const next = nextCursor(res.headers.get('link'))
+  const next = nextCursor(res.headers.get('link'), url)
   return { status: res.status, body, ...(next === undefined ? {} : { next }) }
 }
