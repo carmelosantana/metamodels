@@ -34,6 +34,8 @@ const refusal = missing.length
   ? `admin-api.spec.ts mutates the stack it runs against, so it needs it named explicitly: set ${missing.join(', ')}`
   : null
 
+// In CI a skip would pass silently, so a CI job that meant to run this and forgot a variable fails.
+if (refusal !== null && process.env.CI) throw new Error(`${refusal} (CI is set, so this is an error, not a skip)`)
 test.skip(refusal !== null, refusal ?? '')
 test.describe.configure({ mode: 'serial' })
 
