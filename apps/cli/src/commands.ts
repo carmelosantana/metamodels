@@ -177,6 +177,16 @@ function config<T>(f: () => T): T {
   }
 }
 
+/** A missing or unreadable --file is the command line's fault: a usage error, before anything is sent. */
+function readBodyFile(file: string): string {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    throw new UsageError(`cannot read --file ${file}${typeof code === 'string' ? ` (${code})` : ''}`)
+  }
+}
+
 async function readJsonBody(values: Values, io: MainIo, command: string): Promise<unknown> {
   const data = values.data as string | undefined
   const file = values.file as string | undefined
@@ -185,7 +195,7 @@ async function readJsonBody(values: Values, io: MainIo, command: string): Promis
     ? [data, '--data']
     : file === '-'
       ? [await (io.readStdin ?? (async () => ''))(), 'stdin']
-      : [readFileSync(file!, 'utf8'), file!]
+      : [readBodyFile(file!), file!]
   try {
     return JSON.parse(text)
   } catch {

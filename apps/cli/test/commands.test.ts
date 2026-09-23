@@ -230,6 +230,20 @@ describe('main: usage errors exit 2 and send nothing', () => {
     expect(w.api.requests).toHaveLength(1)
   })
 
+  test('a --file that cannot be read is a usage error, and nothing is sent', async () => {
+    const w = await world()
+    w.signIn()
+    w.api.on('POST /api/admin/v1/flocks', () => ok({ id: 'f1' }))
+    const missing = join(w.env.XDG_CONFIG_HOME, 'no-such-body.json')
+    expect(await w.run('flocks', 'create', '--file', missing)).toBe(2)
+    expect(w.stderr()).toContain(missing)
+    expect(w.api.requests).toHaveLength(0)
+    // The same command with a readable file does reach the API.
+    writeFileSync(missing, '{"name":"x"}')
+    expect(await w.run('flocks', 'create', '--file', missing)).toBe(0)
+    expect(w.api.requests).toHaveLength(1)
+  })
+
   test('with no console configured, it says what to set', async () => {
     const w = await world()
     w.signIn()
