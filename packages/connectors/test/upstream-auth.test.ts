@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { comfyuiBreed, ollamaBreed } from '../src/index.js'
+import { comfyuiBreed, ollamaBreed, upstreamAuthHeaders } from '../src/index.js'
 import type { FlockRef } from '../src/breed.js'
 
 // One convention for every call a breed makes to its flock: `upstreamAuth` is a bare token,
@@ -32,5 +32,25 @@ describe.each(calls)('%s', (_name, call, body) => {
     const auth = captureAuth(body)
     await call({ baseUrl: 'http://up:1', upstreamAuth: null, tlsTrust: false })
     expect(auth.value()).toBeNull()
+  })
+})
+
+// Values stored before the bare-token contract may carry their own scheme. Sealing keeps them as
+// they were, so the helper drops one leading `Bearer ` rather than send `Bearer Bearer <token>`.
+describe('upstreamAuthHeaders with a legacy `Bearer `-prefixed value', () => {
+  test.each(['Bearer t0ken', 'bearer t0ken', 'BEARER   t0ken'])('%j is sent as `Bearer t0ken`', (stored) => {
+    expect(upstreamAuthHeaders({ upstreamAuth: stored })).toEqual({ authorization: 'Bearer t0ken' })
+  })
+
+  test('a bare token is sent as is', () => {
+    expect(upstreamAuthHeaders({ upstreamAuth: 't0ken' })).toEqual({ authorization: 'Bearer t0ken' })
+  })
+
+  test('a token that merely begins with the letters `bearer` is not stripped', () => {
+    expect(upstreamAuthHeaders({ upstreamAuth: 'bearertoken' })).toEqual({ authorization: 'Bearer bearertoken' })
+  })
+
+  test('a value that is only the scheme sends no header', () => {
+    expect(upstreamAuthHeaders({ upstreamAuth: 'Bearer ' })).toEqual({})
   })
 })
