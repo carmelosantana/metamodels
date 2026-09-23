@@ -280,7 +280,7 @@
         "tags": [
           "flocks"
         ],
-        "description": "A **full replace** of every field a `GET` returns: the service does `set(values)` over all of them. The one exception is `upstreamAuth`, which no `GET` returns, so a GET → edit → PUT round trip never has it to send back: **omitting it leaves the stored credential alone**, `null` clears it, and a string replaces it. There is deliberately no PATCH — a partial merge would need a read-modify-write outside the service's transaction, where it races. `healthOk` is server-owned and is neither read from the body nor touched by this write.",
+        "description": "A **full replace** of every field a `GET` returns: the service does `set(values)` over all of them. The one exception is `upstreamAuth`, which no `GET` returns, so a GET → edit → PUT round trip never has it to send back: **omitting it leaves the stored credential alone**, `null` clears it, and a string replaces it. There is deliberately no PATCH — a partial merge would need a read-modify-write outside the service's transaction, where it races. `healthOk` is server-owned and is neither read from the body nor touched by this write.\n\nA kept credential cannot follow the flock somewhere new: changing `baseUrl`, or turning `tlsTrust` on, while a credential is stored and `upstreamAuth` is omitted is a **409**. Re-send the credential, or `null` to clear it, in the same request.",
         "parameters": [
           {
             "name": "id",
@@ -333,7 +333,7 @@
                       }
                     ],
                     "writeOnly": true,
-                    "description": "The credential to send upstream. **Write-only**: sealed at rest and never returned. Omitted, the stored credential is left alone — unlike every other field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a string replaces it."
+                    "description": "The credential to send upstream. **Write-only**: sealed at rest and never returned. Omitted, the stored credential is left alone — unlike every other field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a string replaces it. Omitting it while changing `baseUrl` or enabling `tlsTrust` is a 409."
                   },
                   "tlsTrust": {
                     "type": "boolean"
@@ -371,6 +371,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
@@ -2872,7 +2875,7 @@
         }
       },
       "Conflict": {
-        "description": "The paddock slug is already in use. Slugs are globally unique.",
+        "description": "The write conflicts with current state: a paddock slug already in use (slugs are globally unique), or a flock update that would carry its stored upstream credential to a new `baseUrl` or into `tlsTrust` without re-sending it.",
         "content": {
           "application/json": {
             "schema": {

@@ -16,6 +16,20 @@ export class NotFoundError extends Error {
 }
 
 /**
+ * An update would carry a stored credential somewhere new — a different `baseUrl`, or TLS trust
+ * switched on — without the caller re-sending it. Refused, because the credential is write-only
+ * against writers too: otherwise a `resource.write` token could point the flock at its own server
+ * and have the next model listing or paddock request deliver the credential there.
+ */
+export class CredentialRebindError extends Error {
+  constructor() {
+    super('changing baseUrl or enabling tlsTrust on a flock with a stored credential requires ' +
+      're-sending upstreamAuth (or null to clear it)')
+    this.name = 'CredentialRebindError'
+  }
+}
+
+/**
  * A flock as this service hands it to ANY caller: the row minus its upstream credential, plus
  * whether one is stored. The credential is write-only. `read` is the scope handed to long-lived CLI
  * tokens, so a read that returned it — sealed or not — would put every upstream credential in the
@@ -120,6 +134,18 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
   if (data.id) {
     const id = data.id
     return db.transaction(async (tx) => {
+      if (data.upstreamAuth === undefined) {
+        // Inside the transaction and FOR UPDATE, so the comparison and the write see the same row.
+        // Org-scoped, so another org's id stays a 404 below rather than a 409 that confirms it.
+        const [current] = await tx
+          .select({ baseUrl: flock.baseUrl, tlsTrust: flock.tlsTrust, enc: flock.upstreamAuthEnc })
+          .from(flock)
+          .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
+          .for('update')
+        if (current?.enc != null && (current.baseUrl !== data.baseUrl || (!current.tlsTrust && data.tlsTrust))) {
+          throw new CredentialRebindError()
+        }
+      }
       const [updated] = await tx
         .update(flock)
         .set(values)

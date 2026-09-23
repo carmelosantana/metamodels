@@ -4,7 +4,7 @@ import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
 import { randomBytes } from 'node:crypto'
 import { loadSealKeyring, openSealed, seal } from '@metamodels/schema/sealed'
-import { listFlocks, getFlock, getFlockConnection, saveFlock, deleteFlock, NotFoundError } from './flocks-service'
+import { listFlocks, getFlock, getFlockConnection, saveFlock, deleteFlock, CredentialRebindError, NotFoundError } from './flocks-service'
 import { upstreamAuthKeys } from './seal-keys'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
@@ -214,5 +214,62 @@ describe('flocks-service — the upstream credential is write-only and sealed at
       upstreamAuthEnc: seal('tok', foreign),
     }).returning()
     expect(await getFlockConnection(db, actor, f.id)).toMatchObject({ upstreamAuth: null, upstreamAuthError: 'unknown-key' })
+  })
+
+  /**
+   * Write-only must hold against writers too. If an omitted credential simply followed a changed
+   * `baseUrl`, a `resource.write` token could point the flock at its own server and have the next
+   * model listing or paddock request deliver the credential there.
+   */
+  describe('an omitted credential does not follow the flock somewhere new', () => {
+    test('changing baseUrl without re-sending it is refused, and nothing is written', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const before = await rowOf(db, f.id)
+      await expect(saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'https://attacker.example' }))
+        .rejects.toThrow(CredentialRebindError)
+      expect(await rowOf(db, f.id)).toEqual(before)
+    })
+
+    test('turning tlsTrust on without re-sending it is refused', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, tlsTrust: false, upstreamAuth: 'tok' })
+      await expect(saveFlock(db, actor, { ...base, id: f.id, tlsTrust: true })).rejects.toThrow(CredentialRebindError)
+    })
+
+    test('re-sending it, or clearing it, alongside the change is allowed', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const moved = await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', upstreamAuth: 'tok-b' })
+      expect(moved.baseUrl).toBe('http://b')
+      const cleared = await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://c', tlsTrust: true, upstreamAuth: null })
+      expect(cleared).toMatchObject({ baseUrl: 'http://c', hasUpstreamAuth: false })
+    })
+
+    test('no stored credential, nothing to protect: the change goes through', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, base)
+      expect((await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', tlsTrust: true })).baseUrl).toBe('http://b')
+    })
+
+    test('turning tlsTrust OFF, or leaving baseUrl alone, keeps it without re-sending', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, tlsTrust: true, upstreamAuth: 'tok' })
+      expect((await saveFlock(db, actor, { ...base, id: f.id, tlsTrust: false, name: 'n2' })).hasUpstreamAuth).toBe(true)
+    })
+
+    test('another org\'s flock is still a 404, not a rebind refusal that confirms it exists', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const other = await seedOrg(db, 'other')
+      await expect(saveFlock(db, { ...actor, orgId: other.id }, { ...base, id: f.id, baseUrl: 'http://x' }))
+        .rejects.toThrow(NotFoundError)
+    })
   })
 })

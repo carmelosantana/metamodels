@@ -223,6 +223,19 @@ describe('/api/admin/v1/flocks', () => {
     expect(row.upstreamAuthEnc).toBeNull()
   })
 
+  test('PUT /{id} moving baseUrl without re-sending upstreamAuth is a 409 that says what to send', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', t, { ...FLOCK, upstreamAuth: 'secret' }))
+      .json() as { id: string }
+    const res = await call(item, 'PUT', `/flocks/${created.id}`, t,
+      { ...FLOCK, baseUrl: 'https://elsewhere.example' }, { id: created.id })
+    expect(res.status).toBe(409)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+    expect((await res.json() as { detail: string }).detail).toMatch(/upstreamAuth/)
+    const [row] = await db.select().from(flock).where(eq(flock.id, created.id))
+    expect(row.baseUrl).toBe(FLOCK.baseUrl)
+  })
+
   /** The reason this milestone exists: `read` is the scope a long-lived CLI token holds. */
   test('a read-only token can list and get flocks but never sees a credential, sealed or plaintext', async () => {
     const w = await tok.mint({ sub: adminUserId })
