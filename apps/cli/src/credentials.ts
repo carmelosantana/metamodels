@@ -3,6 +3,7 @@ import {
   closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
   writeSync, type Stats,
 } from 'node:fs'
+import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /**
@@ -146,10 +147,10 @@ export function deleteCredentials(path: string, issuer: string): void {
 
 export interface LockOptions {
   /**
-   * A lock older than this is presumed left by a crashed process and taken over (sooner when the
-   * pid it records no longer exists: see `holderExited`). It must exceed the longest a holder can
-   * legitimately keep it: every OP request made under the lock carries a timeout well inside this
-   * (see `device.ts`).
+   * A lock older than this is presumed left by a crashed process and taken over (sooner when it
+   * was taken on this host by a process that no longer exists: see `holderExited`). It must exceed
+   * the longest a holder can legitimately keep it: every OP request made under the lock carries a
+   * timeout well inside this (see `device.ts`).
    */
   staleMs?: number
   pollMs?: number
@@ -164,21 +165,28 @@ export interface LockOptions {
 export const LOCK_STALE_MS = 60_000
 
 /**
- * True when the lock records the pid of a process that no longer exists — a holder stopped by
- * Ctrl-C or a crash, which never ran its release. Its lock is stale whatever its age.
+ * True when the lock was taken on this host by a process that no longer exists — a holder stopped
+ * by Ctrl-C or a crash, which never ran its release. Its lock is stale whatever its age.
  *
- * Only ESRCH counts: EPERM is a live process of another user. A lock with no pid yet (taken a
- * moment ago, not yet written) or any other content, and a pid since reused by a live process, fall
- * back to the age check. A holder in another PID namespace, or on another host sharing this
- * directory, reads as exited and loses its lock early: best effort, like the age check.
+ * A lock records `hostname:pid`. A pid means something only on the host that recorded it: on a
+ * home directory shared over NFS, a live holder's pid usually does not exist here. So only a lock
+ * naming this host, whose pid gets ESRCH, counts as exited. EPERM is a live process of another
+ * user. A lock naming another host, one in the older bare-pid form (no host), one with no content
+ * yet (taken a moment ago, not yet written) or any other content, and a pid since reused by a live
+ * process, all fall back to the age check.
+ *
+ * The hostname does not tell PID namespaces apart: a holder in a container that shares this host's
+ * hostname but not its pids reads as exited and loses its lock early. So do two hosts with one
+ * hostname sharing this directory.
  */
 function holderExited(lock: string): boolean {
   let text: string
   try { text = readFileSync(lock, 'utf8') } catch { return false }
-  const m = /^([1-9]\d{0,9})\n$/.exec(text)
-  if (m === null) return false
+  // Greedy: the pid follows the last colon.
+  const m = /^(.+):([1-9]\d{0,9})\n$/.exec(text)
+  if (m === null || m[1] !== hostname()) return false
   try {
-    process.kill(Number(m[1]), 0)
+    process.kill(Number(m[2]), 0)
     return false
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ESRCH'
@@ -203,6 +211,9 @@ function sameLock(a: Stats, b: Stats): boolean {
  * Stale-lock takeover is still best effort. The re-check and the unlink are two system calls, so a
  * lock created between them is removed as if it were the stale one, and two waiters can then both
  * proceed. The cost of losing that race is one "sign in again", never a leaked token.
+ *
+ * On NFS the whole lock is best effort: exclusive create is not atomic on NFSv2 and v3, so two
+ * hosts can both believe they created it.
  */
 export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>, o: LockOptions = {}): Promise<T> {
   const staleMs = o.staleMs ?? LOCK_STALE_MS
@@ -217,7 +228,7 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
     try {
       const fd = openSync(lock, 'wx', 0o600)
       try {
-        writeSync(fd, `${process.pid}\n`)
+        writeSync(fd, `${hostname()}:${process.pid}\n`)
         ours = fstatSync(fd)
       } finally {
         closeSync(fd)

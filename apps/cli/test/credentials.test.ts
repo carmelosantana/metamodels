@@ -1,8 +1,9 @@
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync,
+  writeFileSync,
 } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
@@ -152,12 +153,16 @@ describe('withCredentialsLock', () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))
     let heldDuring = false
+    let recorded = ''
     const out = await withCredentialsLock(p, async () => {
       heldDuring = existsSync(`${p}.lock`)
+      recorded = readFileSync(`${p}.lock`, 'utf8')
       return 42
     })
     expect(out).toBe(42)
     expect(heldDuring).toBe(true)
+    // Who holds it: this host and this process.
+    expect(recorded).toBe(`${hostname()}:${process.pid}\n`)
     expect(existsSync(`${p}.lock`)).toBe(false)
   })
 
@@ -225,22 +230,55 @@ describe('withCredentialsLock', () => {
     expect(ran).toBe(true)
   })
 
-  test('takes over at once a fresh lock whose recorded process has exited (left by Ctrl-C)', async () => {
+  /** The pid of a process that has exited: no process on this host has it now. */
+  function exitedPid(): number {
+    const pid = spawnSync(process.execPath, ['-e', '']).pid
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    return pid
+  }
+
+  test('takes over at once a fresh lock taken on this host by a process that has exited (left by Ctrl-C)', async () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))
-    const exited = spawnSync(process.execPath, ['-e', '']).pid
-    expect(() => process.kill(exited, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
-    writeFileSync(`${p}.lock`, `${exited}\n`)
+    writeFileSync(`${p}.lock`, `${hostname()}:${exitedPid()}\n`)
     const pending = withCredentialsLock(p, async () => 'ran', { staleMs: 60_000, pollMs: 5, notify: () => {} })
     const timeout = new Promise((r) => setTimeout(() => r('still waiting'), 1_000))
     expect(await Promise.race([pending, timeout])).toBe('ran')
     expect(existsSync(`${p}.lock`)).toBe(false)
   })
 
+  // A pid is only meaningful on the host that recorded it. On a home directory shared over NFS, a
+  // live holder's pid usually does not exist here: taking its lock over would present one refresh
+  // token twice, which the OP treats as reuse and answers by revoking the grant.
+  test.each([
+    ['taken on another host', () => `${hostname()}-elsewhere:${exitedPid()}\n`],
+    ['in the older bare-pid form, which names no host', () => `${exitedPid()}\n`],
+  ])('does not take over a fresh lock %s whose pid does not exist here, until it is stale', async (_name, content) => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    const lock = `${p}.lock`
+    writeFileSync(lock, content())
+    let ran = false
+    let waits = 0
+    const pending = withCredentialsLock(p, async () => { ran = true }, {
+      staleMs: 60_000, pollMs: 5, notify: () => {}, onWait: () => { waits++ },
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(ran).toBe(false)
+    expect(waits).toBeGreaterThan(1)
+    expect(existsSync(lock)).toBe(true)
+    // Once older than staleMs, the age check takes it over.
+    const old = new Date(Date.now() - 10 * 60_000)
+    utimesSync(lock, old, old)
+    await pending
+    expect(ran).toBe(true)
+    expect(existsSync(lock)).toBe(false)
+  })
+
   test('waits for a fresh lock whose recorded process is alive, and says so once', async () => {
     const p = tempStore()
     writeCredentials(p, cred('https://a.test', 't'))
-    writeFileSync(`${p}.lock`, `${process.pid}\n`)
+    writeFileSync(`${p}.lock`, `${hostname()}:${process.pid}\n`)
     const said: string[] = []
     let ran = false
     let waits = 0
