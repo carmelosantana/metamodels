@@ -99,7 +99,7 @@ docker rm -f mm-pg mm-redis
 
 ## Deploy gotchas
 
-- **Trusted reverse proxy for the login throttle.** The sign-in throttle (in the auth service) keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
+- **Trusted reverse proxy for the login throttle.** The sign-in throttle (in the auth service) keys on the first `X-Forwarded-For` hop, which is client-spoofable unless a trusted proxy overwrites it. The IP address the CLI approval page shows for the requesting machine is that same hop, so it is only as trustworthy as the proxy. Terminate at a proxy that sets `X-Forwarded-For` to the real client IP. The throttle is also in-memory per-process — a multi-node deploy needs a shared store (reuse the data-plane Redis limiter concept).
 - **Typecheck needs a build first.** Control-plane `tsc -b` depends on `.next/types` produced by `next build`/`next typegen`; a cold clone must build the app before typechecking it. (Enforced in Plan 6b CI.)
 - **Base images are digest-pinned; refresh them deliberately.** The Node base (`docker/Dockerfile`) and the `postgres:16-bookworm` / `redis:7-bookworm` services (compose files) are pinned by `@sha256:` for reproducible, tamper-evident builds. Pinned digests don't receive upstream security patches automatically — re-bump each on a CVE or on a quarterly cadence via `docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'`.
 
