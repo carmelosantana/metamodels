@@ -1,4 +1,4 @@
-import { escapeHtml, page } from './views.js'
+import { escapeHtml, page, switchAccountPage } from './views.js'
 
 /**
  * The device grant's browser pages (RFC 8628 §3.3), in the same shell and under the same CSP as
@@ -100,20 +100,7 @@ ${withoutInlineHandlers(form)}
 <button class="secondary" type="submit" form="op.deviceConfirmForm" name="abort" value="yes">Cancel</button>`)
 }
 
-/**
- * Shown by `deviceSwitchAccountMiddleware`, only on a device resume where oidc-provider has just
- * refused to continue as the account that signed in, because this browser's OP session holds a
- * different one. oidc-provider handles that case by ending the old session first: the browser posts
- * `logout=yes` and the library's xsrf token to its logout-confirm endpoint, which redirects back to
- * the device flow, now as the new account. The library sends that POST from an auto-submitting
- * script page, which our CSP blocks. This page is the same form, with a button and an explanation.
- */
+/** The switch on the device flow's resume (`GET /device/:uid`); see `switchAccountPage`. */
 export function renderSwitchAccountPage(action: string, xsrf: string): string {
-  return page('Switch account', `<h1>Switch account?</h1>
-<p>This browser is signed in to MetaModels as a different account. Continue to sign that account out here and approve the CLI as the account you just entered.</p>
-<form id="op.switchAccountForm" method="post" action="${escapeHtml(action)}">
-<input type="hidden" name="xsrf" value="${escapeHtml(xsrf)}"/>
-<input type="hidden" name="logout" value="yes"/>
-</form>
-<button autofocus type="submit" form="op.switchAccountForm">Continue</button>`)
+  return switchAccountPage(action, xsrf, 'approve the CLI as the account you just entered')
 }

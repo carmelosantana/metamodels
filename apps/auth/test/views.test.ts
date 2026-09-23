@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
-  AUTH_CSS, authCsp, escapeHtml, renderLoginPage, renderLogoutPage, renderMessagePage,
+  AUTH_CSS, authCsp, escapeHtml, renderConsoleSwitchAccountPage, renderLoginPage, renderLogoutPage,
+  renderMessagePage, switchAccountPage,
 } from '../src/views.js'
 
 function directives(csp: string): Record<string, string[]> {
@@ -16,6 +17,7 @@ const ALL_PAGES = [
   renderLoginPage({ uid: 'u1', email: 'a@x.io', error: 'bad' }),
   renderMessagePage('Title', 'Message'),
   renderLogoutPage('<form id="op.logoutForm" method="post" action="/session/end/confirm"></form>'),
+  renderConsoleSwitchAccountPage('/session/end/confirm', 'abc123'),
 ]
 
 describe('escapeHtml', () => {
@@ -59,6 +61,31 @@ describe('renderMessagePage and renderLogoutPage', () => {
     const html = renderLogoutPage(form)
     expect(html).toContain(form)
     expect(html).toContain('form="op.logoutForm" value="yes" name="logout">Sign out</button>')
+  })
+})
+
+describe('switchAccountPage', () => {
+  test('explains the switch and posts the logout step with its xsrf token behind a visible button', () => {
+    const html = switchAccountPage('http://op.test/session/end/confirm', 'abc123', 'do the next thing')
+    expect(html).toContain('<h1>Switch account?</h1>')
+    expect(html).toContain('Continue to sign that account out here and do the next thing.</p>')
+    expect(html).toContain('<form id="op.switchAccountForm" method="post" action="http://op.test/session/end/confirm">')
+    expect(html).toContain('<input type="hidden" name="xsrf" value="abc123"/>')
+    expect(html).toContain('<input type="hidden" name="logout" value="yes"/>')
+    expect(html).toContain('<button autofocus type="submit" form="op.switchAccountForm">Continue</button>')
+  })
+
+  test('escapes every value', () => {
+    const html = switchAccountPage('/x"><script>', '"><script>', '<script>')
+    expect(html).not.toMatch(/<script/i)
+    expect(html).toContain('action="/x&quot;&gt;&lt;script&gt;"')
+  })
+
+  test('the console\'s page continues to the sign-in', () => {
+    const html = renderConsoleSwitchAccountPage('/session/end/confirm', 'abc123')
+    expect(html).toContain('<h1>Switch account?</h1>')
+    expect(html).toContain('Continue to sign that account out here and sign in as the account you just entered.</p>')
+    expect(html).toContain('<input type="hidden" name="xsrf" value="abc123"/>')
   })
 })
 
