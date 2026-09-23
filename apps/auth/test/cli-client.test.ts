@@ -1,7 +1,12 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { jwtVerify } from 'jose'
 import { and, eq } from 'drizzle-orm'
 import { adminApiResource, CLI_CLIENT_ID, oidcPayload } from '@metamodels/schema'
+import { main } from '../../cli/src/commands.js'
+import { credentialsPath, readCredentials } from '../../cli/src/credentials.js'
 import {
   deviceLogin, refresh, revokeRefreshToken, SignInAgainError, type OpDeps,
 } from '../../cli/src/device.js'
@@ -11,8 +16,9 @@ import {
 } from './helpers/flow.js'
 
 /**
- * The admin CLI's OP calls (`apps/cli/src/device.ts`) against this real OP, not a stub: the
- * parameters the CLI's own tests pin are the ones that actually get a resource-bound JWT here.
+ * The admin CLI's OP calls (`apps/cli/src/device.ts`, and `mm login` through `main`) against this
+ * real OP, not a stub: the parameters the CLI's own tests pin are the ones that actually get a
+ * resource-bound JWT here, and a revocation ends exactly the sign-in it names.
  */
 
 const T = 30_000
@@ -116,6 +122,33 @@ describe('the CLI against the OP', () => {
     expect(renewed.refreshToken).not.toBe(second.refreshToken)
     await expect(refresh({ issuer, resource: ADMIN, refreshToken: firstRenewed.refreshToken! }))
       .rejects.toThrow(/invalid_grant/)
+  }, T)
+
+  test('`mm login` again in the same browser revokes the sign-in it replaces, and the new one keeps working', async () => {
+    op = await startTestOp()
+    await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const issuer = op.issuer
+    // CONSOLE_URL is plain http to a host that is not loopback, hence the opt-in.
+    const env = {
+      XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'mm-cli-')),
+      METAMODELS_ISSUER: issuer, METAMODELS_CONSOLE_URL: CONSOLE_URL, METAMODELS_ALLOW_INSECURE_HTTP: '1',
+    }
+    const path = credentialsPath(env)
+    const jar = new CookieJar()
+    const err: string[] = []
+    const mmLogin = () => main(['login'], { env, stdout: () => {}, stderr: (s) => { err.push(s) }, op: approvingIn(jar) })
+
+    expect(await mmLogin()).toBe(0)
+    const replaced = readCredentials(path, issuer)!.refreshToken!
+    expect(await mmLogin()).toBe(0)
+    const current = readCredentials(path, issuer)!.refreshToken!
+    expect(current).not.toBe(replaced)
+    expect(err.join('')).not.toMatch(/could not revoke/)
+
+    // The replaced token was revoked at the OP; the new sign-in was not.
+    await expect(refresh({ issuer, resource: ADMIN, refreshToken: replaced })).rejects.toThrow(/invalid_grant/)
+    const renewed = await refresh({ issuer, resource: ADMIN, refreshToken: current })
+    expect(renewed.refreshToken).not.toBe(current)
   }, T)
 })
 

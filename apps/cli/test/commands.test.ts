@@ -350,6 +350,40 @@ describe('main: login', () => {
     expect(w.op.requests.find((r) => r.path === '/device/auth')!.form.scope).toBe('openid offline_access read')
   })
 
+  test('revokes the refresh token it replaces, after storing the new one', async () => {
+    const w = await loginWorld()
+    w.signIn()
+    let storedAtRevocation: string | undefined
+    w.op.on('POST /token/revocation', () => {
+      storedAtRevocation = readCredentials(w.path, w.op.url)?.refreshToken
+      return { status: 200, text: '' }
+    })
+    expect(await w.run('login')).toBe(0)
+    const revoke = w.op.requests.filter((r) => r.path === '/token/revocation')
+    expect(revoke.map((r) => r.form)).toEqual([{ token: 'rt-1', token_type_hint: 'refresh_token', client_id: CLI_CLIENT_ID }])
+    expect(storedAtRevocation).toBe('rt-new-secret')
+    expect(readCredentials(w.path, w.op.url)?.refreshToken).toBe('rt-new-secret')
+    expect(w.stderr()).not.toContain('rt-1')
+  })
+
+  test('revokes nothing when it replaces no sign-in', async () => {
+    const w = await loginWorld()
+    w.op.on('POST /token/revocation', () => ({ status: 200, text: '' }))
+    expect(await w.run('login')).toBe(0)
+    expect(w.op.requests.some((r) => r.path === '/token/revocation')).toBe(false)
+  })
+
+  test('keeps the new sign-in when the OP cannot revoke the old one, and says so', async () => {
+    const w = await loginWorld()
+    w.signIn()
+    w.op.on('POST /token/revocation', () => ({ status: 503, text: '' }))
+    expect(await w.run('login')).toBe(0)
+    expect(w.op.requests.some((r) => r.path === '/token/revocation')).toBe(true)
+    expect(readCredentials(w.path, w.op.url)?.refreshToken).toBe('rt-new-secret')
+    expect(w.stderr()).toMatch(/could not revoke the previous sign-in/)
+    expect(w.stderr()).not.toContain('rt-1')
+  })
+
   test('refuses a scope that is not a capability, before contacting the OP', async () => {
     const w = await loginWorld()
     expect(await w.run('login', '--scope', 'read,admin')).toBe(2)

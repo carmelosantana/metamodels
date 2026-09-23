@@ -267,12 +267,20 @@ async function login(rest: string[], values: Values, io: MainIo, insecure: boole
     { ...io.op, allowInsecureHttp: insecure, print: (line) => io.stderr(`${line}\n`) },
   )
   const path = credentialsPath(io.env)
-  // Under the lock, so a refresh running in another process cannot interleave with this write.
-  // The refresh token this replaces is NOT revoked: when both logins were approved from the same
-  // browser session they share one grant at the OP, and revoking the old token would end the new
-  // sign-in too (apps/auth/test/cli-client.test.ts). It stays valid there until it expires.
-  await withCredentialsLock(path, async () => writeCredentials(path, cred), lockOptions(io))
-  io.stderr(`Signed in to ${issuer}.\n`)
+  // Under the lock, so a refresh running in another process cannot interleave with this write or
+  // rotate the replaced token between our read and its revocation.
+  const revoked = await withCredentialsLock(path, async () => {
+    const replaced = readCredentials(path, issuer)?.refreshToken
+    writeCredentials(path, cred)
+    // Then revoke the refresh token this replaces. Best effort: a failure is reported and the new
+    // sign-in kept. At our OP every device approval has its own grant, so this ends only the
+    // replaced sign-in, not the new one.
+    if (replaced === undefined || replaced === cred.refreshToken) return null
+    return revokeRefreshToken({ issuer, refreshToken: replaced }, { ...io.op, allowInsecureHttp: insecure })
+  }, lockOptions(io))
+  io.stderr(revoked === false
+    ? `Signed in to ${issuer}, but could not revoke the previous sign-in there: its refresh token stays valid until it expires.\n`
+    : `Signed in to ${issuer}.\n`)
   io.stdout(`${JSON.stringify({ issuer, console: consoleUrl, scope: cred.scope }, null, 2)}\n`)
   return 0
 }
