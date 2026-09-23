@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, decodeJwt, errors as joseErrors, jwtVerify, type RemoteJWKSet } from 'jose'
-import { adminApiResource, CAPABILITIES, type Capability } from '@metamodels/schema'
+import { adminApiResource, CAPABILITIES, CLI_CLIENT_ID, type Capability } from '@metamodels/schema'
 import { loadOidcClientConfig, onOrigin } from '../auth/oidc-client'
 import type { Actor, Credential } from '../auth/authorize'
 import { loadActiveActor } from './actor'
@@ -210,12 +210,17 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
   const ok = typeof aud === 'string' ? aud === want : Array.isArray(aud) && aud.includes(want)
   if (!ok) throw new TokenError('audience is not the admin API resource')
 
+  // Spec A15: only the CLI, whose device flow asks for the password every time (A4), may hold an
+  // admin-API token. The OP issues it to no other client (`resourcesByClient`); this is the second
+  // lock, so a client M4 admits and lists there by mistake still gets nothing here.
+  if (payload.client_id !== CLI_CLIENT_ID) throw new TokenError('client_id is not the admin CLI')
+
   const sub = payload.sub
   if (typeof sub !== 'string' || !sub) throw new TokenError('missing sub')
   return {
     sub,
     scope: typeof payload.scope === 'string' ? payload.scope : undefined,
-    client_id: typeof payload.client_id === 'string' ? payload.client_id : undefined,
+    client_id: CLI_CLIENT_ID,
     jti: typeof payload.jti === 'string' ? payload.jti : undefined,
   }
 }

@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
-import { adminApiResource, user } from '@metamodels/schema'
+import { adminApiResource, CLI_CLIENT_ID, CONSOLE_CLIENT_ID, user } from '@metamodels/schema'
 import { authorize } from '../auth/authorize'
 import { freshDb, seedOrg } from '../test/db'
 import {
@@ -191,6 +191,28 @@ describe('verifyAdminToken', () => {
   test('extracts scope, client_id and jti onto AdminClaims', async () => {
     const claims = await verifyAdminToken(await mint({ aud: adminApiResource(CONSOLE_URL), scope: 'read' }))
     expect(claims).toMatchObject({ sub: SUBJECT, scope: 'read', client_id: 'metamodels-cli', jti: 'jti-1' })
+  })
+
+  /**
+   * Spec A15. Only the CLI reaches the admin API, through the device flow's password-every-time
+   * sign-in (A4). The OP issues no admin-API token to any other client, and this is the second
+   * lock: a correctly signed, in-date token for the right audience, minted for another client —
+   * the console, or a client M4 admits and lists by mistake — is refused.
+   */
+  test('refuses a token issued to any client but the CLI, answered with the one fixed 401', async () => {
+    const aud = adminApiResource(CONSOLE_URL)
+    expect((await verifyAdminToken(await mint({ aud, client_id: CLI_CLIENT_ID }))).client_id).toBe(CLI_CLIENT_ID)
+
+    for (const client_id of [CONSOLE_CLIENT_ID, 'some-cimd-client', '', undefined, 42]) {
+      const err = await verifyAdminToken(await mint({ aud, client_id })).catch((e: unknown) => e)
+      expect(err, `client_id ${String(client_id)}`).toBeInstanceOf(TokenError)
+      const res = problemForError(err)
+      expect(res.status).toBe(401)
+      const body = await res.text()
+      expect(JSON.parse(body).detail).toBe('the presented access token was rejected')
+      expect(body).not.toContain((err as TokenError).reason)
+      expect(body).not.toContain('client')
+    }
   })
 
   test('rejects a token signed by a key the JWKS does not publish', async () => {
