@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import {
-  closeSync, fchmodSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
+  closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
+  writeSync, type Stats,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -155,12 +156,23 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
     }
-    let held: ReturnType<typeof statSync> | undefined
-    try { held = statSync(lock) } catch { continue } // released between our open and our stat
+    // lstat, not stat: a symlink at the lock path is judged as itself, never as what it points to.
+    let held: Stats
+    try {
+      held = lstatSync(lock)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue // released between our open and our lstat
+      throw e
+    }
+    if (!held.isFile()) {
+      // Not a lock any `mm` took (it only ever creates regular files), so neither waiting nor a
+      // takeover would clear it. Left in place for the operator to look at.
+      throw new Error(`${lock} is not a regular file; remove it and run the command again`)
+    }
     if (Date.now() - held.mtimeMs > staleMs) {
       // Remove the lock we judged stale, not one a faster waiter has since created. Compared by
       // inode, which a filesystem may reuse: best effort, as above.
-      try { if (statSync(lock).ino === held.ino) unlinkSync(lock) } catch { /* already gone */ }
+      try { if (lstatSync(lock).ino === held.ino) unlinkSync(lock) } catch { /* already gone */ }
       continue
     }
     o.onWait?.()
@@ -170,6 +182,6 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
     return await fn()
   } finally {
     // If we overran staleMs and another process took the lock over, it is theirs now: leave it.
-    try { if (statSync(lock).ino === ours) unlinkSync(lock) } catch { /* already gone */ }
+    try { if (lstatSync(lock).ino === ours) unlinkSync(lock) } catch { /* already gone */ }
   }
 }

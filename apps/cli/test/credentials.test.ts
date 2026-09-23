@@ -1,4 +1,6 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -173,4 +175,22 @@ describe('withCredentialsLock', () => {
     await pending
     expect(ran).toBe(true)
   })
+
+  // A lock path holding something other than a regular file is not a lock any process here took:
+  // no amount of waiting or takeover clears it. Each case must end — with an error naming the path.
+  test.each([
+    ['a dangling symlink', (lock: string) => symlinkSync(join(lock, '..', 'nowhere'), lock)],
+    ['a directory', (lock: string) => mkdirSync(lock)],
+  ])('refuses, rather than spins on, %s at the lock path', async (_name, plant) => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    plant(`${p}.lock`)
+    let ran = false
+    await expect(withCredentialsLock(p, async () => { ran = true }, { staleMs: 10, pollMs: 5 }))
+      .rejects.toThrow(`${p}.lock is not a regular file`)
+    expect(ran).toBe(false)
+    // Left for the operator to look at, not deleted.
+    expect(lstatSync(`${p}.lock`)).toBeDefined()
+  }, 5_000)
 })
+
