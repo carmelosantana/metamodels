@@ -18,6 +18,19 @@ export async function freshDb(): Promise<TestDb> {
   return db
 }
 
+/**
+ * Empties every table the migrations created, leaving the schema and drizzle's journal in place.
+ * A `freshDb()` cold-boots PGlite (initdb inside WASM), which costs seconds of CPU and a few hundred
+ * MB it never gives back; a file with many cases builds one in `beforeAll` and resets it here in
+ * `beforeEach` (tens of ms) instead.
+ */
+export async function resetDb(db: TestDb): Promise<void> {
+  await db.$client.exec(`DO $$ BEGIN
+    EXECUTE (SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ')
+      || ' RESTART IDENTITY CASCADE' FROM pg_tables WHERE schemaname = 'public');
+  END $$`)
+}
+
 export async function seedOrg(db: TestDb, name = 'default') {
   const [o] = await db.insert(schema.org).values({ name }).returning()
   return o
