@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import type { z as z3 } from 'zod'
 import { BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
-import { saveFlockInput } from '../lib/flock-schema'
+import { saveFlockInput, UPSTREAM_AUTH_MESSAGE, UPSTREAM_AUTH_PATTERN } from '../lib/flock-schema'
 import { savePaddockInput } from '../lib/paddock-schema'
 import { saveFenceInput } from '../lib/fence-schema'
 import { createKeyInput } from '../lib/key-schema'
@@ -126,7 +126,7 @@ const saveFlockMirror = z.object({
   breed: z.enum(BREED_IDS),
   name: z.string().trim().min(1).max(120),
   baseUrl: z.string().url(),
-  upstreamAuth: z.string().trim().min(1).nullish(),
+  upstreamAuth: z.string().trim().min(1).regex(UPSTREAM_AUTH_PATTERN, UPSTREAM_AUTH_MESSAGE).nullish(),
   tlsTrust: z.boolean(),
 })
 

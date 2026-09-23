@@ -563,6 +563,13 @@ describe('each generated request body still mirrors the schema the service parse
       { breed: 'ollama', name: 'f', baseUrl: 'not-a-url', tlsTrust: true },
       { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: 'yes' },
       { id: 'not-a-uuid', breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true },
+      // The bare-token contract: a token passes, a scheme, inner whitespace or a control character does not.
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: 'sk-abc.DEF_123~+/=' },
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: ' t0ken ' },
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: 'Bearer t0ken' },
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: 't0 ken' },
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: 't0ken\r\nX: 1' },
+      { breed: 'ollama', name: 'f', baseUrl: 'http://o:11434', tlsTrust: true, upstreamAuth: 't0\u0000ken' },
     ],
     SavePaddockInput: [
       {},
