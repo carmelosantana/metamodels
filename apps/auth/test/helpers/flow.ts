@@ -19,7 +19,9 @@ export interface TestOp {
 }
 
 /** A real OP on an ephemeral port, backed by a fresh pglite database. */
-export async function startTestOp(opts: { extraClients?: ClientMetadata[] } = {}): Promise<TestOp> {
+export async function startTestOp(
+  opts: { extraClients?: ClientMetadata[]; signingKeyPem?: string; previousSigningKeyPems?: string[] } = {},
+): Promise<TestOp> {
   const db = await makeDb()
   let handler: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => { res.statusCode = 503; res.end() }
   const server = createServer((req, res) => handler(req, res))
@@ -31,12 +33,13 @@ export async function startTestOp(opts: { extraClients?: ClientMetadata[] } = {}
     consoleUrl: CONSOLE_URL,
     consoleClientSecret: CONSOLE_SECRET,
     cookieKeys: ['cookie-key-0123456789abcdef'],
-    signingKeyPem: null,
+    signingKeyPem: opts.signingKeyPem ?? null,
+    previousSigningKeyPems: opts.previousSigningKeyPems ?? [],
     allowEphemeralKey: true,
     databaseUrl: 'unused-in-tests',
     port: 0,
   }
-  handler = createProvider(cfg, db, opts).callback()
+  handler = createProvider(cfg, db, { extraClients: opts.extraClients }).callback()
   return {
     issuer,
     db,

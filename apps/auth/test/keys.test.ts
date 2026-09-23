@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { createHash, generateKeyPairSync } from 'node:crypto'
+import { createHash, createPrivateKey, generateKeyPairSync } from 'node:crypto'
 import { rsaThumbprint, signingJwks } from '../src/keys.js'
 import { rsaPemBase64 } from './helpers/keys.js'
 
@@ -33,5 +33,45 @@ describe('signingJwks', () => {
     const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }) as string
     expect(() => signingJwks(ec, false)).toThrow('must be an RSA private key')
     expect(() => signingJwks(pem(rsaPemBase64(1024)), false)).toThrow('at least 2048 bits')
+  })
+})
+
+describe('signing-key rotation overlap', () => {
+  // Distinct keys, minted at test time — no key material is ever committed. rsaPemBase64()
+  // caches per size, so a second 2048-bit key has to be generated here to get a distinct kid.
+  const lazy = <T,>(make: () => T) => { let v: T | undefined; return () => (v ??= make()) }
+  const freshPem = (type: 'rsa' | 'ed25519') =>
+    (type === 'rsa' ? generateKeyPairSync('rsa', { modulusLength: 2048 }) : generateKeyPairSync('ed25519'))
+      .privateKey.export({ type: 'pkcs8', format: 'pem' }) as string
+  const currentPem = lazy(() => pem(rsaPemBase64()))
+  const previousPem = lazy(() => freshPem('rsa'))
+  const jwkOf = (p: string) => createPrivateKey(p).export({ format: 'jwk' }) as { n: string; e: string }
+
+  test('previous keys are published after the signer, so they verify but never sign', () => {
+    const { keys } = signingJwks(currentPem(), false, [previousPem()])
+    expect(keys).toHaveLength(2)
+    // oidc-provider signs with the first match, so order is the whole mechanism.
+    expect(keys[0].kid).toBe(rsaThumbprint(jwkOf(currentPem())))
+    expect(keys[1].kid).toBe(rsaThumbprint(jwkOf(previousPem())))
+    expect(keys[0].kid).not.toBe(keys[1].kid)
+  })
+
+  test('a previous key gets the same validation as the signer', () => {
+    expect(() => signingJwks(currentPem(), false, [pem(rsaPemBase64(1024))])).toThrow(/at least 2048 bits/)
+    expect(() => signingJwks(currentPem(), false, [freshPem('ed25519')])).toThrow(/must be an RSA private key/)
+    // ...and the same call with a well-formed previous key is accepted, so the throws above
+    // are the validation rejecting the key, not the call shape being wrong.
+    expect(signingJwks(currentPem(), false, [previousPem()]).keys).toHaveLength(2)
+  })
+
+  test("an empty previous list publishes exactly one key (today's behaviour)", () => {
+    expect(signingJwks(currentPem(), false, []).keys).toHaveLength(1)
+    expect(signingJwks(currentPem(), false).keys).toHaveLength(1)
+  })
+
+  test('an ephemeral signer can still carry previous keys', () => {
+    const { keys } = signingJwks(null, true, [previousPem()])
+    expect(keys).toHaveLength(2)
+    expect(keys[1].kid).toBe(rsaThumbprint(jwkOf(previousPem())))
   })
 })

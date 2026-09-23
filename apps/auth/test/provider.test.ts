@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { jwtVerify } from 'jose'
+import { decodeProtectedHeader, jwtVerify } from 'jose'
+import { createPrivateKey, generateKeyPairSync } from 'node:crypto'
 import { CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { seedUser } from './helpers/db.js'
+import { rsaThumbprint } from '../src/keys.js'
 import { authorize, exchangeCode, opJwks, send, startTestOp, type TestOp } from './helpers/flow.js'
 
 const T = 20_000
@@ -171,5 +173,37 @@ describe('auth service — authorization code flow', () => {
     if (out.kind !== 'redirect') throw new Error('expected an error redirect to the client')
     expect(out.url.searchParams.get('error')).toBe('access_denied')
     expect(out.url.searchParams.get('code')).toBeNull()
+  }, T)
+})
+
+describe('auth service — signing-key rotation overlap', () => {
+  const rsaPem = () =>
+    generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }) as string
+  const kidOf = (pem: string) => rsaThumbprint(createPrivateKey(pem).export({ format: 'jwk' }) as { e: string; n: string })
+
+  test('the OP publishes a previous key for verification but keeps signing with the current one', async () => {
+    const currentPem = rsaPem()
+    const previousPem = rsaPem()
+    op = await startTestOp({ signingKeyPem: currentPem, previousSigningKeyPems: [previousPem] })
+
+    // Both keys are published, signer first.
+    const jwks = (await (await fetch(`${op.issuer}/jwks`)).json()) as { keys: { kid: string }[] }
+    expect(jwks.keys.map((k) => k.kid)).toEqual([kidOf(currentPem), kidOf(previousPem)])
+
+    // And a real token exchange is signed by the *current* key, never the retired one — this is
+    // what makes the ordering above load-bearing rather than cosmetic.
+    const id = await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    const out = await authorize(op, { email: 'admin@x.io', password: 'hunter2hunter2' })
+    if (out.kind !== 'redirect') throw new Error(`expected a redirect, got ${out.status}`)
+    const token = await exchangeCode(op, out.url.searchParams.get('code')!, out.verifier)
+    expect(token.status).toBe(200)
+    const idToken = token.json.id_token as string
+    expect(decodeProtectedHeader(idToken).kid).toBe(kidOf(currentPem))
+    expect(decodeProtectedHeader(idToken).kid).not.toBe(kidOf(previousPem))
+    // The published set still verifies it, so the previous key's presence breaks nothing.
+    const { payload } = await jwtVerify(idToken, await opJwks(op), {
+      issuer: op.issuer, audience: CONSOLE_CLIENT_ID, algorithms: ['RS256'],
+    })
+    expect(payload.sub).toBe(id)
   }, T)
 })

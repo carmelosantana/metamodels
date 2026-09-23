@@ -33,7 +33,8 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_INTERNAL_URL` | control-plane | How the console reaches the sign-in service server-to-server: `http://auth:3100` in compose. Defaults to `OIDC_ISSUER`. |
 | `CONSOLE_CLIENT_SECRET` | auth, control-plane | ≥16 chars, the same value in both. `openssl rand -hex 32`. |
 | `OIDC_COOKIE_KEYS` | auth | Cookie-signing keys, comma-separated, newest first, each ≥16 chars. |
-| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Changing it invalidates issued tokens but signs nobody out — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
+| `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Rotate it through `OIDC_PREVIOUS_SIGNING_KEYS` so issued tokens survive — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
+| `OIDC_PREVIOUS_SIGNING_KEYS` | auth | Optional. Comma-separated retired signing keys, same format and same rules as `OIDC_SIGNING_KEY`. Published for verification only, after the signer, so they never sign a new token. This is the rotation overlap window. |
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
@@ -161,7 +162,7 @@ error rather than silently booting with a guessable credential:
 | `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
-| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Changing it invalidates issued tokens; it does **not** sign anyone out |
+| `OIDC_SIGNING_KEY` | signs every token (base64 of an RSA PKCS#8 PEM). Rotate it via `OIDC_PREVIOUS_SIGNING_KEYS`, or issued tokens stop verifying at once; it does **not** sign anyone out |
 
 Everything else defaults:
 
@@ -218,11 +219,21 @@ Keep at least one active admin — deactivating the last one locks everybody out
 
 - **`OIDC_COOKIE_KEYS`** — prepend a new key (`<new>,<old>`) and redeploy: new cookies are
   signed with it and old ones still verify. Drop the old key after a day.
-- **`OIDC_SIGNING_KEY`** — replacing it invalidates every ID and access token already issued.
-  The sign-in service publishes only the current key, so there is no overlap window: a token
-  signed with the old key fails verification immediately. It does **not** sign anyone out.
-  Console sessions are HMAC-signed with `SESSION_SECRET`, and sign-in service sessions are
-  database rows behind cookies signed with `OIDC_COOKIE_KEYS`; neither depends on this key.
+- **`OIDC_SIGNING_KEY`** — rotate it with an overlap window, or every ID and access token
+  already issued stops verifying at once:
+
+  1. Copy the current `OIDC_SIGNING_KEY` value into `OIDC_PREVIOUS_SIGNING_KEYS`.
+  2. Set `OIDC_SIGNING_KEY` to the new key.
+  3. Redeploy the sign-in service. It publishes both keys in its JWKS, the new one first, so new
+     tokens are signed with the new key while in-flight tokens still verify against the old one.
+  4. Once the window has passed — the longest access-token lifetime, plus the console's JWKS cache
+     — remove the entry from `OIDC_PREVIOUS_SIGNING_KEYS` and redeploy again. Only now does the
+     old key stop verifying.
+
+  Replacing `OIDC_SIGNING_KEY` without step 1 is the *deliberate* way to invalidate issued tokens
+  immediately. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
+  `SESSION_SECRET`, and sign-in service sessions are database rows behind cookies signed with
+  `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
 

@@ -121,6 +121,9 @@ services:
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?set CONSOLE_CLIENT_SECRET — run scripts/new-stack.sh}
       OIDC_COOKIE_KEYS: ${OIDC_COOKIE_KEYS:?set OIDC_COOKIE_KEYS — run scripts/new-stack.sh}
       OIDC_SIGNING_KEY: ${OIDC_SIGNING_KEY:?set OIDC_SIGNING_KEY — run scripts/new-stack.sh}
+      # Retired signing keys, published for verification only — the rotation overlap window.
+      # Optional: unset means no overlap, which is only safe when you are not rotating.
+      OIDC_PREVIOUS_SIGNING_KEYS: ${OIDC_PREVIOUS_SIGNING_KEYS:-}
       # Hard-wired, not a variable: a deployed stack must never mint a throwaway signing key.
       OIDC_ALLOW_EPHEMERAL_KEY: "false"
       AUTH_PORT: 3100

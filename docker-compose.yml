@@ -88,6 +88,8 @@ services:
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET}
       OIDC_COOKIE_KEYS: ${OIDC_COOKIE_KEYS}
       OIDC_SIGNING_KEY: ${OIDC_SIGNING_KEY}
+      # Retired signing keys, published for verification only — the rotation overlap window.
+      OIDC_PREVIOUS_SIGNING_KEYS: ${OIDC_PREVIOUS_SIGNING_KEYS:-}
       OIDC_ALLOW_EPHEMERAL_KEY: ${OIDC_ALLOW_EPHEMERAL_KEY:-false}
       # Pinned like the data-plane's PORT: the healthcheck below hardcodes 3100. Move the host side.
       AUTH_PORT: 3100

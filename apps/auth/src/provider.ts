@@ -34,7 +34,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     adapter: pgAdapterFactory(db),
     clients: [consoleClient(cfg), ...(opts.extraClients ?? [])],
     cookies: { keys: cfg.cookieKeys },
-    jwks: signingJwks(cfg.signingKeyPem, cfg.allowEphemeralKey),
+    jwks: signingJwks(cfg.signingKeyPem, cfg.allowEphemeralKey, cfg.previousSigningKeyPems),
     findAccount: makeFindAccount(db),
     // OAuth 2.1: PKCE for every client, confidential ones included.
     pkce: { required: () => true },
