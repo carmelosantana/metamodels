@@ -141,6 +141,9 @@ takes no wrapper and no compose flags, and it runs only in the throwaway compose
   environment. It reaches `curl` on stdin. The script's own process keeps the environment it was
   started with, so `ps e` on that one PID still shows it. The script prints status codes only, never
   the token. Do not run it under `bash -x`.
+- Every `curl` call starts `curl -q -g`. `-q` has to be the first argument to stop curl reading a
+  `~/.curlrc`, where `verbose` would print the `Authorization` header. `-g` turns off URL globbing,
+  so a URL cannot expand into several and send the token to each.
 
 What the label check does not cover: which Docker daemon `docker` talks to, and what the env file
 points the container at. Use the throwaway stack's own env file.

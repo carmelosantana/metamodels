@@ -65,9 +65,13 @@ fi
 [[ -n $aud_token ]] || die "set AUD_ACCESS_TOKEN to an access token for $original (it is never printed)"
 [[ $aud_token =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]] || die "AUD_ACCESS_TOKEN is not a compact JWT"
 
+# Every curl call starts `curl -q -g`. `-q` must be the first argument to stop curl reading a
+# .curlrc, which could, for example, turn on `verbose` and print the Authorization header. `-g` turns
+# off URL globbing, so `{a,b}` or `[1-2]` in a URL cannot make one call send the token to two URLs.
+#
 # The port must be free: curl exits 7 only when nothing accepts the connection.
 set +e
-curl -s -o /dev/null --max-time 3 "http://127.0.0.1:${port}/"
+curl -q -g -s -o /dev/null --max-time 3 "http://127.0.0.1:${port}/"
 free=$?
 set -e
 [[ $free -eq 7 ]] || die "refusing: something already answers on 127.0.0.1:${port}"
@@ -77,7 +81,7 @@ set -e
 # environment.
 status_of() {
   printf 'Authorization: Bearer %s\n' "$aud_token" \
-    | curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -H @- "$1/api/admin/v1/flocks"
+    | curl -q -g -sS -o /dev/null -w '%{http_code}' --max-time 20 -H @- "$1/api/admin/v1/flocks"
 }
 
 # --- The second control plane -------------------------------------------------------------------------
@@ -103,7 +107,7 @@ label=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}
 echo "aud-isolation: ${CONTAINER} is in compose project mm-m2-e2e"
 
 deadline=$(( SECONDS + HEALTH_TIMEOUT_S ))
-until curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${port}/api/healthz" 2>/dev/null; do
+until curl -q -g -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${port}/api/healthz" 2>/dev/null; do
   (( SECONDS < deadline )) || die "${CONTAINER} did not answer /api/healthz within ${HEALTH_TIMEOUT_S}s"
   sleep 2
 done

@@ -17,7 +17,13 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 script="$here/aud-isolation.sh"
 repo_compose=$(realpath -e -- "$(git -C "$here" rev-parse --show-toplevel)/docker-compose.yml")
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# shellcheck disable=SC2317  # invoked by the EXIT trap
+cleanup() {
+  local pid
+  for pid in "$work"/log-*/stub.pid; do [[ -f $pid ]] && kill "$(cat "$pid")" 2>/dev/null; done
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 readonly TOKEN='eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl'
 readonly PORT=38123
@@ -28,7 +34,13 @@ cat >"$work/bin/docker" <<'EOF'
 { printf 'docker'; printf ' %q' "$@"; printf '\n'; } >>"$FAKE_LOG/calls.log"
 env >>"$FAKE_LOG/child-env.log"
 case $1 in
-  compose) echo 0123456789ab ;;
+  compose)
+    # FAKE_STUB_PORT: stand in for the started control plane with a stub HTTP server (real-curl case).
+    if [[ -n ${FAKE_STUB_PORT:-} ]]; then
+      nohup node "$FAKE_STUB_JS" "$FAKE_STUB_PORT" "$FAKE_LOG/statuses" >"$FAKE_LOG/stub.out" 2>&1 &
+      echo $! >"$FAKE_LOG/stub.pid"
+    fi
+    echo 0123456789ab ;;
   inspect) [[ ${FAKE_INSPECT_FAIL:-0} == 1 ]] && { echo 'Error: No such object' >&2; exit 1; }
            printf '%s\n' "$FAKE_LABEL" ;;
 esac
@@ -47,6 +59,24 @@ case $url in
 esac
 EOF
 chmod +x "$work/bin/docker" "$work/bin/curl"
+# The same fake docker with the real curl, for what curl itself reads and prints.
+mkdir -p "$work/realbin"
+ln -s "$work/bin/docker" "$work/realbin/docker"
+# Answers /api/healthz with 200, and /api/admin/v1/flocks with the next status in the statuses file.
+cat >"$work/stub.js" <<'EOF'
+const http = require('node:http')
+const fs = require('node:fs')
+const [port, statusFile] = process.argv.slice(2)
+http.createServer((req, res) => {
+  if (req.url === '/api/healthz') return res.writeHead(200).end('ok')
+  if (req.url === '/api/admin/v1/flocks') {
+    const [next = '500', ...rest] = fs.readFileSync(statusFile, 'utf8').split('\n').filter(Boolean)
+    fs.writeFileSync(statusFile, rest.join('\n'))
+    return res.writeHead(Number(next)).end()
+  }
+  res.writeHead(404).end()
+}).listen(Number(port), '127.0.0.1')
+EOF
 
 printf 'COMPOSE_PROJECT_NAME=metamodels\nDATABASE_URL=postgres://x@postgres/x\n' >"$work/e2e.env"
 # A file whose name is a project flag: it must reach compose as part of one `--env-file=` argument.
@@ -71,7 +101,7 @@ run_case() {
   : >"$log/calls.log"; : >"$log/child-env.log"; : >"$log/curl-stdin.log"
   tr ' ' '\n' <<<"$statuses" >"$log/statuses"
   set +e
-  (cd "$work/cwd" && env PATH="$work/bin:$PATH" FAKE_LOG="$log" FAKE_LABEL="$label" \
+  (cd "$work/cwd" && env PATH="${case_bin:-$work/bin}:$PATH" FAKE_LOG="$log" FAKE_LABEL="$label" \
     AUD_ACCESS_TOKEN="$TOKEN" "${envs[@]}" bash "$script" "$@") >"$log/out" 2>&1
   code=$?
   set -e
@@ -119,6 +149,15 @@ check_no_token_leak() {
 }
 
 expect_code() { [[ $code -eq $1 ]] && ok "exit $1" || { fail "exit $code, want $1"; sed 's/^/    | /' "$log/out"; }; }
+# Every curl call starts `curl -q -g`: `-q` first, so no .curlrc is read; `-g`, so no URL globbing.
+check_curl_flags() {
+  local n=0 bad=0 line
+  while IFS= read -r line; do
+    n=$((n + 1))
+    [[ $line == 'curl -q -g '* ]] || { bad=$((bad + 1)); fail "curl call without a leading -q -g: $line"; }
+  done < <(curl_calls)
+  ((n > 0 && bad == 0)) && ok "all $n curl calls start with -q -g" || true
+}
 expect_no_docker() { [[ -z $(docker_calls) ]] && ok "no docker call" || fail "docker was called: $(docker_calls)"; }
 
 # ---------------------------------------------------------------------------------------------------
@@ -136,6 +175,7 @@ want_docker=$(printf '%s\n' \
   || fail "docker calls differ:"$'\n'"$(docker_calls)"
 [[ $(grep -c -- ' -H @-' "$log/calls.log") -eq 3 ]] && ok "three token requests (anchor, second, anchor again)" || fail "token requests != 3"
 [[ $(sort -u "$log/curl-stdin.log") == "Authorization: Bearer $TOKEN" ]] && ok "the token went to curl on stdin" || fail "curl stdin differs"
+check_curl_flags
 
 case_name=label; echo "# the container is in compose project 'metamodels'"
 run_case metamodels '200 401 200' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
@@ -188,6 +228,28 @@ grep -q 'not 200 both times' "$log/out" && ok "says the anchor failed" || fail "
 case_name=accepted; echo "# the second console accepts the token"
 run_case mm-m2-e2e '200 200 200' -- "$repo_compose" "$work/e2e.env" "$PORT" http://console.example.test
 expect_code 1
+
+case_name=curlrc; echo "# the real curl, a ~/.curlrc of 'verbose', and a stub server as both consoles"
+curlhome="$work/curlhome"; mkdir -p "$curlhome"; echo verbose >"$curlhome/.curlrc"
+stub_port=38124
+# Control: this .curlrc is live, so curl run without -q prints verbose lines.
+control=$(HOME=$curlhome CURL_HOME=$curlhome XDG_CONFIG_HOME=$curlhome \
+  curl -s -o /dev/null --max-time 2 http://127.0.0.1:1/ 2>&1 || true)
+if grep -q '^\*' <<<"$control"; then
+  ok "control: without -q, this .curlrc makes curl verbose"
+else
+  fail "control: the .curlrc had no effect, so this case proves nothing"
+fi
+case_bin="$work/realbin" run_case mm-m2-e2e '200 401 200' \
+  HOME="$curlhome" CURL_HOME="$curlhome" XDG_CONFIG_HOME="$curlhome" \
+  FAKE_STUB_PORT=$stub_port FAKE_STUB_JS="$work/stub.js" -- \
+  "$repo_compose" "$work/e2e.env" "$stub_port" "http://127.0.0.1:$stub_port"
+expect_code 0
+if grep -qF "$TOKEN" "$log/out"; then
+  fail "the token is in the script's output:"; grep -F "$TOKEN" "$log/out" | sed 's/^/    | /'
+else
+  ok "the token is not in the script's output"
+fi
 
 echo
 if ((failures)); then echo "aud-isolation.test: $failures failure(s)"; exit 1; fi
