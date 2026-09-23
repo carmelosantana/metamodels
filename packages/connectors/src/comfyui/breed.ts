@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { defineBreed } from '../breed.js'
+import { upstreamAuthHeaders } from '../upstream-auth.js'
 import type {
   Breed,
   BreedHandleResult,
@@ -144,7 +145,7 @@ export const comfyuiBreed: Breed<ComfyConstraint> = defineBreed<ComfyConstraint>
 
   async health(flock) {
     try {
-      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/system_stats`)
+      const res = await fetch(`${flock.baseUrl.replace(/\/$/, '')}/system_stats`, { headers: upstreamAuthHeaders(flock) })
       return { ok: res.ok }
     } catch (e) {
       return { ok: false, detail: String(e) }

@@ -22,13 +22,13 @@ describe('ollamaBreed.listModels', () => {
     expect(r).toEqual({ ok: true, models: ['llama3.1:8b', 'qwen2.5-coder:0.5b'] })
   })
 
-  test('sends Authorization when upstreamAuth is set', async () => {
+  test('sends the bare upstreamAuth token as `Authorization: Bearer <token>`', async () => {
     const seen: Record<string, string> = {}
     stubFetch(async (_url, init) => {
       Object.assign(seen, Object.fromEntries(new Headers(init?.headers).entries()))
       return new Response(JSON.stringify({ models: [] }), { status: 200 })
     })
-    await ollamaBreed.listModels!({ ...flock, upstreamAuth: 'Bearer t0ken' })
+    await ollamaBreed.listModels!({ ...flock, upstreamAuth: 't0ken' })
     expect(seen['authorization']).toBe('Bearer t0ken')
   })
 
