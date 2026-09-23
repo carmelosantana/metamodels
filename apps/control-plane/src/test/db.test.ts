@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { sql } from 'drizzle-orm'
 import { flock, org } from '@metamodels/schema'
-import { freshDb, resetDb, seedOrg, type TestDb } from './db'
+import { freshDb, resetDb, seedOrg, sharedDb, type TestDb } from './db'
 
 let db: TestDb
 beforeAll(async () => { db = await freshDb() })
@@ -23,4 +23,20 @@ test('resetDb empties every public table and keeps the migrated schema', async (
   expect(await count('org')).toBe(1)
   const { rows } = await db.execute<{ n: number }>(sql`select count(*)::int as n from drizzle.__drizzle_migrations`)
   expect(rows[0].n).toBeGreaterThan(0)
+})
+
+describe('sharedDb', () => {
+  const shared = sharedDb()
+  let first: TestDb
+
+  test('hands a case the file database, migrated and writable', async () => {
+    first = shared()
+    await seedOrg(first)
+    expect((await first.select().from(org)).length).toBe(1)
+  })
+
+  test('hands the next case the same database, emptied', async () => {
+    expect(shared()).toBe(first)
+    expect((await shared().select().from(org)).length).toBe(0)
+  })
 })
