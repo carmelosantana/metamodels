@@ -1,7 +1,7 @@
 import { ZodError } from 'zod'
 import { ForbiddenError } from '../auth/authorize'
 import { JWKS_COOLDOWN_MS, KeySetUnavailableError, TokenError } from './admin-token'
-import { NotFoundError } from './flocks-service'
+import { CredentialRebindError, NotFoundError } from './flocks-service'
 import { SlugTakenError } from './paddocks-service'
 
 /**
@@ -134,6 +134,7 @@ export function problemForError(e: unknown): Response {
   }
   if (e instanceof TokenError) return unauthorized('the presented access token was rejected')
   if (e instanceof SlugTakenError) return problem(409, 'Conflict', e.message)
+  if (e instanceof CredentialRebindError) return problem(409, 'Conflict', e.message)
   /**
    * `detail` deliberately does NOT name the body. `ZodError` reaches here from three places now —
    * `readJsonObject` (a body), `parsePathId` (a path segment) and the usage reports' query schemas

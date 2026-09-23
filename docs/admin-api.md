@@ -250,8 +250,11 @@ All paths are relative to `$CONSOLE_URL/api/admin/v1`.
 The request and response shapes, and each usage report's query parameters, are in the OpenAPI
 document. A resource in another org is a `404`, the same as one that does not exist.
 
-⚠ A flock's `upstreamAuth`, the credential MetaModels sends to your AI server, is returned in
-plain text to any token with `read`. Treat flock listings as secrets.
+A flock's `upstreamAuth`, the credential MetaModels sends to your AI server, is **write-only**. It
+is sealed at rest and no response returns it; a flock carries `hasUpstreamAuth` instead. On
+`PUT /flocks/{id}`, omitting `upstreamAuth` keeps the stored credential, `null` clears it and a
+string replaces it. Changing `baseUrl`, or turning `tlsTrust` on, while a credential is stored and
+`upstreamAuth` is omitted is a `409`: send the credential again, or `null`, in the same request.
 
 ### Why keys are revoked, not deleted
 

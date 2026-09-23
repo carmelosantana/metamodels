@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import type { PgDatabase } from 'drizzle-orm/pg-core'
 import { apiKey, fence, flock, keyPaddock, paddock } from '@metamodels/schema'
+import { openSealed, UnsealError, type SealKeyring, type UnsealReason } from '@metamodels/schema/sealed'
 import type { KeyOverrides, RateLimit, ResolvedKey, ResolvedPaddock } from './types.js'
 
 export interface ConfigStore {
@@ -12,7 +13,7 @@ export interface ConfigStore {
 type Db = PgDatabase<any, any, any>
 
 export class DrizzleConfigStore implements ConfigStore {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Db, private readonly ring: SealKeyring) {}
 
   async resolveKeyByHash(hash: string): Promise<ResolvedKey | null> {
     const rows = await this.db.select().from(apiKey).where(eq(apiKey.hash, hash)).limit(1)
@@ -46,6 +47,22 @@ export class DrizzleConfigStore implements ConfigStore {
     const row = rows[0]
     if (!row) return null
 
+    let upstreamAuth: string | null = null
+    let upstreamAuthError: UnsealReason | undefined
+    if (row.flock.upstreamAuthEnc !== null) {
+      try {
+        // Bound to this row: an envelope copied here from another flock or org will not open.
+        upstreamAuth = openSealed(row.flock.upstreamAuthEnc, this.ring, { orgId: row.flock.orgId, flockId: row.flock.id })
+      } catch (e) {
+        if (!(e instanceof UnsealError)) throw e
+        // Resolved, not thrown: the caller must still run the key and scope gates first, so that an
+        // unauthenticated request cannot tell this paddock apart from any other.
+        upstreamAuthError = e.reason
+        // eslint-disable-next-line no-console
+        console.error(`[config] flock ${row.flock.id}: ${e.message}`)
+      }
+    }
+
     return {
       paddockId: row.paddock.id,
       orgId: row.paddock.orgId,
@@ -54,7 +71,7 @@ export class DrizzleConfigStore implements ConfigStore {
       breedId: row.flock.breed,
       flock: {
         baseUrl: row.flock.baseUrl,
-        upstreamAuth: row.flock.upstreamAuth ?? null,
+        upstreamAuth,
         tlsTrust: row.flock.tlsTrust,
       },
       fence: {
@@ -62,6 +79,7 @@ export class DrizzleConfigStore implements ConfigStore {
         rateLimit: (row.fence?.rateLimit as RateLimit | null) ?? null,
         quota: row.fence?.quota ?? null,
       },
+      ...(upstreamAuthError ? { upstreamAuthError } : {}),
     }
   }
 }

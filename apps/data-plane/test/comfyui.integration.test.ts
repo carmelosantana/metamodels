@@ -8,7 +8,7 @@ import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { InMemoryJobStore } from '../src/jobs/job-store.js'
 import { createFakeComfyui } from './helpers/fake-comfyui.js'
-import { makeDb, type TestDb } from './helpers/seed.js'
+import { makeDb, TEST_RING, type TestDb } from './helpers/seed.js'
 
 // --- Fixtures: inline v0.3.2-shaped templates (never copy latex.pics JSON) ----
 
@@ -122,7 +122,7 @@ beforeEach(async () => {
   sink = new InMemoryMeterSink()
   fake = createFakeComfyui()
   const built = createApp({
-    configStore: new DrizzleConfigStore(db),
+    configStore: new DrizzleConfigStore(db, TEST_RING),
     rateLimiter: new InMemoryRateLimiter(),
     meterSink: sink,
     registry: buildRegistry(),

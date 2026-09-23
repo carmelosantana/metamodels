@@ -4,11 +4,12 @@ import { describe, expect, test } from 'vitest'
 import { getTableColumns } from 'drizzle-orm'
 import {
   BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES,
-  fence, flock, paddock,
+  fence, paddock,
 } from '@metamodels/schema'
 import { GENERATED_REQUEST_SCHEMAS, buildOpenApiDocument, REQUEST_BODY_MIRRORS } from './openapi'
 import type { JsonSchema, Method, OpenApiDocument, OperationObject } from './openapi'
 import { DEFAULT_LIMIT, MAX_LIMIT } from './page'
+import { flockView } from './flocks-service'
 
 /** The one accessor every suite below uses, so no test has to cast its way into the document. */
 const opAt = (doc: OpenApiDocument, path: string, method: Method): OperationObject => {
@@ -155,14 +156,19 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.QuotaRule?.properties?.dim?.enum).toEqual([...METER_DIMS])
   })
 
-  test('the one secret the API returns incidentally is flagged as loudly as the one it returns on purpose', () => {
+  test('the upstream credential is write-only: no response carries it, and the bodies say so', () => {
     const doc = buildOpenApiDocument()
-    const upstream = doc.components.schemas.Flock?.properties?.upstreamAuth?.description ?? ''
-    expect(upstream).toMatch(/plaintext/i)
-    expect(upstream).toMatch(/\bread\b/)
-    expect(upstream).toMatch(/known issue/i)
-    // Anchored against the field that already carried this weight, so "loudly" is comparative.
-    expect(doc.components.schemas.CreatedKey?.properties?.plaintext?.description).toMatch(/once/i)
+    expect(doc.components.schemas.Flock?.properties).not.toHaveProperty('upstreamAuth')
+    expect(doc.components.schemas.Flock?.properties?.hasUpstreamAuth?.type).toBe('boolean')
+    for (const [path, method] of [['/flocks', 'post'], ['/flocks/{id}', 'put']] as const) {
+      const field = bodySchemaOf(doc, path, method).properties?.upstreamAuth
+      expect(field?.writeOnly, `${method} ${path}`).toBe(true)
+    }
+    // The PUT consequence of write-only, published where a client doing GET → edit → PUT will read it.
+    const put = bodySchemaOf(doc, '/flocks/{id}', 'put').properties?.upstreamAuth?.description ?? ''
+    expect(put).toMatch(/omit/i)
+    expect(put).toMatch(/left (alone|untouched)|unchanged|keeps/i)
+    expect(put).toMatch(/`null`.*clear/i)
   })
 
   /**
@@ -718,16 +724,17 @@ describe('each generated request body still mirrors the schema the service parse
 /**
  * The response components are hand-written — a drizzle row is not a Zod schema, so there is nothing
  * to generate from. `db.select().from(t)` returns every column, so the column list IS the response
- * shape, and this is what stops a migration from silently making the document wrong.
+ * shape, and this is what stops a migration from silently making the document wrong. A flock is the
+ * exception: its service selects the `flockView` allowlist, so that is its shape.
  */
 describe('resource response schemas match the columns the handlers actually return', () => {
   const doc = buildOpenApiDocument()
   test.each([
-    ['Flock', flock],
-    ['Paddock', paddock],
-    ['Fence', fence],
-  ])('%s documents every column and invents none', (name, table) => {
+    ['Flock', flockView],
+    ['Paddock', getTableColumns(paddock)],
+    ['Fence', getTableColumns(fence)],
+  ])('%s documents every column and invents none', (name, columns) => {
     const documented = Object.keys(doc.components.schemas[name as string]?.properties ?? {}).sort()
-    expect(documented).toEqual(Object.keys(getTableColumns(table)).sort())
+    expect(documented).toEqual(Object.keys(columns).sort())
   })
 })

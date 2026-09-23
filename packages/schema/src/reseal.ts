@@ -1,0 +1,101 @@
+import { isNotNull, sql, eq } from 'drizzle-orm'
+import type { PgDatabase } from 'drizzle-orm/pg-core'
+import { flock } from './schema.js'
+import { isSealed, needsReseal, openSealed, seal, UnsealError, type SealKeyring, type UnsealReason } from './sealed.js'
+
+export interface ResealReport {
+  /** Legacy plaintext rows sealed for the first time. */
+  sealed: number
+  /** Rows moved from a previous key to the current one. */
+  resealed: number
+  /** Rows this keyring cannot open — never an id's secret, only which flock needs re-entering. */
+  unreadable: { id: string; name: string; reason: UnsealReason }[]
+  /**
+   * The post-reseal table rewrite. `not-needed` when nothing was re-encrypted. A failure is
+   * reported rather than thrown: the reseal has already committed, and a re-run would find nothing
+   * to re-encrypt and skip the rewrite, so the caller must say how to run it by hand.
+   */
+  vacuum: 'done' | 'not-needed' | { failed: string }
+}
+
+export interface ResealOptions {
+  /** How to rewrite the table. Injectable only so a test can make it fail. */
+  vacuum?: (db: PgDatabase<any, any, any>) => Promise<unknown>
+}
+
+/** The rewrite, exactly as an operator would run it by hand. */
+export const VACUUM_FLOCK_SQL = 'VACUUM FULL "flock"'
+
+/**
+ * Brings every stored upstream credential under the CURRENT key, then validates the format check
+ * that migration 0008 added NOT VALID. Run by `migrate` after the SQL migrations, before any other
+ * service starts, so it is both the one-time upgrade (plaintext → sealed) and the second half of
+ * every key rotation. Idempotent.
+ *
+ * An unreadable row is reported and left exactly as it is, not failed on: one flock restored from
+ * a backup taken under another key should cost that flock its credential (the data plane fails it
+ * closed; re-entering it through the console or `PUT /flocks/{id}` re-seals it), not keep the whole
+ * stack from starting. And it is kept, not nulled, so putting the right key back recovers it.
+ */
+export async function resealUpstreamAuth(
+  db: PgDatabase<any, any, any>,
+  ring: SealKeyring,
+  opts: ResealOptions = {},
+): Promise<ResealReport> {
+  const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' }
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select({ id: flock.id, orgId: flock.orgId, name: flock.name, value: flock.upstreamAuthEnc })
+      .from(flock)
+      .where(isNotNull(flock.upstreamAuthEnc))
+      .for('update')
+    for (const row of rows) {
+      const value = row.value!
+      // Every envelope is bound to the row it is stored in; see `sealed.ts`.
+      const bind = { orgId: row.orgId, flockId: row.id }
+      if (!needsReseal(value, ring)) {
+        // Already under the current key, so there is nothing to rewrite. Still open it once, so that
+        // an envelope moved here from another row is named in the log rather than only surfacing
+        // as a 503 at the data plane.
+        try {
+          openSealed(value, ring, bind)
+        } catch (e) {
+          if (!(e instanceof UnsealError)) throw e
+          report.unreadable.push({ id: row.id, name: row.name, reason: e.reason })
+        }
+        continue
+      }
+      let plaintext: string
+      if (!isSealed(value)) {
+        // Only a pre-0008 row can be here: the check constraint refuses any new unsealed write.
+        plaintext = value
+        report.sealed++
+      } else {
+        try {
+          plaintext = openSealed(value, ring, bind)
+        } catch (e) {
+          if (!(e instanceof UnsealError)) throw e
+          report.unreadable.push({ id: row.id, name: row.name, reason: e.reason })
+          continue
+        }
+        report.resealed++
+      }
+      await tx.update(flock).set({ upstreamAuthEnc: seal(plaintext, ring, bind) }).where(eq(flock.id, row.id))
+    }
+    await tx.execute(sql`ALTER TABLE "flock" VALIDATE CONSTRAINT "flock_upstream_auth_sealed"`)
+  })
+  // An UPDATE leaves the old row version in the table's pages until it happens to be overwritten:
+  // the plaintext on an upgrade, or the envelope under a retired key on a rotation. VACUUM FULL
+  // rewrites the table without them. It cannot run in a transaction and takes an exclusive lock,
+  // which is harmless here because nothing else runs until `migrate` exits. It cannot reach the WAL
+  // or existing backups; docs/DEPLOY.md says what to do about those.
+  if (report.sealed > 0 || report.resealed > 0) {
+    try {
+      await (opts.vacuum ?? ((d) => d.execute(sql.raw(VACUUM_FLOCK_SQL))))(db)
+      report.vacuum = 'done'
+    } catch (e) {
+      report.vacuum = { failed: e instanceof Error ? e.message : String(e) }
+    }
+  }
+  return report
+}

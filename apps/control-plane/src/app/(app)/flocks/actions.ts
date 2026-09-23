@@ -7,32 +7,21 @@ import { saveFlock, deleteFlock } from '../../../server/flocks-service'
 import { testFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
 import type { ModelListResult } from '@metamodels/connectors'
 import { publishConfigInvalidation } from '../../../server/config-publisher'
+import { flockFormToInput } from '../../../lib/flock-form'
+import { saveFlockErrorMessage } from '../../../server/flock-save-error'
 
 const registry = buildBreedRegistry()
-
-function formToInput(fd: FormData) {
-  const id = String(fd.get('id') ?? '')
-  const upstreamAuth = String(fd.get('upstreamAuth') ?? '').trim()
-  return {
-    id: id || undefined,
-    breed: String(fd.get('breed') ?? ''),
-    name: String(fd.get('name') ?? '').trim(),
-    baseUrl: String(fd.get('baseUrl') ?? '').trim(),
-    upstreamAuth: upstreamAuth || null,
-    tlsTrust: String(fd.get('tlsTrust') ?? 'false') === 'true',
-  }
-}
 
 export async function saveFlockAction(_prev: unknown, fd: FormData): Promise<{ error?: string; ok?: boolean }> {
   const actor = await requireUser()
   try {
     requireCapability(actor, 'resource.write')
-    await saveFlock(getDb(), actor, formToInput(fd))
+    await saveFlock(getDb(), actor, flockFormToInput(fd))
     revalidatePath('/flocks')
     await publishConfigInvalidation('flock.save')
     return { ok: true }
   } catch (e) {
-    return { error: e instanceof Error ? e.message : 'Failed to save flock' }
+    return { error: saveFlockErrorMessage(e) }
   }
 }
 

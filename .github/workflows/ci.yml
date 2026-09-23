@@ -44,6 +44,9 @@ jobs:
       # Opt-in integration-test URLs — these switch the skipIf suites ON.
       PG_TEST_URL: postgres://metamodels:metamodels@localhost:5432/metamodels
       REDIS_TEST_URL: redis://localhost:6379
+      # The migrator seals upstream credentials and will not run without a key. The .env.example
+      # dev-only value (decodes to "dev-only-change-me-in-production"); CI holds no real secrets.
+      UPSTREAM_AUTH_KEY: ZGV2LW9ubHktY2hhbmdlLW1lLWluLXByb2R1Y3Rpb24=
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -29,6 +29,8 @@ command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
 
 # 32 bytes of hex = 64 chars, comfortably above the >=16-char floor every secret enforces.
 gen() { openssl rand -hex 32; }
+# The upstream-credential sealing key: exactly 32 random bytes, base64 (what the services parse).
+gen32() { openssl rand -base64 32; }
 # The token-signing key: RSA-2048 as a PKCS#8 PEM (genpkey's default), base64'd onto one line
 # so it survives being a KEY=value environment variable.
 genkey() { openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | openssl base64 -A; }
@@ -42,6 +44,9 @@ OPERATOR_EMAIL=${EMAIL}
 POSTGRES_PASSWORD=$(gen)
 SESSION_SECRET=$(gen)
 LICENSE_KEY_SECRET=$(gen)
+UPSTREAM_AUTH_KEY=$(gen32)
+# Empty until you rotate UPSTREAM_AUTH_KEY: the retired key, kept only to open what it sealed.
+UPSTREAM_AUTH_PREVIOUS_KEYS=
 OPERATOR_PASSWORD=$(gen)
 CONSOLE_CLIENT_SECRET=$(gen)
 OIDC_COOKIE_KEYS=$(gen)
@@ -72,6 +77,10 @@ Store these now — they are not recoverable from the running stack.
   LICENSE_KEY_SECRET  encrypts the stored Lemon Squeezy license key at rest.
                       Losing or changing it makes an existing entitlement
                       undecryptable and you must re-activate the license.
+  UPSTREAM_AUTH_KEY   encrypts each flock's upstream credential at rest. Rotate
+                      it via UPSTREAM_AUTH_PREVIOUS_KEYS; losing it means
+                      re-entering every flock's credential (see "Rotating the
+                      upstream credential key" in docs/DEPLOY.md).
   OPERATOR_PASSWORD   only used by `pnpm seed` to create the first admin.
                       There is no password-change screen yet, and re-running
                       `pnpm seed` will not reset an existing user. To retire

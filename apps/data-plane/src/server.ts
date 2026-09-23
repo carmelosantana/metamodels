@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import Redis from 'ioredis'
 import * as schema from '@metamodels/schema'
+import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
 import { createApp } from './app.js'
 import { buildRegistry } from './breeds.js'
 import { DrizzleConfigStore, type ConfigStore } from './config/config-store.js'
@@ -20,6 +21,7 @@ export interface ServerConfig {
   databaseUrl: string
   redisUrl?: string
   port: number
+  sealKeys: SealKeyring
 }
 
 export function loadServerConfig(env: Record<string, string | undefined>): ServerConfig {
@@ -27,7 +29,9 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
   if (!databaseUrl) throw new Error('DATABASE_URL is required')
   const port = env.PORT ? Number(env.PORT) : 8787
   if (Number.isNaN(port)) throw new Error('PORT must be a number')
-  return { databaseUrl, redisUrl: env.REDIS_URL, port }
+  // Required at boot even with no credential stored yet: a missing key should stop the deploy, not
+  // surface later as one paddock's 503.
+  return { databaseUrl, redisUrl: env.REDIS_URL, port, sealKeys: loadSealKeyring(env) }
 }
 
 export function startServer(cfg: ServerConfig): void {
@@ -54,7 +58,7 @@ export function startServer(cfg: ServerConfig): void {
   // Caching requires the invalidation channel: with Redis, wrap the store and subscribe to
   // control-plane config writes on a duplicated (subscriber-mode) connection. Without Redis,
   // there is no invalidation path, so serve config uncached to avoid staleness.
-  const baseStore = new DrizzleConfigStore(db)
+  const baseStore = new DrizzleConfigStore(db, cfg.sealKeys)
   let configStore: ConfigStore = baseStore
   if (redis) {
     const caching = new CachingConfigStore(baseStore)

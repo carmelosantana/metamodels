@@ -412,7 +412,7 @@ const ERROR_RESPONSE_NAMES: Record<string, string> = {
  * Every status a `withAdmin` operation can answer, in ascending order. The four unconditional ones
  * come from the wrapper itself (`400`, `401`, `403`, `422`) plus `problemForError`'s fallbacks
  * (`500`, `503`); `404` and `409` are opted into per operation because not every route can reach
- * `NotFoundError` or `SlugTakenError`.
+ * `NotFoundError`, or `SlugTakenError` / `CredentialRebindError`.
  */
 function adminErrors(...extra: ('404' | '409')[]): Record<string, ResponseObject> {
   const codes = ['400', '401', '403', ...extra, '422', '500', '503'].sort()
@@ -459,7 +459,11 @@ const COMPONENT_RESPONSES: Record<string, ResponseObject> = {
       'from one that never existed**: whether it exists is itself the leak, so a foreign id is ' +
       'never a 403.',
   ),
-  Conflict: errorResponse('The paddock slug is already in use. Slugs are globally unique.'),
+  Conflict: errorResponse(
+    'The write conflicts with current state: a paddock slug already in use (slugs are globally ' +
+    'unique), or a flock update that would carry its stored upstream credential to a new `baseUrl` ' +
+    'or into `tlsTrust` without re-sending it.',
+  ),
   ValidationFailed: errorResponse(
     'Validation failed. Three sources reach this status — a malformed JSON body, a malformed path ' +
       'id, and a malformed query parameter — and `detail` is the same generic string for all ' +
@@ -556,25 +560,21 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
   },
   Flock: {
     type: 'object',
-    description: 'An upstream inference server. Returned verbatim from the row, `org_id` included.',
+    description:
+      'An upstream inference server, `org_id` included. Never carries its upstream credential: that ' +
+      'is write-only, sealed at rest, and represented here only by `hasUpstreamAuth`.',
     properties: {
       id: uuid('The flock.'),
       orgId: uuid('The owning org. Always the caller\'s own — cross-org rows are 404, never returned.'),
       breed: { type: 'string', enum: [...BREED_IDS], description: 'Which connector drives it.' },
       name: { type: 'string' },
       baseUrl: { type: 'string', format: 'uri' },
-      upstreamAuth: {
-        type: ['string', 'null'],
+      hasUpstreamAuth: {
+        type: 'boolean',
         description:
-          '⚠ **A secret, returned in plaintext.** The credential this control plane sends upstream ' +
-          'to the flock, stored and returned verbatim — not hashed, not redacted, not write-only. ' +
-          'Any token holding only `read` can retrieve it from `GET /flocks` or `GET /flocks/{id}`, ' +
-          'so the whole listing should be treated as credential material: do not log it, cache it ' +
-          'or render it into a page. This is a **known issue, tracked as its own milestone**, and ' +
-          'is documented here rather than fixed — a client that has already been told is better ' +
-          'off than one that finds out. `null` when the flock needs no upstream credential.\n\n' +
-          'Note also that `PUT /flocks/{id}` is a replace: omitting this field writes `null` and ' +
-          'clears the stored credential.',
+          'Whether an upstream credential is stored. The credential itself is **write-only**: set it ' +
+          'through `upstreamAuth` on `POST /flocks` or `PUT /flocks/{id}`; no response returns it, ' +
+          'in plaintext or sealed.',
       },
       tlsTrust: { type: 'boolean' },
       healthOk: {
@@ -583,7 +583,7 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
       },
       createdAt: timestamp('Creation time.'),
     },
-    required: ['id', 'orgId', 'breed', 'name', 'baseUrl', 'upstreamAuth', 'tlsTrust', 'healthOk', 'createdAt'],
+    required: ['id', 'orgId', 'breed', 'name', 'baseUrl', 'hasUpstreamAuth', 'tlsTrust', 'healthOk', 'createdAt'],
   },
   Paddock: {
     type: 'object',
@@ -857,7 +857,20 @@ export function buildOpenApiDocument(): OpenApiDocument {
         description:
           'Creates. An `id` in the body is a **422** rather than an update — that is what ' +
           '`PUT /flocks/{id}` is for.',
-        requestBody: { required: true, content: json(omit(flockBody, 'id')) },
+        requestBody: {
+          required: true,
+          content: json(
+            annotate(omit(flockBody, 'id'), {
+              upstreamAuth: {
+                writeOnly: true,
+                description:
+                  'The credential to send upstream. **Write-only**: sealed at rest and never ' +
+                  'returned — responses carry `hasUpstreamAuth` instead. Omit it, or send `null`, ' +
+                  'for a flock that needs none.',
+              },
+            }),
+          ),
+        },
         responses: {
           '201': {
             description: 'Created. `Location` names the new flock.',
@@ -881,11 +894,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
         summary: 'Replace a flock',
         tags: ['flocks'],
         description:
-          'A **full replace** of every writable field: the service does `set(values)` over all of ' +
-          'them, so omitting `upstreamAuth` writes `null` rather than leaving it alone. There is ' +
-          'deliberately no PATCH — a partial merge would need a read-modify-write outside the ' +
-          'service\'s transaction, where it races. `healthOk` is server-owned and is neither read ' +
-          'from the body nor touched by this write.',
+          'A **full replace** of every field a `GET` returns: the service does `set(values)` over ' +
+          'all of them. The one exception is `upstreamAuth`, which no `GET` returns, so a ' +
+          'GET → edit → PUT round trip never has it to send back: **omitting it leaves the stored ' +
+          'credential alone**, `null` clears it, and a string replaces it. There is deliberately no ' +
+          'PATCH — a partial merge would need a read-modify-write outside the service\'s ' +
+          'transaction, where it races. `healthOk` is server-owned and is neither read from the ' +
+          'body nor touched by this write.\n\n' +
+          'A kept credential cannot follow the flock somewhere new: changing `baseUrl`, or turning ' +
+          '`tlsTrust` on, while a credential is stored and `upstreamAuth` is omitted is a **409**. ' +
+          'Re-send the credential, or `null` to clear it, in the same request.',
         parameters: [pathIdParam('flock')],
         requestBody: {
           required: true,
@@ -893,14 +911,18 @@ export function buildOpenApiDocument(): OpenApiDocument {
             annotate(flockBody, {
               id: { readOnly: true, description: 'Ignored; the path owns the id.' },
               upstreamAuth: {
+                writeOnly: true,
                 description:
-                  'The credential to send upstream. **Omitting it writes `null`** — this is a ' +
-                  'replace, not a merge, so an absent field clears the stored value.',
+                  'The credential to send upstream. **Write-only**: sealed at rest and never ' +
+                  'returned. Omitted, the stored credential is left alone — unlike every other ' +
+                  'field here — so a GET → edit → PUT round trip keeps it; `null` clears it; a ' +
+                  'string replaces it. Omitting it while changing `baseUrl` or enabling ' +
+                  '`tlsTrust` is a 409.',
               },
             }),
           ),
         },
-        responses: { '200': { description: 'The replaced flock.', content: json(ref('Flock')) }, ...adminErrors('404') },
+        responses: { '200': { description: 'The replaced flock.', content: json(ref('Flock')) }, ...adminErrors('404', '409') },
       },
       delete: {
         operationId: 'deleteFlock',

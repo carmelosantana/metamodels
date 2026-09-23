@@ -12,7 +12,7 @@ import { StatusPill } from '../../../components/ui/status-pill'
 import { BreedChip } from '../../../components/ui/breed-chip'
 import { saveFlockAction, deleteFlockAction, testConnectionAction } from './actions'
 
-interface Row { id: string; name: string; breed: string; baseUrl: string; healthOk: boolean | null }
+interface Row { id: string; name: string; breed: string; baseUrl: string; healthOk: boolean | null; hasUpstreamAuth: boolean }
 
 export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: boolean }) {
   const [open, setOpen] = useState(false)
@@ -54,12 +54,13 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
         subtitle="Connected local AI servers behind your fence."
         actions={canWrite && <Button onClick={() => { resetForm(); setOpen(true) }}>Connect a flock</Button>}
       />
-      <DataTable headers={['Name', 'Breed', 'Base URL', 'Health', '']}>
+      <DataTable headers={['Name', 'Breed', 'Base URL', 'Credential', 'Health', '']}>
         {flocks.map((f) => (
           <tr key={f.id} className="border-b border-[var(--color-divider)]">
             <td className="px-3 py-2 text-[var(--color-text)]">{f.name}</td>
             <td className="px-3 py-2"><BreedChip breed={f.breed} /></td>
             <td className="px-3 py-2 font-mono text-xs text-[var(--color-muted)]">{f.baseUrl}</td>
+            <td className="px-3 py-2 text-sm text-[var(--color-muted)]">{f.hasUpstreamAuth ? 'Stored' : '—'}</td>
             <td className="px-3 py-2"><StatusPill ok={f.healthOk} /></td>
             <td className="px-3 py-2 text-right">
               {canWrite && (
@@ -72,7 +73,7 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
           </tr>
         ))}
         {flocks.length === 0 && (
-          <tr><td colSpan={5} className="px-3 py-8 text-center text-[var(--color-muted)]">No flocks yet. Connect one to get started.</td></tr>
+          <tr><td colSpan={6} className="px-3 py-8 text-center text-[var(--color-muted)]">No flocks yet. Connect one to get started.</td></tr>
         )}
       </DataTable>
 
@@ -87,7 +88,12 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
           </div>
           <div><Label htmlFor="name">Name</Label><Input id="name" name="name" value={name} onChange={(e) => setName(e.target.value)} required /></div>
           <div><Label htmlFor="baseUrl">Base URL</Label><Input id="baseUrl" name="baseUrl" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434" required /></div>
-          <div><Label htmlFor="upstreamAuth">Upstream auth (optional)</Label><Input id="upstreamAuth" name="upstreamAuth" value={upstreamAuth} onChange={(e) => setUpstreamAuth(e.target.value)} /></div>
+          <div>
+            <Label htmlFor="upstreamAuth">Upstream auth (optional)</Label>
+            {/* Masked, and never pre-filled: the credential is write-only, stored encrypted, and no read returns it. */}
+            <Input id="upstreamAuth" name="upstreamAuth" type="password" autoComplete="off" value={upstreamAuth} onChange={(e) => setUpstreamAuth(e.target.value)} />
+            <p className="mt-1 text-xs text-[var(--color-muted)]">Stored encrypted. It is never shown again.</p>
+          </div>
           <div className="flex items-center gap-2">
             <Switch checked={tls} onChange={setTls} name="tlsTrust" />
             <span className="text-sm text-[var(--color-muted)]">Trust self-signed TLS</span>

@@ -195,21 +195,64 @@ describe('/api/admin/v1/flocks', () => {
   })
 
   /**
-   * The half of "full replace" that only bites on an OPTIONAL field, and the one the OpenAPI
-   * document now publishes: `saveFlock` does `set(values)` with `upstreamAuth: data.upstreamAuth ??
-   * null`, so omitting it CLEARS the stored credential rather than leaving it alone. Worth pinning
-   * precisely because it is silent — a client doing GET → change the name → PUT drops the upstream
-   * credential and gets a 200 for it.
+   * The credential is write-only, so a client doing GET → change the name → PUT never has it to send
+   * back. Under M2's replace semantics that round trip cleared it with a 200. Now omission means
+   * "leave it alone" (the `paddock.status` precedent); `null` is the explicit way to clear it.
    */
-  test('PUT /{id} omitting upstreamAuth CLEARS it — replace, not merge', async () => {
+  test('PUT /{id} omitting upstreamAuth KEEPS it — the GET → edit → PUT round trip is safe', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await (await call(collection, 'POST', '/flocks', t, { ...FLOCK, upstreamAuth: 'secret' }))
-      .json() as { id: string; upstreamAuth: string | null }
-    // The positive anchor: the credential really was stored, so the null below means "cleared".
-    expect(created.upstreamAuth).toBe('secret')
-    const res = await call(item, 'PUT', `/flocks/${created.id}`, t, { ...FLOCK, name: 'renamed' }, { id: created.id })
+      .json() as { id: string; hasUpstreamAuth: boolean }
+    // The positive anchor: a credential really was stored, so `true` below means "kept".
+    expect(created.hasUpstreamAuth).toBe(true)
+    const got = await (await call(item, 'GET', `/flocks/${created.id}`, t, undefined, { id: created.id })).json() as Record<string, unknown>
+    const res = await call(item, 'PUT', `/flocks/${created.id}`, t, { ...got, name: 'renamed' }, { id: created.id })
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ name: 'renamed', upstreamAuth: null })
+    expect(await res.json()).toMatchObject({ name: 'renamed', hasUpstreamAuth: true })
+    const [row] = await db.select().from(flock).where(eq(flock.id, created.id))
+    expect(row.upstreamAuthEnc).toMatch(/^sealed:v1:/)
+  })
+
+  test('PUT /{id} with upstreamAuth: null clears it', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', t, { ...FLOCK, upstreamAuth: 'secret' }))
+      .json() as { id: string }
+    const res = await call(item, 'PUT', `/flocks/${created.id}`, t, { ...FLOCK, upstreamAuth: null }, { id: created.id })
+    expect(await res.json()).toMatchObject({ hasUpstreamAuth: false })
+    const [row] = await db.select().from(flock).where(eq(flock.id, created.id))
+    expect(row.upstreamAuthEnc).toBeNull()
+  })
+
+  test('PUT /{id} moving baseUrl without re-sending upstreamAuth is a 409 that says what to send', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', t, { ...FLOCK, upstreamAuth: 'secret' }))
+      .json() as { id: string }
+    const res = await call(item, 'PUT', `/flocks/${created.id}`, t,
+      { ...FLOCK, baseUrl: 'https://elsewhere.example' }, { id: created.id })
+    expect(res.status).toBe(409)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+    expect((await res.json() as { detail: string }).detail).toMatch(/upstreamAuth/)
+    const [row] = await db.select().from(flock).where(eq(flock.id, created.id))
+    expect(row.baseUrl).toBe(FLOCK.baseUrl)
+  })
+
+  /** The reason this milestone exists: `read` is the scope a long-lived CLI token holds. */
+  test('a read-only token can list and get flocks but never sees a credential, sealed or plaintext', async () => {
+    const w = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', w, { ...FLOCK, upstreamAuth: 'secret-upstream' }))
+      .json() as { id: string }
+    const r = await tok.mint({ sub: adminUserId, scopes: ['read'] })
+    const bodies = [
+      await (await call(collection, 'GET', '/flocks', r)).text(),
+      await (await call(collection, 'GET', '/flocks?limit=1', r)).text(),
+      await (await call(item, 'GET', `/flocks/${created.id}`, r, undefined, { id: created.id })).text(),
+    ]
+    // The positive anchor: each body really is the flock, so the absence below is not an empty page.
+    for (const b of bodies) expect(b).toContain(created.id)
+    for (const b of bodies) {
+      expect(b).not.toMatch(/secret-upstream|sealed:v1:|upstreamAuthEnc|"upstreamAuth"/)
+      expect(b).toContain('"hasUpstreamAuth":true')
+    }
   })
 
   test('PUT /{id} of another org 404s before it writes anything', async () => {

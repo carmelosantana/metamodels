@@ -38,6 +38,8 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
+| `UPSTREAM_AUTH_KEY` | migrate, control-plane, data-plane | Base64 of **exactly** 32 random bytes: `openssl rand -base64 32`. Encrypts each flock's upstream credential at rest; all three services must hold the same value, and each exits with status 1 at start-up without a valid one. Rotate it through `UPSTREAM_AUTH_PREVIOUS_KEYS` — see [Rotating the upstream credential key](#rotating-the-upstream-credential-key). The `.env.example` value is for local use and CI only. |
+| `UPSTREAM_AUTH_PREVIOUS_KEYS` | migrate, control-plane, data-plane | Optional. Comma-separated retired keys, same format. They only open credentials, never seal them, and `migrate` re-seals whatever they open under `UPSTREAM_AUTH_KEY`. Usually empty. |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. There is no password-change screen yet; see [Retiring the seeded admin](#retiring-the-seeded-admin). |
 | `WORKER_NAME` | worker | Optional consumer name; defaults to `worker-<pid>`. |
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
@@ -162,6 +164,7 @@ error rather than silently booting with a guessable credential:
 | `POSTGRES_PASSWORD` | bundled Postgres, and the password inside the default `DATABASE_URL` |
 | `SESSION_SECRET` | control-plane session signing (≥16 chars) |
 | `LICENSE_KEY_SECRET` | encrypts the stored Lemon Squeezy key at rest. **Losing or changing it makes an existing entitlement undecryptable** — re-activate the license |
+| `UPSTREAM_AUTH_KEY` | encrypts each flock's upstream credential at rest (`openssl rand -base64 32`). Rotate it via `UPSTREAM_AUTH_PREVIOUS_KEYS`; **losing it means re-entering every flock's credential** |
 | `OPERATOR_PASSWORD` | the first admin created by `pnpm seed`. No password-change screen yet — see [Retiring the seeded admin](#retiring-the-seeded-admin) |
 | `CONSOLE_CLIENT_SECRET` | authenticates the console to the sign-in service (≥16 chars; both services read it) |
 | `OIDC_COOKIE_KEYS` | signs the sign-in service's cookies. Rotate by prepending a new key: `<new>,<old>` |
@@ -248,6 +251,48 @@ Keep at least one active admin — deactivating the last one locks everybody out
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
   redeploy; nobody is signed out.
 
+### Rotating the upstream credential key
+
+A flock's upstream credential is stored encrypted under `UPSTREAM_AUTH_KEY`, and no API response
+or console page returns it. Each stored value records which key encrypted it. Every deploy runs
+`migrate` before any other service starts, and `migrate` re-encrypts every credential under the
+current key. So a rotation completes on the deploy that introduces the new key, with no waiting
+window:
+
+1. In a single edit, applied together before any redeploy: move the current `UPSTREAM_AUTH_KEY`
+   value into `UPSTREAM_AUTH_PREVIOUS_KEYS` **and** set `UPSTREAM_AUTH_KEY` to a new
+   `openssl rand -base64 32`. The same key in both variables is a configuration error, and every
+   service that reads them refuses to start.
+2. Redeploy. The `migrate` log reports `re-sealed N under the current key`.
+3. Clear `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy again.
+
+If a rotation's rewrite of the `flock` table fails, `migrate` still succeeds but logs a warning
+with the command to run by hand, and a later deploy will not retry it. Run it with `psql`, or any
+SQL client, against `DATABASE_URL`.
+
+If a deploy's `migrate` log warns that a flock's upstream credential cannot be opened, the reason
+in brackets says what to do. `migrate` never modifies a value it cannot open.
+
+- **`unknown-key`:** the value was sealed under a key this stack does not hold. Putting that key
+  back into `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploying recovers it.
+- **`tampered` or `malformed`:** no key will open it. This covers a value that was altered, and a
+  value copied from another flock's row, since each value is bound to its own flock and org. Send
+  that flock a new credential with `PUT /api/admin/v1/flocks/{id}`. Until then that flock's paddocks answer
+`503 {"error":"upstream credential unavailable"}` rather than calling the flock without its
+credential.
+
+**Restoring a database backup taken under a different key** puts you in exactly that state: the
+warning names each affected flock. Either add the key that was current when the backup was taken
+to `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy, or send each affected flock a new credential with
+`PUT /api/admin/v1/flocks/{id}` and a fresh `upstreamAuth`. So keep retired keys with the backups
+they can open.
+
+**If `UPSTREAM_AUTH_KEY` itself may have leaked**, re-encrypting protects nothing: anyone holding
+the key and a copy of the database can already read every credential. Revoke and reissue the
+credentials **at each upstream server**. Then set a new `UPSTREAM_AUTH_KEY` with
+`UPSTREAM_AUTH_PREVIOUS_KEYS` empty, redeploy, and send each flock its new credential with
+`PUT /api/admin/v1/flocks/{id}`.
+
 ### Forcing everyone to sign in again
 
 After a suspected leak, end all three kinds of sign-in: console sessions, sign-in service sessions,
@@ -307,6 +352,34 @@ Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-th
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
 publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
 as soon as possible, and losing the in-flight tokens signed with it is the point.
+
+### Upgrading to encrypted upstream credentials
+
+This release stops storing flock upstream credentials in plaintext, and stops returning them from
+any read. Before it, `GET /api/admin/v1/flocks` returned them to any token holding the `read`
+scope.
+
+1. **Add `UPSTREAM_AUTH_KEY`** (`openssl rand -base64 32`) to the stack's environment, and an
+   empty `UPSTREAM_AUTH_PREVIOUS_KEYS`. Keep every other variable you already have.
+2. **Replace the stack file** with the current one. It passes the key to `migrate`,
+   `control-plane` and `data-plane`.
+3. **Redeploy.** `migrate` renames `flock.upstream_auth` to `upstream_auth_enc`, encrypts each
+   existing credential, logs how many it encrypted, and then rewrites the `flock` table
+   (`VACUUM FULL`) so the old plaintext row versions are not left in its data files. If that
+   rewrite fails, `migrate` still succeeds but logs a warning with the exact command to run by
+   hand. Run it: a later deploy will not retry it.
+
+Afterwards:
+
+- **The API.** A flock is returned with `hasUpstreamAuth` in place of `upstreamAuth`. On
+  `PUT /flocks/{id}`, omitting `upstreamAuth` now leaves the stored credential alone; send `null`
+  to clear it.
+- **There is no downgrade short of a database restore.** Older images read a column that no
+  longer exists.
+- **Backups taken before the upgrade still hold every credential in plaintext.** So do Postgres's
+  write-ahead log and any WAL archive from before the upgrade, and any listing already fetched
+  through the API. If any of those may have left your control, reissue the credentials at the
+  upstream servers.
 
 ### Upgrading from 0.3.x
 

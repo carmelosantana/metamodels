@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { flock } from '@metamodels/schema'
+import { loadSealKeyring, seal } from '@metamodels/schema/sealed'
 import { freshDb, seedOrg } from '../test/db'
 import { saveFlock } from './flocks-service'
 import { buildBreedRegistry, listFlockModels, testFlockConnection } from './flock-health'
@@ -69,5 +72,32 @@ describe('listFlockModels', () => {
     const f = await saveFlock(db, actor, { breed: 'comfyui', name: 'c', baseUrl: 'http://c:8188', tlsTrust: false })
     const r = await listFlockModels(registry, db, actor, f.id)
     expect(r).toEqual({ ok: false, models: [], detail: 'unsupported' })
+  })
+
+  test('sends the opened credential to the flock', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'Bearer up-tok' })
+    const fetchMock = vi.fn(async (_u: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ models: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await listFlockModels(registry, db, actor, f.id)
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer up-tok')
+  })
+
+  test('a credential no held key opens fails closed, without calling the flock', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db)
+    const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
+    const [f] = await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('t', foreign, { orgId: actor.orgId, flockId: id }),
+    }).returning()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await listFlockModels(registry, db, actor, f.id))
+      .toEqual({ ok: false, models: [], detail: 'upstream credential unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

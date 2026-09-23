@@ -31,6 +31,8 @@ services:
         APP: migrate
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +45,8 @@ services:
       target: control-plane
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL}
       SESSION_SECRET: ${SESSION_SECRET}
       LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET}
@@ -115,6 +119,8 @@ services:
         APP: data-plane
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL}
       PORT: ${PORT}
     ports:

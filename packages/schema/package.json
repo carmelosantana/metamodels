@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./config": "./src/config.ts",
-    "./graph": "./src/graph.ts"
+    "./graph": "./src/graph.ts",
+    "./sealed": "./src/sealed.ts",
+    "./reseal": "./src/reseal.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

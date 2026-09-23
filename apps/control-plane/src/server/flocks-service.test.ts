@@ -2,7 +2,10 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
-import { listFlocks, getFlock, saveFlock, deleteFlock, NotFoundError } from './flocks-service'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { loadSealKeyring, openSealed, seal } from '@metamodels/schema/sealed'
+import { listFlocks, getFlock, getFlockConnection, saveFlock, deleteFlock, CredentialRebindError, NotFoundError } from './flocks-service'
+import { upstreamAuthKeys } from './seal-keys'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
@@ -123,5 +126,171 @@ describe('flocks-service', () => {
     const other = await seedOrg(db, 'other')
     const otherOrgActor: Actor = { ...actor, orgId: other.id }
     await expect(getFlock(db, otherOrgActor, mine.id)).rejects.toThrow(NotFoundError)
+  })
+})
+
+describe('flocks-service — the upstream credential is write-only and sealed at rest', () => {
+  const rowOf = async (db: Awaited<ReturnType<typeof freshDb>>, id: string) =>
+    (await db.select().from(schema.flock).where(eq(schema.flock.id, id)))[0]
+
+  test('is stored sealed under the current key, never as plaintext', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    const row = await rowOf(db, f.id)
+    expect(row.upstreamAuthEnc).not.toContain('tok-secret')
+    expect(openSealed(row.upstreamAuthEnc!, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-secret')
+  })
+
+  test('no read or write returns it, sealed or not — only whether one is stored', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const saved = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    const bare = await saveFlock(db, actor, { ...base, name: 'bare' })
+    const results = [saved, bare, await getFlock(db, actor, saved.id), ...await listFlocks(db, actor),
+      ...await listFlocks(db, actor, { limit: 5 })]
+    for (const r of results) {
+      expect(Object.keys(r)).not.toContain('upstreamAuth')
+      expect(Object.keys(r)).not.toContain('upstreamAuthEnc')
+      expect(JSON.stringify(r)).not.toMatch(/tok-secret|sealed:v1:/)
+    }
+    expect(saved.hasUpstreamAuth).toBe(true)
+    expect(bare.hasUpstreamAuth).toBe(false)
+    expect((await getFlock(db, actor, saved.id)).hasUpstreamAuth).toBe(true)
+  })
+
+  test('an update that omits it leaves the stored credential exactly as it was', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    const before = (await rowOf(db, f.id)).upstreamAuthEnc
+    const updated = await saveFlock(db, actor, { ...base, id: f.id, name: 'renamed' })
+    expect(updated.name).toBe('renamed')
+    expect(updated.hasUpstreamAuth).toBe(true)
+    // Byte-identical, not merely re-sealed: the column was never named in the UPDATE.
+    expect((await rowOf(db, f.id)).upstreamAuthEnc).toBe(before)
+  })
+
+  test('null clears it; a new string replaces it', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-1' })
+    await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: 'tok-2' })
+    expect(openSealed((await rowOf(db, f.id)).upstreamAuthEnc!, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-2')
+    const cleared = await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: null })
+    expect(cleared.hasUpstreamAuth).toBe(false)
+    expect((await rowOf(db, f.id)).upstreamAuthEnc).toBeNull()
+  })
+
+  test('the audit row says the credential changed, and never what it is', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    await saveFlock(db, actor, { ...base, id: f.id, name: 'renamed' })
+    await saveFlock(db, actor, { ...base, id: f.id, upstreamAuth: null })
+    const audits = await db.select().from(schema.auditLog)
+    expect(audits.map((a) => (a.detail as { upstreamAuth?: string }).upstreamAuth))
+      .toEqual(['set', undefined, 'cleared'])
+    expect(JSON.stringify(audits)).not.toMatch(/tok-secret|sealed:v1:/)
+  })
+
+  test('getFlockConnection opens it for server-side use, org-scoped', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    expect(await getFlockConnection(db, actor, f.id)).toEqual({
+      breed: 'ollama', baseUrl: 'http://a', tlsTrust: false, upstreamAuth: 'tok-secret',
+    })
+    const other = await seedOrg(db, 'other')
+    await expect(getFlockConnection(db, { ...actor, orgId: other.id }, f.id)).rejects.toThrow(NotFoundError)
+  })
+
+  test('getFlockConnection reports a credential no held key opens, instead of dropping it', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
+    const [f] = await db.insert(schema.flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://a',
+      upstreamAuthEnc: seal('tok', foreign, { orgId: actor.orgId, flockId: id }),
+    }).returning()
+    expect(await getFlockConnection(db, actor, f.id)).toMatchObject({ upstreamAuth: null, upstreamAuthError: 'unknown-key' })
+  })
+
+  test('a created credential is bound to the flock\'s own id and org, which the service mints', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok-secret' })
+    const enc = (await rowOf(db, f.id)).upstreamAuthEnc!
+    expect(openSealed(enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: f.id })).toBe('tok-secret')
+    expect(() => openSealed(enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: randomUUID() })).toThrow(/authentication/)
+    expect(() => openSealed(enc, upstreamAuthKeys(), { orgId: randomUUID(), flockId: f.id })).toThrow(/authentication/)
+  })
+
+  test('an envelope copied from another flock is not opened for this one', async () => {
+    const db = await freshDb()
+    const actor = await actorFor(db, 'admin')
+    const src = await saveFlock(db, actor, { ...base, name: 'src', upstreamAuth: 'tok-src' })
+    const dst = await saveFlock(db, actor, { ...base, name: 'dst' })
+    await db.update(schema.flock).set({ upstreamAuthEnc: (await rowOf(db, src.id)).upstreamAuthEnc })
+      .where(eq(schema.flock.id, dst.id))
+    expect(await getFlockConnection(db, actor, dst.id)).toMatchObject({ upstreamAuth: null, upstreamAuthError: 'tampered' })
+  })
+
+  /**
+   * Write-only must hold against writers too. If an omitted credential simply followed a changed
+   * `baseUrl`, a `resource.write` token could point the flock at its own server and have the next
+   * model listing or paddock request deliver the credential there.
+   */
+  describe('an omitted credential does not follow the flock somewhere new', () => {
+    test('changing baseUrl without re-sending it is refused, and nothing is written', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const before = await rowOf(db, f.id)
+      await expect(saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'https://attacker.example' }))
+        .rejects.toThrow(CredentialRebindError)
+      expect(await rowOf(db, f.id)).toEqual(before)
+    })
+
+    test('turning tlsTrust on without re-sending it is refused', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, tlsTrust: false, upstreamAuth: 'tok' })
+      await expect(saveFlock(db, actor, { ...base, id: f.id, tlsTrust: true })).rejects.toThrow(CredentialRebindError)
+    })
+
+    test('re-sending it, or clearing it, alongside the change is allowed', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const moved = await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', upstreamAuth: 'tok-b' })
+      expect(moved.baseUrl).toBe('http://b')
+      const cleared = await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://c', tlsTrust: true, upstreamAuth: null })
+      expect(cleared).toMatchObject({ baseUrl: 'http://c', hasUpstreamAuth: false })
+    })
+
+    test('no stored credential, nothing to protect: the change goes through', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, base)
+      expect((await saveFlock(db, actor, { ...base, id: f.id, baseUrl: 'http://b', tlsTrust: true })).baseUrl).toBe('http://b')
+    })
+
+    test('turning tlsTrust OFF, or leaving baseUrl alone, keeps it without re-sending', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, tlsTrust: true, upstreamAuth: 'tok' })
+      expect((await saveFlock(db, actor, { ...base, id: f.id, tlsTrust: false, name: 'n2' })).hasUpstreamAuth).toBe(true)
+    })
+
+    test('another org\'s flock is still a 404, not a rebind refusal that confirms it exists', async () => {
+      const db = await freshDb()
+      const actor = await actorFor(db, 'admin')
+      const f = await saveFlock(db, actor, { ...base, upstreamAuth: 'tok' })
+      const other = await seedOrg(db, 'other')
+      await expect(saveFlock(db, { ...actor, orgId: other.id }, { ...base, id: f.id, baseUrl: 'http://x' }))
+        .rejects.toThrow(NotFoundError)
+    })
   })
 })

@@ -52,6 +52,8 @@ services:
     command: ["pnpm", "start"]
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — run scripts/new-stack.sh}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +82,8 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — run scripts/new-stack.sh}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET — run scripts/new-stack.sh}
       LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET:?set LICENSE_KEY_SECRET — run scripts/new-stack.sh}
@@ -147,6 +151,8 @@ services:
     command: ["pnpm", "start"]
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — run scripts/new-stack.sh}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       PORT: 8787
     ports:
