@@ -1,6 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src", "composite": true },
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": true,
+    // Node runs these sources by stripping types, which refuses enums, namespaces and parameter
+    // properties. This makes tsc refuse them first.
+    "erasableSyntaxOnly": true
+  },
   "references": [{ "path": "../../packages/schema" }],
   "include": ["src"]
 }

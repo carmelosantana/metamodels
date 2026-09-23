@@ -24,9 +24,13 @@ export interface ApiResponse {
 
 /** A non-2xx answer from the admin API, rendered from its RFC 9457 problem document. */
 export class ApiProblemError extends Error {
-  constructor(readonly status: number, readonly problem: unknown) {
+  readonly status: number
+  readonly problem: unknown
+  constructor(status: number, problem: unknown) {
     super(formatProblem(status, problem))
     this.name = 'ApiProblemError'
+    this.status = status
+    this.problem = problem
   }
 }
 
