@@ -19,7 +19,7 @@ import type { RateLimiter } from './ratelimit/rate-limiter.js'
 import type { MeterSink, MeterEventRecord } from './meter/meter-sink.js'
 import { quotaSchema } from './config/quota.js'
 import type { UsageReader } from './meter/usage-reader.js'
-import { proxyToUpstream, type FetchImpl } from './proxy/proxy.js'
+import { proxyToUpstream, rawToUpstream, type FetchImpl } from './proxy/proxy.js'
 
 export interface AppDeps {
   configStore: ConfigStore
@@ -87,7 +87,6 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
 
   const defaultLimit = deps.defaultRateLimit ?? DEFAULT_RATE_LIMIT
   const pending = new Set<Promise<void>>()
-  const doFetch: FetchImpl = deps.fetchImpl ?? ((url, init) => fetch(url, init))
 
   // Shared gates: authenticate the key, resolve the paddock, and scope-check.
   // Returns the resolved scope or a ready-to-send error Response, so the proxy
@@ -147,7 +146,6 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
 
   // Build the capability surface handed to a breed's `handle` hook.
   function buildIo(resolvedKey: ResolvedKey, paddock: ResolvedPaddock): BreedIO {
-    const base = paddock.flock.baseUrl.replace(/\/$/, '')
     return {
       ids: { orgId: paddock.orgId, keyId: resolvedKey.keyId, paddockId: paddock.paddockId },
       flock: paddock.flock,
@@ -162,7 +160,7 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
         }
       },
       upstreamRaw(path: string, init: RequestInit): Promise<Response> {
-        return doFetch(base + path, init)
+        return rawToUpstream(paddock.flock, path, init, { fetchImpl: deps.fetchImpl })
       },
       emitMeter(events: MeterEvent[]): Promise<void> {
         return emitScoped(

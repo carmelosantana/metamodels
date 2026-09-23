@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { proxyToUpstream } from '../src/proxy/proxy.js'
+import { proxyToUpstream, rawToUpstream } from '../src/proxy/proxy.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
 
 const flock = { baseUrl: 'http://fake.ollama', upstreamAuth: null }
@@ -101,5 +101,66 @@ describe('proxyToUpstream', () => {
     }, { fetchImpl: fetchStub })
     const up = await metering
     expect((up.finalFrame as { usage: { prompt_tokens: number } }).usage.prompt_tokens).toBe(7)
+  })
+})
+
+// One convention for every call the data plane makes to a flock: `upstreamAuth` is a bare token,
+// sent as `Authorization: Bearer <token>` — never verbatim, never re-prefixed.
+describe('upstream credential', () => {
+  function capture() {
+    let seen: string | null | undefined
+    const fetchImpl = async (_url: string, init: RequestInit) => {
+      seen = new Headers(init.headers).get('authorization')
+      return new Response('{}')
+    }
+    return { fetchImpl, seen: () => seen }
+  }
+  const req = { method: 'GET', path: '/api/tags', headers: {}, body: undefined }
+
+  test('proxyToUpstream sends the stored token as `Bearer <token>`', async () => {
+    const c = capture()
+    const { metering } = await proxyToUpstream({ baseUrl: 'http://u', upstreamAuth: 't0ken' }, req, c)
+    await metering
+    expect(c.seen()).toBe('Bearer t0ken')
+  })
+
+  test('proxyToUpstream replaces any authorization the consumer sent', async () => {
+    const c = capture()
+    const { metering } = await proxyToUpstream(
+      { baseUrl: 'http://u', upstreamAuth: 't0ken' },
+      { ...req, headers: { authorization: 'Bearer consumer-key' } },
+      c,
+    )
+    await metering
+    expect(c.seen()).toBe('Bearer t0ken')
+  })
+
+  test('proxyToUpstream sends no Authorization header when the flock has no credential', async () => {
+    const c = capture()
+    const { metering } = await proxyToUpstream({ baseUrl: 'http://u', upstreamAuth: null }, req, c)
+    await metering
+    expect(c.seen()).toBeNull()
+  })
+
+  test('rawToUpstream sends the stored token as `Bearer <token>`, keeping the caller\'s init', async () => {
+    let seenUrl = ''
+    let seenInit: RequestInit | undefined
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      seenUrl = url
+      seenInit = init
+      return new Response('{}')
+    }
+    const form = new FormData()
+    await rawToUpstream({ baseUrl: 'http://u/', upstreamAuth: 't0ken' }, '/upload/image', { method: 'POST', body: form }, { fetchImpl })
+    expect(seenUrl).toBe('http://u/upload/image')
+    expect(seenInit?.method).toBe('POST')
+    expect(seenInit?.body).toBe(form)
+    expect(new Headers(seenInit?.headers).get('authorization')).toBe('Bearer t0ken')
+  })
+
+  test('rawToUpstream sends no Authorization header when the flock has no credential', async () => {
+    const c = capture()
+    await rawToUpstream({ baseUrl: 'http://u', upstreamAuth: null }, '/upload/image', { method: 'POST' }, c)
+    expect(c.seen()).toBeNull()
   })
 })
