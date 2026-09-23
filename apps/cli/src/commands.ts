@@ -259,6 +259,9 @@ async function login(rest: string[], values: Values, io: MainIo): Promise<number
   )
   const path = credentialsPath(io.env)
   // Under the lock, so a refresh running in another process cannot interleave with this write.
+  // The refresh token this replaces is NOT revoked: when both logins were approved from the same
+  // browser session they share one grant at the OP, and revoking the old token would end the new
+  // sign-in too (apps/auth/test/cli-client.test.ts). It stays valid there until it expires.
   await withCredentialsLock(path, async () => writeCredentials(path, cred), lockOptions(io))
   io.stderr(`Signed in to ${issuer}.\n`)
   io.stdout(`${JSON.stringify({ issuer, console: consoleUrl, scope: cred.scope }, null, 2)}\n`)
