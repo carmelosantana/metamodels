@@ -1,6 +1,7 @@
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -187,6 +188,46 @@ describe('withCredentialsLock', () => {
     unlinkSync(lock)
     await pending
     expect(ran).toBe(true)
+  })
+
+  test('takes over at once a fresh lock whose recorded process has exited (left by Ctrl-C)', async () => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    const exited = spawnSync(process.execPath, ['-e', '']).pid
+    expect(() => process.kill(exited, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    writeFileSync(`${p}.lock`, `${exited}\n`)
+    const pending = withCredentialsLock(p, async () => 'ran', { staleMs: 60_000, pollMs: 5, notify: () => {} })
+    const timeout = new Promise((r) => setTimeout(() => r('still waiting'), 1_000))
+    expect(await Promise.race([pending, timeout])).toBe('ran')
+    expect(existsSync(`${p}.lock`)).toBe(false)
+  })
+
+  test('waits for a fresh lock whose recorded process is alive, and says so once', async () => {
+    const p = tempStore()
+    writeCredentials(p, cred('https://a.test', 't'))
+    writeFileSync(`${p}.lock`, `${process.pid}\n`)
+    const said: string[] = []
+    let ran = false
+    let waits = 0
+    const pending = withCredentialsLock(p, async () => { ran = true }, {
+      staleMs: 60_000, pollMs: 5, notify: (line) => { said.push(line) }, onWait: () => { waits++ },
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(ran).toBe(false)
+    expect(waits).toBeGreaterThan(1)
+    expect(said).toEqual(['waiting for the credentials lock…'])
+    const { unlinkSync } = await import('node:fs')
+    unlinkSync(`${p}.lock`)
+    await pending
+    expect(ran).toBe(true)
+    expect(said).toHaveLength(1)
+  })
+
+  test('says nothing when the lock is free', async () => {
+    const p = tempStore()
+    const said: string[] = []
+    await withCredentialsLock(p, async () => {}, { notify: (line) => { said.push(line) } })
+    expect(said).toEqual([])
   })
 
   test('does not take over a fresh lock', async () => {

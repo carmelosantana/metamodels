@@ -4,7 +4,7 @@ import { adminApiResource, CAPABILITIES, type Capability } from '@metamodels/sch
 import { callApi, type ApiSession } from './client.js'
 import { resolveConsoleUrl, resolveIssuer, CONSOLE_ENV, ISSUER_ENV } from './config.js'
 import {
-  credentialsPath, deleteCredentials, readCredentials, withCredentialsLock, writeCredentials,
+  credentialsPath, deleteCredentials, readCredentials, withCredentialsLock, writeCredentials, type LockOptions,
 } from './credentials.js'
 import { deviceLogin, revokeRefreshToken, type OpDeps } from './device.js'
 import { loadCredential, refreshStored, type SessionContext } from './session.js'
@@ -96,6 +96,11 @@ export interface MainIo {
   op?: OpDeps
   /** Admin-API fetch override (tests). */
   fetch?: typeof fetch
+}
+
+/** The credentials lock says it is waiting on this run's stderr. */
+function lockOptions(io: MainIo): LockOptions {
+  return { notify: (line) => io.stderr(`mm: ${line}\n`) }
 }
 
 /** Exit 2: the command line is wrong, and nothing was sent. */
@@ -199,7 +204,8 @@ async function runApi(spec: CommandSpec, rest: string[], values: Values, io: Mai
   const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env))
   const consoleUrl = config(() => resolveConsoleUrl(values.console as string | undefined, io.env))
   const ctx: SessionContext = {
-    path: credentialsPath(io.env), issuer, resource: adminApiResource(consoleUrl), ...(io.op ? { deps: io.op } : {}),
+    path: credentialsPath(io.env), issuer, resource: adminApiResource(consoleUrl), lock: lockOptions(io),
+    ...(io.op ? { deps: io.op } : {}),
   }
   const session: ApiSession = { current: () => loadCredential(ctx), refresh: (stale) => refreshStored(ctx, stale) }
   const res = await callApi(consoleUrl, session, { method: spec.method, path, query, body }, io.fetch)
@@ -231,7 +237,7 @@ async function login(rest: string[], values: Values, io: MainIo): Promise<number
   )
   const path = credentialsPath(io.env)
   // Under the lock, so a refresh running in another process cannot interleave with this write.
-  await withCredentialsLock(path, async () => writeCredentials(path, cred))
+  await withCredentialsLock(path, async () => writeCredentials(path, cred), lockOptions(io))
   io.stderr(`Signed in to ${issuer}.\n`)
   io.stdout(`${JSON.stringify({ issuer, console: consoleUrl, scope: cred.scope }, null, 2)}\n`)
   return 0
@@ -266,7 +272,7 @@ async function logout(rest: string[], values: Values, io: MainIo): Promise<numbe
     }
     io.stderr(`Signed out of ${issuer}.${accessNote}\n`)
     return 0
-  })
+  }, lockOptions(io))
 }
 
 /** The CLI. Returns the exit code: 0 success, 1 failure, 2 usage error (nothing sent). */

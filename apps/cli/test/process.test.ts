@@ -91,7 +91,9 @@ describe('the mm process', () => {
     expect(firstTries).toBe(2)
     expect(op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
     for (const run of [a, b]) {
-      expect(run.stderr).toBe('')
+      // Nothing else on stderr. Whether the second process finds the lock still held (and says so)
+      // or already released depends on timing: both are right.
+      expect(['', 'mm: waiting for the credentials lock…\n']).toContain(run.stderr)
       expect(run.code).toBe(0)
       expect(JSON.parse(run.stdout)).toEqual([{ id: 'f1' }])
     }

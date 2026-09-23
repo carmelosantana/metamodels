@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -309,6 +309,20 @@ describe('main: logout', () => {
     expect(w.op.requests.some((r) => r.path === '/token/revocation')).toBe(true)
     expect(readCredentials(w.path, w.op.url)).toBeNull()
     expect(w.stderr()).toMatch(/could not revoke/)
+  })
+
+  test('says on stderr that it is waiting for the credentials lock', async () => {
+    const w = await world()
+    w.signIn()
+    w.op.on('POST /token/revocation', () => ({ status: 200, text: '' }))
+    writeFileSync(`${w.path}.lock`, `${process.pid}\n`)
+    const done = w.run('logout')
+    await new Promise((r) => setTimeout(r, 150))
+    expect(w.op.requests).toHaveLength(0)
+    unlinkSync(`${w.path}.lock`)
+    expect(await done).toBe(0)
+    expect(w.stderr()).toContain('waiting for the credentials lock…')
+    expect(readCredentials(w.path, w.op.url)).toBeNull()
   })
 
   test('needs no console, and is a no-op when not signed in', async () => {

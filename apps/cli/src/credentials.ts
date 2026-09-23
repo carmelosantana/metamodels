@@ -116,7 +116,8 @@ export function deleteCredentials(path: string, issuer: string): void {
 
 export interface LockOptions {
   /**
-   * A lock older than this is presumed left by a crashed process and taken over. It must exceed the
+   * A lock older than this is presumed left by a crashed process and taken over (sooner when the
+   * pid it records no longer exists: see `holderExited`). It must exceed the
    * longest a holder can legitimately keep it: every OP request made under the lock carries a
    * timeout well inside this (see `device.ts`).
    */
@@ -126,9 +127,33 @@ export interface LockOptions {
   onWait?: () => void
   /** Called when a lock has been judged stale, just before it is re-checked and removed — for tests. */
   onStale?: () => void
+  /** Where the one "waiting" line goes when the lock is found held (default: stderr). */
+  notify?: (line: string) => void
 }
 
 export const LOCK_STALE_MS = 60_000
+
+/**
+ * True when the lock records the pid of a process that no longer exists — a holder stopped by
+ * Ctrl-C or a crash, which never ran its release. Its lock is stale whatever its age.
+ *
+ * Only ESRCH counts: EPERM is a live process of another user, and a lock with no pid yet (taken a
+ * moment ago, not yet written) or any other content falls back to the age check. A holder in another
+ * PID namespace, or on another host sharing this directory, reads as exited: best effort, like the
+ * age check.
+ */
+function holderExited(lock: string): boolean {
+  let text: string
+  try { text = readFileSync(lock, 'utf8') } catch { return false }
+  const m = /^([1-9]\d{0,9})\n$/.exec(text)
+  if (m === null) return false
+  try {
+    process.kill(Number(m[1]), 0)
+    return false
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
 
 /** The same lock file: same inode, and not rewritten since (a lock is written once, when taken). */
 function sameLock(a: Stats, b: Stats): boolean {
@@ -151,8 +176,10 @@ function sameLock(a: Stats, b: Stats): boolean {
 export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>, o: LockOptions = {}): Promise<T> {
   const staleMs = o.staleMs ?? LOCK_STALE_MS
   const pollMs = o.pollMs ?? 100
+  const notify = o.notify ?? ((line: string) => { process.stderr.write(`${line}\n`) })
   const lock = `${path}.lock`
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  let waited = false
   let ours: Stats
   for (;;) {
     try {
@@ -180,11 +207,15 @@ export async function withCredentialsLock<T>(path: string, fn: () => Promise<T>,
       // takeover would clear it. Left in place for the operator to look at.
       throw new Error(`${lock} is not a regular file; remove it and run the command again`)
     }
-    if (Date.now() - held.mtimeMs > staleMs) {
+    if (Date.now() - held.mtimeMs > staleMs || holderExited(lock)) {
       o.onStale?.()
       // Remove the lock we judged stale, not one a faster waiter has since created (best effort, as above).
       try { if (sameLock(lstatSync(lock), held)) unlinkSync(lock) } catch { /* already gone */ }
       continue
+    }
+    if (!waited) {
+      waited = true
+      notify('waiting for the credentials lock…')
     }
     o.onWait?.()
     await new Promise((r) => setTimeout(r, pollMs))
