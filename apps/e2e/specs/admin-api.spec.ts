@@ -214,7 +214,7 @@ test.afterAll(async () => {
         // request URL, which can name the container's own address, and following its host could send
         // the operator's bearer elsewhere. The next URL is rebuilt on this spec's own `API` base.
         const next = /<([^>]+)>;\s*rel="?next"?/.exec(res.headers.get('link') ?? '')?.[1]
-        const cursor = next === undefined ? null : new URL(next, url).searchParams.get('cursor')
+        const cursor: string | null = next === undefined ? null : new URL(next, url).searchParams.get('cursor')
         url = cursor === null ? null : `${API}/flocks?${new URLSearchParams({ limit: '200', cursor })}`
       }
       for (const id of ids) await api('DELETE', `/flocks/${id}`, bearer(state.operator)).catch(() => {})
