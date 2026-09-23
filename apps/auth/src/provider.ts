@@ -103,7 +103,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
       policy: interactionPolicyWithFreshDeviceLogin(),
     },
-    // The library default, named so devicePrefillMiddleware matches the same path.
+    // The library default, named so the device middlewares match the same paths (device_resume is
+    // this path plus `/:uid`).
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
       devInteractions: { enabled: false },

@@ -99,10 +99,10 @@ ${withoutInlineHandlers(form)}
 
 /**
  * Shown when a device approval's login is by a different account than the one this browser's OP
- * session holds. oidc-provider handles that case by ending the old session first: it posts
- * `logout=yes` and its xsrf token to its own logout-confirm endpoint, and returns to the device flow
- * as the new account. It does that with an auto-submitting script page, which our CSP blocks. This
- * page is the same form, with a button and an explanation.
+ * session holds. oidc-provider handles that case by ending the old session first: the browser posts
+ * `logout=yes` and the library's xsrf token to its logout-confirm endpoint, which redirects back to
+ * the device flow, now as the new account. The library sends that POST from an auto-submitting
+ * script page, which our CSP blocks. This page is the same form, with a button and an explanation.
  */
 export function renderSwitchAccountPage(action: string, xsrf: string): string {
   return page('Switch account', `<h1>Switch account?</h1>
