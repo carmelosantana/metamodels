@@ -208,3 +208,55 @@ describe('revokeRefreshToken', () => {
     expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-1' }, fakeDeps())).toBe(false)
   })
 })
+
+describe('redirects from the OP are not followed', () => {
+  let elsewhere: Stub | undefined
+  afterEach(async () => {
+    await elsewhere?.close()
+    elsewhere = undefined
+  })
+
+  /** A second origin that would accept anything sent to it, and records it. */
+  async function otherOrigin(): Promise<Stub> {
+    elsewhere = await startStub()
+    for (const route of ['GET /.well-known/openid-configuration', 'POST /token', 'POST /token/revocation']) {
+      elsewhere.on(route, () => ({ status: 200, json: TOKEN }))
+    }
+    return elsewhere
+  }
+
+  test('a 307 from the token endpoint does not carry the refresh token to another origin', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token', () => ({ status: 307, headers: { location: `${other.url}/token` } }))
+    const err = await refresh({ issuer: stub.url, resource: RESOURCE, refreshToken: 'rt-SECRET' }, fakeDeps()).catch((e: unknown) => e)
+    // The request did reach the OP, with the token: the stub is what redirected it.
+    expect(stub.requests.find((r) => r.path === '/token')!.form.refresh_token).toBe('rt-SECRET')
+    expect(other.requests).toEqual([])
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(SignInAgainError)
+    expect((err as Error).message).toMatch(/redirect/)
+    expect((err as Error).message).not.toContain('rt-SECRET')
+  })
+
+  test('a 307 from the revocation endpoint is not followed either', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    serveDiscovery(stub)
+    stub.on('POST /token/revocation', () => ({ status: 307, headers: { location: `${other.url}/token/revocation` } }))
+    expect(await revokeRefreshToken({ issuer: stub.url, refreshToken: 'rt-SECRET' }, fakeDeps())).toBe(false)
+    expect(stub.requests.some((r) => r.path === '/token/revocation')).toBe(true)
+    expect(other.requests).toEqual([])
+  })
+
+  test('a redirected discovery document is refused, not fetched from where it points', async () => {
+    const other = await otherOrigin()
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 302, headers: { location: `${other.url}/.well-known/openid-configuration` },
+    }))
+    await expect(discover(stub.url, fakeDeps())).rejects.toThrow(/redirect/)
+    expect(other.requests).toEqual([])
+  })
+})

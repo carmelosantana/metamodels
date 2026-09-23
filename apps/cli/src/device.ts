@@ -61,13 +61,25 @@ async function readJson(res: Response): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * Every OP request refuses redirects. `fetch` would otherwise follow a 307 or 308 with the same
+ * method and body, carrying a refresh token or device code to wherever the `Location` points.
+ */
+function refuseRedirect(res: Response, what: string): void {
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error(`${what} answered with a redirect (HTTP ${res.status}); refusing to follow it`)
+  }
+}
+
 async function postForm(d: ReturnType<typeof deps>, url: string, fields: Record<string, string>) {
   const res = await d.fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', 'user-agent': USER_AGENT },
     body: new URLSearchParams(fields).toString(),
+    redirect: 'manual',
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
+  refuseRedirect(res, 'the authorization server')
   return { status: res.status, json: await readJson(res) }
 }
 
@@ -82,8 +94,10 @@ export async function discover(issuer: string, o: OpDeps = {}): Promise<OpMetada
   const d = deps(o)
   const res = await d.fetch(`${issuer}/.well-known/openid-configuration`, {
     headers: { accept: 'application/json', 'user-agent': USER_AGENT },
+    redirect: 'manual',
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
+  refuseRedirect(res, `discovery at ${issuer}`)
   if (!res.ok) throw new Error(`discovery at ${issuer} failed: HTTP ${res.status}`)
   const meta = await readJson(res)
   if (meta.issuer !== issuer) {
