@@ -88,7 +88,7 @@ export function pkcePair(): { verifier: string; challenge: string } {
 
 export type AuthorizeOutcome =
   | { kind: 'redirect'; url: URL; verifier: string; jar: CookieJar }
-  | { kind: 'page'; status: number; body: string; verifier: string; jar: CookieJar }
+  | { kind: 'page'; status: number; body: string; csp: string | null; verifier: string; jar: CookieJar }
 
 export interface AuthorizeOptions {
   email?: string
@@ -144,7 +144,7 @@ export async function authorize(op: TestOp, o: AuthorizeOptions = {}): Promise<A
       })
       continue
     }
-    return { kind: 'page', status: res.status, body, verifier, jar }
+    return { kind: 'page', status: res.status, body, csp: res.headers.get('content-security-policy'), verifier, jar }
   }
   throw new Error('authorize(): too many redirects')
 }

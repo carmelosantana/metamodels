@@ -8,9 +8,8 @@ import { interactionMiddleware, interactionPolicyWithFreshDeviceLogin, loadExist
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
 import { accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers } from './resources.js'
-import {
-  DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, deviceSwitchAccountMiddleware, prefilledUserCode,
-} from './device-middleware.js'
+import { switchAccountMiddleware } from './switch-account.js'
+import { DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, prefilledUserCode } from './device-middleware.js'
 import { renderDeviceConfirmPage, renderUserCodePage } from './device-views.js'
 import { authCsp, renderLogoutPage, renderMessagePage } from './views.js'
 
@@ -106,7 +105,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // A new grant for every device approval; the console keeps the default (see loadExistingGrant).
     loadExistingGrant,
     // The library default, named so devicePrefillMiddleware matches the path this route is served
-    // on. (deviceSwitchAccountMiddleware keys on the matched route name, device_resume, not a path.)
+    // on. (switchAccountMiddleware keys on the matched route name, device_resume, not a path.)
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
       devInteractions: { enabled: false },
@@ -199,6 +198,6 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     csp: authCsp([new URL(cfg.consoleUrl).origin]),
   }))
   provider.use(devicePrefillMiddleware())
-  provider.use(deviceSwitchAccountMiddleware())
+  provider.use(switchAccountMiddleware())
   return provider
 }

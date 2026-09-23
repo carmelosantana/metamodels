@@ -4,7 +4,10 @@ import { createPrivateKey, generateKeyPairSync } from 'node:crypto'
 import { CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { seedUser } from './helpers/db.js'
 import { rsaThumbprint } from '../src/keys.js'
-import { authorize, exchangeCode, opJwks, send, startTestOp, type TestOp } from './helpers/flow.js'
+import { authCsp } from '../src/views.js'
+import {
+  authorize, CONSOLE_URL, type CookieJar, exchangeCode, hiddenFields, opJwks, REDIRECT_URI, send, startTestOp, type TestOp,
+} from './helpers/flow.js'
 
 const T = 20_000
 let op: TestOp | undefined
@@ -173,6 +176,81 @@ describe('auth service — authorization code flow', () => {
     if (out.kind !== 'redirect') throw new Error('expected an error redirect to the client')
     expect(out.url.searchParams.get('error')).toBe('access_denied')
     expect(out.url.searchParams.get('code')).toBeNull()
+  }, T)
+})
+
+// The console's invite sign-in (`login_hint` + `prompt=login`) in a browser whose OP session is
+// another account's. oidc-provider ends that session first, through a logout step on
+// `GET /auth/:uid` that it sends as an auto-submitting script page, which our CSP blocks.
+describe('auth service — invite sign-in while another account is signed in', () => {
+  const A = { email: 'admin@x.io', password: 'hunter2hunter2' }
+  const B = { email: 'invitee@x.io', password: 'invitee-pass-123' }
+  const form = { 'content-type': 'application/x-www-form-urlencoded' }
+
+  /** A's browser, then an invite sign-in for B in it: the page the resume after B's login ends on. */
+  async function inviteSignIn() {
+    op = await startTestOp()
+    const idA = await seedUser(op.db, A)
+    const idB = await seedUser(op.db, B)
+    const first = await authorize(op, A)
+    if (first.kind !== 'redirect') throw new Error(`A's sign-in failed: ${first.status}`)
+    const out = await authorize(op, { jar: first.jar, ...B, extra: { prompt: 'login', login_hint: B.email } })
+    if (out.kind !== 'page') throw new Error(`expected the switch-account step, got a redirect to ${out.url.href}`)
+    return { idA, idB, out }
+  }
+
+  /** Press the page's button: post its form, then follow redirects to the console's callback. */
+  async function pressContinue(jar: CookieJar, body: string, fields: Record<string, string>) {
+    const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(body)![1]
+    let res = await send(jar, new URL(action, op!.issuer).href, {
+      method: 'POST', headers: form, body: new URLSearchParams(fields).toString(),
+    })
+    for (let hop = 0; hop < 12 && res.status >= 300 && res.status < 400; hop++) {
+      const next = new URL(res.headers.get('location')!, op!.issuer)
+      if (next.href.startsWith(REDIRECT_URI)) return { status: res.status, callback: next }
+      res = await send(jar, next.href)
+    }
+    return { status: res.status, callback: undefined }
+  }
+
+  test('shows a page with a visible button, not a blank script page, under the unchanged CSP', async () => {
+    const { out } = await inviteSignIn()
+    expect(out.status).toBe(200)
+    expect(out.body).toContain('<h1>Switch account?</h1>')
+    expect(out.body).toContain('<link rel="stylesheet" href="/assets/auth.css">')
+    expect(out.body).toMatch(/<button[^>]* type="submit" form="op\.switchAccountForm">Continue<\/button>/)
+    expect(out.body).not.toMatch(/<script|<noscript|\son[a-z]+=/i)
+    expect(out.csp).toBe(authCsp([CONSOLE_URL]))
+    expect(out.csp).not.toMatch(/script-src|unsafe-inline/)
+  }, T)
+
+  test('Continue ends A\'s session and completes the sign-in as B', async () => {
+    const { idA, idB, out } = await inviteSignIn()
+    const fields = hiddenFields(out.body)
+    expect(fields.logout).toBe('yes')
+    expect(fields.xsrf).toBeTruthy()
+
+    const done = await pressContinue(out.jar, out.body, fields)
+    if (!done.callback) throw new Error(`expected a redirect to the console, got ${done.status}`)
+    expect(done.callback.searchParams.get('state')).toBe('state-123')
+    const tokens = await exchangeCode(op!, done.callback.searchParams.get('code')!, out.verifier)
+    expect(tokens.status).toBe(200)
+    const { payload } = await jwtVerify(tokens.json.id_token as string, await opJwks(op!), { issuer: op!.issuer })
+    expect(payload.sub).toBe(idB)
+    expect(payload.sub).not.toBe(idA)
+  }, T)
+
+  test('the same POST without the xsrf field is refused, and A stays signed in', async () => {
+    const { idA, out } = await inviteSignIn()
+    const done = await pressContinue(out.jar, out.body, { logout: 'yes' })
+    expect(done.status).toBe(400)
+    expect(done.callback).toBeUndefined()
+
+    // A's OP session was not ended: this browser still signs the console in silently as A.
+    const silent = await authorize(op!, { jar: out.jar })
+    if (silent.kind !== 'redirect') throw new Error(`expected a silent sign-in, got ${silent.status}`)
+    const tokens = await exchangeCode(op!, silent.url.searchParams.get('code')!, silent.verifier)
+    expect((await jwtVerify(tokens.json.id_token as string, await opJwks(op!), { issuer: op!.issuer })).payload.sub).toBe(idA)
   }, T)
 })
 
