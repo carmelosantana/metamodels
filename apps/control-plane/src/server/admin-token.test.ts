@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { adminApiResource, CLI_CLIENT_ID, CONSOLE_CLIENT_ID, user } from '@metamodels/schema'
 import { authorize } from '../auth/authorize'
-import { freshDb, seedOrg } from '../test/db'
+import { seedOrg, sharedDb } from '../test/db'
 import {
   actorFromToken,
   credentialOf,
@@ -426,8 +426,10 @@ describe('verifyAdminToken', () => {
 })
 
 describe('actorFromToken', () => {
+  const testDb = sharedDb()
+
   async function withActiveUser(role = 'admin') {
-    const db = await freshDb()
+    const db = testDb()
     const org = await seedOrg(db)
     const [u] = await db.insert(user).values({
       orgId: org.id, email: 'op@x.io', passwordHash: 'unused', role, status: 'active',
