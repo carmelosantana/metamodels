@@ -78,7 +78,10 @@ function credential(home: string): Credential {
   return cred
 }
 
-/** A JWT's claims. Signature not checked: the admin API is what checks it; this only reads `jti`. */
+/**
+ * A JWT's claims. Signature not checked: the admin API is what checks it. This spec reads `jti`,
+ * `aud` and `client_id` from them, to assert on or to print.
+ */
 function claims(jwt: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'))
 }
@@ -145,7 +148,10 @@ async function deviceLogin(browser: Browser, scope: string, email: string, passw
 
     await expect(page.getByRole('heading', { name: 'Approve this sign-in?' })).toBeVisible()
     await expect(page.locator('p.code')).toHaveText(userCode)
-    // Where the request came from: the CLI's own address and user agent, not the browser's.
+    // Where the request came from: the requester's address as the OP saw it, and its user agent,
+    // which is the CLI's. The address cannot tell the CLI from this browser: on a compose stack
+    // reached through its published ports, both arrive from the Docker bridge address. So this spec
+    // only asserts that an address is shown, not whose it is.
     const device = page.locator('p.device')
     await expect(device).toContainText(/IP address: (?!unknown)\S+/)
     await expect(device).toContainText(/User agent: metamodels-cli \(/)
@@ -228,14 +234,22 @@ test('the CLI creates, reads, replaces and deletes; a key is revoked, and every 
   expect(paddock).toMatchObject({ flockId: state.flockId, slug: PADDOCK_SLUG })
   state.paddockId = paddock.id
 
-  // The plaintext key is in this output exactly once; it is never logged.
-  const key = await cliJson(home, 'keys', 'create', '--data',
-    JSON.stringify({ name: KEY_NAME, paddockIds: [state.paddockId] })) as Record<string, string>
+  // The plaintext key is on stdout exactly once, never on stderr, and never listed again.
+  const created = await cli(home, 'keys', 'create', '--data',
+    JSON.stringify({ name: KEY_NAME, paddockIds: [state.paddockId] }))
+  expect(created.code, `mm keys create failed:\n${created.stderr}`).toBe(0)
+  const key = JSON.parse(created.stdout) as Record<string, string>
   state.keyId = key.id
   expect(state.keyId).toBeTruthy()
+  expect(key.plaintext).toBeTruthy()
+  expect(created.stdout.split(key.plaintext)).toHaveLength(2)
+  expect(created.stderr).not.toContain(key.plaintext)
 
   expect(await cliJson(home, 'keys', 'revoke', state.keyId)).toBeNull()
-  const keys = await cliJson(home, 'keys', 'list') as Array<Record<string, string>>
+  const listed = await cli(home, 'keys', 'list')
+  expect(listed.code, `mm keys list failed:\n${listed.stderr}`).toBe(0)
+  expect(listed.stdout).not.toContain(key.plaintext)
+  const keys = JSON.parse(listed.stdout) as Array<Record<string, string>>
   expect(keys.find((k) => k.id === state.keyId)).toMatchObject({ status: 'revoked' })
 
   // There is no `mm keys delete`: the CLI refuses it before sending anything.
