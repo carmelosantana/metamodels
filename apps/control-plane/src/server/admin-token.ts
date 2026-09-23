@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, errors as joseErrors, jwtVerify, type RemoteJWKSet } from 'jose'
+import { createRemoteJWKSet, decodeJwt, errors as joseErrors, jwtVerify, type RemoteJWKSet } from 'jose'
 import { adminApiResource, CAPABILITIES, type Capability } from '@metamodels/schema'
 import { loadOidcClientConfig, onOrigin } from '../auth/oidc-client'
 import type { Actor, Credential } from '../auth/authorize'
@@ -113,7 +113,33 @@ function keySetFailure(e: unknown): string | undefined {
   return 'the key set endpoint could not be reached'
 }
 
+/**
+ * True when the token's `exp`, read WITHOUT verifying the token, is already past. jose resolves the
+ * signing key before it checks `exp`, so without this an expired token whose key has since been
+ * dropped from the key set is a `kid` miss, and inside the cooldown a miss is a 503. The rotation
+ * procedure drops a key only after every token it signed has expired, so every such token takes
+ * this path and gets the same 401 as an expired token with a known key.
+ *
+ * Rejection-only: an unverified claim can make this return true and the token be refused, never
+ * make a token be accepted. Anything that is not a numeric `exp` in the past (no `exp`, a string
+ * `exp`, a token that does not decode) returns false and is left to `jwtVerify`, which rejects it as
+ * before. The comparison is jose's own (`lib/jwt_claims_set.js`): `now` in whole seconds, expired
+ * when `exp <= now`. jose subtracts `clockTolerance` from `now`, and `verifyAdminToken` sets none.
+ */
+function expiredBeforeVerifying(jwt: string): boolean {
+  let exp: unknown
+  try {
+    exp = decodeJwt(jwt).exp
+  } catch {
+    return false
+  }
+  return typeof exp === 'number' && exp <= Math.floor(Date.now() / 1000)
+}
+
 export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
+  // Before the key set is touched: no fetch, and no cooldown to turn this into a 503. The client
+  // sees the one fixed 401 every `TokenError` gets (`problem.ts`); the reason is server-side only.
+  if (expiredBeforeVerifying(jwt)) throw new TokenError('expired, judged before resolving the signing key')
   const cfg = loadOidcClientConfig()
   const keySet = adminJwks()
   // Read BEFORE verifying: a fetch during the call restarts the cooldown. See the catch below.
@@ -143,7 +169,9 @@ export async function verifyAdminToken(jwt: string): Promise<AdminClaims> {
      *   call (or by a concurrent verification's load, requested moments before it) and the `kid` was
      *   looked up in it: the key is retired or forged, and the client should refresh.
      * - Cooling down → 503. The set was fetched under `JWKS_COOLDOWN_MS` ago and jose refetched
-     *   nothing, so the `kid` may belong to a signer the OP began publishing since. The cooldown ends
+     *   nothing, so the `kid` may belong to a signer the OP began publishing since. A token whose
+     *   numeric `exp` had passed never gets here: it was refused before the key set was consulted
+     *   (`expiredBeforeVerifying`). The cooldown ends
      *   within the 30 s `Retry-After`. A retry after that refetches, unless another verification's
      *   miss refetched first and started a new cooldown.
      *

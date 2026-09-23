@@ -239,9 +239,10 @@ describe('verifyAdminToken', () => {
     expect(jwksRequests - primed).toBe(1)
   })
 
-  test('an EXPIRED token signed by a retired key is 401, although jose resolves the key before `exp`', async () => {
+  test('an unexpired token signed by a key dropped since the set was cached is 401, after exactly one fetch', async () => {
     // A retired key leaves the verifier only when its cached set is refetched. Here the cache ages out
-    // (`cacheMaxAge`), so jose reloads at the start of the call, and that one fetch lacks key A.
+    // (`cacheMaxAge`), so jose reloads at the start of the call, and that one fetch lacks key A. The
+    // token has not expired, so the expiry pre-check does not decide it: key resolution does.
     const aud = adminApiResource(CONSOLE_URL)
     fakeClock()
     await verifyAdminToken(await mint({ aud }))
@@ -249,9 +250,51 @@ describe('verifyAdminToken', () => {
     advanceClock(PAST_CACHE_MAX_AGE_MS)
 
     const before = jwksRequests
+    const retired = await mint({ aud }, { key: keyA, kid: KID_A })
+    await expect(verifyAdminToken(retired)).rejects.toBeInstanceOf(TokenError)
+    expect(jwksRequests - before).toBe(1)
+  })
+
+  test('an EXPIRED token signed by a retired key is 401 even while the key set is cooling down, and fetches nothing', async () => {
+    // The rotation drops the old key only after every old-key token has expired. jose resolves the
+    // key before it checks `exp`, so without the pre-check this is a `kid` miss inside the cooldown:
+    // a 503. `exp` is read first, unverified, and can only reject.
+    const aud = adminApiResource(CONSOLE_URL)
+    published = [jwkB]
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    const primed = jwksRequests
+
     const expiredRetired = await mint({ aud }, { key: keyA, kid: KID_A, exp: nowSeconds() - 3600 })
     await expect(verifyAdminToken(expiredRetired)).rejects.toBeInstanceOf(TokenError)
-    expect(jwksRequests - before).toBe(1)
+    expect(jwksRequests).toBe(primed)
+  })
+
+  test('the expiry pre-check matches jose\'s comparison: `exp` equal to now is expired, one second later is not', async () => {
+    // jose (`lib/jwt_claims_set.js`): expired when `exp <= now - clockTolerance`, `now` in whole
+    // seconds, and no tolerance is configured here. Pinned against the pre-check with a retired
+    // `kid` inside the cooldown, where only the pre-check can make the answer a 401.
+    const aud = adminApiResource(CONSOLE_URL)
+    published = [jwkB]
+    fakeClock()
+    await verifyAdminToken(await mint({ aud }))
+    const primed = jwksRequests
+
+    const atNow = await mint({ aud }, { key: keyA, kid: KID_A, exp: nowSeconds() })
+    await expect(verifyAdminToken(atNow)).rejects.toBeInstanceOf(TokenError)
+    const aSecondLater = await mint({ aud }, { key: keyA, kid: KID_A, exp: nowSeconds() + 1 })
+    await expect(verifyAdminToken(aSecondLater)).rejects.toBeInstanceOf(KeySetUnavailableError)
+    expect(jwksRequests).toBe(primed)
+  })
+
+  test('a token the pre-check cannot read is still judged by jwtVerify, and rejected', async () => {
+    const aud = adminApiResource(CONSOLE_URL)
+    for (const garbage of ['', 'garbage', 'a.b.c', 'a.b.c.d.e']) {
+      await expect(verifyAdminToken(garbage)).rejects.toBeInstanceOf(TokenError)
+    }
+    // A non-numeric `exp` is not the pre-check's to judge: jwtVerify refuses it.
+    const stringExp = await mint({ aud, exp: '0' }, { exp: false })
+    await expect(verifyAdminToken(stringExp)).rejects.toBeInstanceOf(TokenError)
   })
 
   test('a 503 is logged with its reason and cause, and never the token', async () => {
