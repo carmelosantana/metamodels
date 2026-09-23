@@ -411,6 +411,18 @@ describe('verification_uri_complete', () => {
     expect(res.status).toBe(200)
     expect(typedCode(body)).toBe('&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;')
     expect(body).not.toMatch(/<script/i)
+
+    // Replacement-string patterns: each comes back as its own text, and the form is not duplicated.
+    const cases = [['$1', '$1'], ['$`', '$`'], ['$&', '$&amp;'], ["$'", '$&#39;'], ['$1 hidden form=nope', '$1 hidden form=nope']]
+    for (const [code, value] of cases) {
+      const r = await send(new CookieJar(), `${op.issuer}/device?user_code=${encodeURIComponent(code)}`)
+      const b = await r.text()
+      expect(r.status).toBe(200)
+      expect(b).toContain(`type="text" name="user_code" value="${value}" placeholder="Enter code" autofocus`)
+      expect(typedCode(b)).toBe(value)
+      expect(b.match(/<input type="hidden" name="xsrf" value="[0-9a-f]{48}"\/>/g)).toHaveLength(1)
+      expect(b.match(/<form /g)).toHaveLength(1)
+    }
   }, T)
 
   test('plain /device is unchanged: the empty entry page', async () => {

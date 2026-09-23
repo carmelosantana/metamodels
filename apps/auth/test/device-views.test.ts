@@ -40,6 +40,26 @@ describe('renderUserCodePage', () => {
     expect(html.match(/name="user_code"/g)).toHaveLength(1)
   })
 
+  // `$1`, `` $` ``, `$&` and `$'` are special in a String.prototype.replace replacement string, and
+  // escapeHtml leaves `$` alone. Each must come back as the literal text, not as library markup.
+  test.each([
+    ['$1', '$1'],
+    ['$`', '$`'],
+    ['$&', '$&amp;'],
+    ["$'", '$&#39;'],
+    ['$1 hidden form=nope', '$1 hidden form=nope'],
+    ['$$', '$$'],
+  ])(
+    'a prefilled code containing %s is shown as that text, and the form is not duplicated',
+    (code, value) => {
+      const html = renderUserCodePage(INPUT_FORM, undefined, code)
+      expect(html).toContain(`<input\n    type="text" name="user_code" value="${value}" placeholder="Enter code" autofocus autocomplete="off"></input>`)
+      expect(html.match(/<input type="hidden" name="xsrf" value="t0ken"\/>/g)).toHaveLength(1)
+      expect(html.match(/<form /g)).toHaveLength(1)
+      expect(html.match(/name="user_code"/g)).toHaveLength(1)
+    },
+  )
+
   test('a prefilled code that looks like a handler is kept as text, not reshaped by the handler strip', () => {
     const html = renderUserCodePage(INPUT_FORM, undefined, 'x onfocus=')
     expect(html).toContain('name="user_code" value="x onfocus=" placeholder="Enter code" autofocus autocomplete="off">')

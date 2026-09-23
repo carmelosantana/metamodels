@@ -43,12 +43,15 @@ function userCodeError(err: UserCodeError | undefined): string | undefined {
 
 /**
  * Put `code` into the provider form's visible user_code input. The code comes from a URL anyone can
- * send, so it is escaped like every other value on these pages. The form is otherwise untouched:
- * its xsrf token and action stay the provider's, so Continue goes through the normal POST.
+ * send, so it is escaped like every other value on these pages. It is inserted by a replacer
+ * function, never a replacement string: in a string, `$1`, `` $` ``, `$&` and `$'` would be expanded
+ * into library markup, and escapeHtml leaves `$` alone. The form is otherwise untouched: its xsrf
+ * token and action stay the provider's, so Continue goes through the normal POST.
  */
 function withPrefilledCode(form: string, code: string | undefined): string {
   if (!code) return form
-  return form.replace(/(<input\s[^>]*?)\bname="user_code"/, `$1name="user_code" value="${escapeHtml(code)}"`)
+  const value = escapeHtml(code)
+  return form.replace(/(<input\s[^>]*?)\bname="user_code"/, (_, pre: string) => `${pre}name="user_code" value="${value}"`)
 }
 
 /**
