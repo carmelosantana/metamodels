@@ -140,6 +140,24 @@ describe('problemForError', () => {
     expect(body).not.toContain('ECONNREFUSED')
   })
 
+  test('the 503 detail is one fixed string, true whether the key set could not be fetched or cannot be refetched yet', async () => {
+    // In the cooldown case the sign-in service is fine; the console just may not fetch its keys
+    // again yet. So the detail must not say the service is unreachable, and it must not say which
+    // case this is.
+    const causes = [
+      new KeySetUnavailableError('the key set endpoint could not be reached'),
+      new KeySetUnavailableError('the token `kid` is not in a key set fetched too recently to refetch'),
+    ]
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const details = await Promise.all(
+      causes.map(async (e) => ((await problemForError(e).json()) as { detail?: string }).detail),
+    )
+    vi.restoreAllMocks()
+    expect(new Set(details).size).toBe(1)
+    expect(details[0]).toBe('the access token cannot be verified right now; retry after the Retry-After interval')
+    expect(details[0]).not.toMatch(/unreachable|authorization server/)
+  })
+
   describe('the 503 log', () => {
     afterEach(() => vi.restoreAllMocks())
 

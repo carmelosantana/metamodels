@@ -76,13 +76,16 @@ export function problemForError(e: unknown): Response {
   }
   if (e instanceof NotFoundError) return problem(404, 'Not Found', e.message)
   // Before the TokenError arm on purpose. The token was not judged against a current key set, and
-  // answering 401 would send a client off to refresh a token that may be fine.
+  // answering 401 would send a client off to refresh a token that may be fine. One fixed detail for
+  // both causes (the key set could not be fetched, or it was fetched too recently to fetch again):
+  // in the second the sign-in service is fine, so the detail must not say it is down, and naming
+  // either cause would tell the caller more than it needs to retry.
   if (e instanceof KeySetUnavailableError) {
     logKeySetUnavailable(e)
     return problem(
       503,
       'Service Unavailable',
-      'the authorization server is temporarily unreachable; retry shortly',
+      'the access token cannot be verified right now; retry after the Retry-After interval',
       undefined,
       { 'retry-after': KEY_SET_RETRY_AFTER_SECONDS },
     )

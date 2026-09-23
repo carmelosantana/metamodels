@@ -32,8 +32,9 @@ export class TokenError extends Error {
  * `verifyAdminToken`).
  *
  * Distinct from `TokenError` on purpose: the token may be perfectly valid. The caller must answer
- * 503, not 401 — a client that "fixes" a 401 by refreshing would only hit the same unreachable OP,
- * and an operator watching a wave of 401s would never learn the OP was down. As with `TokenError`,
+ * 503, not 401 — a client that "fixes" a 401 by refreshing would spend a refresh on a token that
+ * may be fine (and, when the OP is down, hit the same unreachable OP), and an operator watching a
+ * wave of 401s would never learn the OP was down. As with `TokenError`,
  * `reason` and `cause` are for server-side logging only.
  */
 export class KeySetUnavailableError extends Error {
