@@ -5,9 +5,15 @@
  *
  * It must EXIT, not throw: Next 16 catches a rejected `register()`, logs "Failed to prepare
  * server", and goes on listening and answering 500s, so a container would sit "unhealthy" forever
- * instead of stopping where `restart:` and the operator can see it. `exit` is injectable for tests.
+ * instead of stopping where `restart:` and the operator can see it.
  */
-export async function register(exit: (code: number) => never = (code) => process.exit(code)): Promise<void> {
+export async function register(): Promise<void> {
+  // No parameters on purpose: Next calls this, and anything it ever passed must not become `exit`.
+  await boot((code) => process.exit(code))
+}
+
+/** The work behind `register()`, with `exit` injected so a test can observe it. */
+export async function boot(exit: (code: number) => never): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
   try {
     const { upstreamAuthKeys } = await import('./server/seal-keys')

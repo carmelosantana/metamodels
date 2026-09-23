@@ -61,8 +61,8 @@ describe('register (Next.js instrumentation — runs once at server boot)', () =
     vi.stubEnv('NEXT_RUNTIME', 'nodejs')
     vi.stubEnv('UPSTREAM_AUTH_KEY', '')
     const exit = vi.fn()
-    const { register } = await import('./instrumentation')
-    await register(exit as unknown as (code: number) => never)
+    const { boot } = await import('./instrumentation')
+    await boot(exit as unknown as (code: number) => never)
     expect(exit).toHaveBeenCalledWith(1)
   })
 
@@ -70,8 +70,14 @@ describe('register (Next.js instrumentation — runs once at server boot)', () =
     vi.stubEnv('NEXT_RUNTIME', 'edge')
     vi.stubEnv('UPSTREAM_AUTH_KEY', '')
     const exit = vi.fn()
-    const { register } = await import('./instrumentation')
-    await register(exit as unknown as (code: number) => never)
+    const { boot } = await import('./instrumentation')
+    await boot(exit as unknown as (code: number) => never)
     expect(exit).not.toHaveBeenCalled()
+  })
+
+  // Next calls register() with no arguments today; if it ever passed one, it must not become `exit`.
+  test('register takes no parameters, so nothing Next passes can replace the exit', async () => {
+    const { register } = await import('./instrumentation')
+    expect(register.length).toBe(0)
   })
 })
