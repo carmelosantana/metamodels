@@ -477,7 +477,7 @@ const COMPONENT_RESPONSES: Record<string, ResponseObject> = {
       'than 30 seconds ago, too recently to fetch again (a key the provider may have just begun ' +
       'publishing). 503 rather than 401 on purpose: a 401 would send the client off to refresh a ' +
       'token that may be fine. A signing key missing from a key set fetched for this request is a ' +
-      '401.',
+      '401, and so is a token whose `exp` has passed, whatever its signing key.',
     {
       headers: {
         'Retry-After': {
