@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'vitest'
-import { flockFormToInput } from './flock-form'
+import { ZodError } from 'zod'
+import { ForbiddenError } from '../auth/authorize'
+import { CredentialRebindError, NotFoundError } from '../server/flocks-service'
+import { flockFormToInput, saveFlockErrorMessage } from './flock-form'
+import { saveFlockInput } from './flock-schema'
 
 const form = (fields: Record<string, string>) => {
   const fd = new FormData()
@@ -25,5 +29,24 @@ describe('flockFormToInput', () => {
 
   test('no id means create', () => {
     expect(flockFormToInput(form(BASE)).id).toBeUndefined()
+  })
+})
+
+describe('saveFlockErrorMessage', () => {
+  test('passes through the errors the service raises on purpose', () => {
+    const forbidden = new ForbiddenError('resource.write')
+    expect(saveFlockErrorMessage(forbidden)).toBe(forbidden.message)
+    expect(saveFlockErrorMessage(new NotFoundError('flock x'))).toBe('not found: flock x')
+    expect(saveFlockErrorMessage(new CredentialRebindError())).toMatch(/upstreamAuth/)
+    expect(saveFlockErrorMessage(new ZodError([]))).toBe('Invalid flock details')
+    const invalid = saveFlockInput.safeParse({ breed: 'ollama', name: '', baseUrl: 'http://o', tlsTrust: false, upstreamAuth: '  ' })
+    expect(invalid.success).toBe(false)
+    expect(saveFlockErrorMessage(invalid.error)).toMatch(/^name: .*; upstreamAuth: /)
+  })
+
+  test('never echoes anything else — a driver error can carry the query and its sealed parameters', () => {
+    const dbError = new Error('Failed query: update "flock" set "upstream_auth_enc" = $1\nparams: sealed:v1:abc')
+    expect(saveFlockErrorMessage(dbError)).toBe('Failed to save flock')
+    expect(saveFlockErrorMessage('nope')).toBe('Failed to save flock')
   })
 })

@@ -7,7 +7,7 @@ import { saveFlock, deleteFlock } from '../../../server/flocks-service'
 import { testFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
 import type { ModelListResult } from '@metamodels/connectors'
 import { publishConfigInvalidation } from '../../../server/config-publisher'
-import { flockFormToInput } from '../../../lib/flock-form'
+import { flockFormToInput, saveFlockErrorMessage } from '../../../lib/flock-form'
 
 const registry = buildBreedRegistry()
 
@@ -20,7 +20,7 @@ export async function saveFlockAction(_prev: unknown, fd: FormData): Promise<{ e
     await publishConfigInvalidation('flock.save')
     return { ok: true }
   } catch (e) {
-    return { error: e instanceof Error ? e.message : 'Failed to save flock' }
+    return { error: saveFlockErrorMessage(e) }
   }
 }
 
