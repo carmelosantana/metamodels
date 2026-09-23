@@ -47,8 +47,8 @@ export function unauthorized(detail: string): Response {
  * verification and answered only by `problemForError`, so it is logged here, once. Strings only,
  * as `logSignInFailure` does: the reason and the cause's name, `code` and message, never an error
  * object (jose errors can carry token claims) and never the token. The `code` is there because a
- * production build minifies jose's class names, so `name` alone can read `l`. CR and LF are replaced
- * so a message cannot forge a second log line.
+ * production build minifies jose's class names, so `name` alone can read `l`. Every logged string
+ * goes through `loggable`, so a message cannot forge a second log line or drive a terminal.
  */
 function logKeySetUnavailable(e: KeySetUnavailableError): void {
   const c = e.cause
@@ -56,7 +56,16 @@ function logKeySetUnavailable(e: KeySetUnavailableError): void {
   const code = typeof rawCode === 'string' ? ` [${rawCode}]` : ''
   const cause = c === undefined ? 'no cause'
     : c instanceof Error ? `${c.name}${code}: ${c.message}` : String(c)
-  console.error('[admin-api] 503, key set unavailable:', e.reason, cause.replace(/[\r\n]/g, ' '))
+  console.error('[admin-api] 503, key set unavailable:', loggable(e.reason), loggable(cause))
+}
+
+/**
+ * Each character that can end a line or start a terminal control sequence, replaced by one space:
+ * all of C0 (CR, LF, TAB, ESC, NUL…), DEL, all of C1 (0x9B is a one-byte CSI on some terminals), and
+ * U+2028 and U+2029, which end a line in JavaScript source and in some log viewers.
+ */
+function loggable(s: string): string {
+  return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
 }
 
 /**

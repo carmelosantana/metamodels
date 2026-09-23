@@ -182,6 +182,18 @@ describe('problemForError', () => {
       problemForError(new TokenError('expired'))
       expect(log).toHaveBeenCalledTimes(1)
     })
+
+    test('every control character that could fake a line or drive a terminal is replaced, in the reason and the cause', () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      // U+2028 and U+2029 end a line in JavaScript and in some log viewers; ESC starts a terminal
+      // escape sequence; the rest of C0 (NUL, BEL, TAB…), DEL and C1 (0x9B is a one-byte CSI) go too.
+      const cause = new TypeError('a\u2028b\u2029c\x1b[2Jd\x00e\tf\x07g\x7fh\x9bi')
+      problemForError(new KeySetUnavailableError('timed out\x1b[31m fetching', { cause }))
+      const [, reason, logged] = log.mock.calls[0]!
+      expect(reason).toBe('timed out [31m fetching')
+      expect(logged).toBe('TypeError: a b c [2Jd e f g h i')
+      for (const a of log.mock.calls[0]!) expect(a).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/)
+    })
   })
 
   test('a SlugTakenError becomes 409 and names the clashing slug', async () => {
