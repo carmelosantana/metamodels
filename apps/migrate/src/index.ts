@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
+import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
+import { resealUpstreamAuth, type ResealReport } from '@metamodels/schema/reseal'
 
 // apps/migrate/src/ -> repo root is three levels up, then the frozen drizzle folder.
 const migrationsFolder = fileURLToPath(new URL('../../../packages/schema/drizzle', import.meta.url))
@@ -12,10 +14,27 @@ export function loadDatabaseUrl(env: Record<string, string | undefined>): string
   return url
 }
 
-export async function runMigrations(databaseUrl: string): Promise<void> {
+/** Log lines for a reseal pass. An unreadable row warns and names its flock; it never fails the run. */
+export function describeReseal(r: ResealReport): { info: string[]; warn: string[] } {
+  const info = r.sealed || r.resealed
+    ? [`metamodels: sealed ${r.sealed} plaintext upstream credential(s); re-sealed ${r.resealed} under the current key`]
+    : []
+  const warn = r.unreadable.map((u) =>
+    `metamodels: flock ${u.id} (${u.name}): upstream credential cannot be opened (${u.reason}). ` +
+    'Its requests fail until either the key that sealed it is added to UPSTREAM_AUTH_PREVIOUS_KEYS, ' +
+    'or the credential is re-entered on the flock.')
+  return { info, warn }
+}
+
+export async function runMigrations(databaseUrl: string, ring: SealKeyring): Promise<ResealReport> {
   const client = postgres(databaseUrl, { max: 1 })
   try {
-    await migrate(drizzle(client), { migrationsFolder })
+    const db = drizzle(client)
+    await migrate(db, { migrationsFolder })
+    // After the SQL and before any other service starts (they wait on this one): the only point at
+    // which the upgrade's plaintext rows and a rotation's old-key rows can be brought under the
+    // current key with nothing else reading them.
+    return await resealUpstreamAuth(db, ring)
   } finally {
     await client.end()
   }
@@ -23,8 +42,17 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
 
 // Only run when executed directly (tsx src/index.ts), not when imported by tests.
 if (process.argv[1] && process.argv[1].endsWith('index.ts')) {
-  runMigrations(loadDatabaseUrl(process.env))
-    .then(() => {
+  // Both loaded before anything touches the database: a missing or malformed key fails here, not
+  // halfway through, between a migration and the sweep that has to follow it.
+  const databaseUrl = loadDatabaseUrl(process.env)
+  const ring = loadSealKeyring(process.env)
+  runMigrations(databaseUrl, ring)
+    .then((report) => {
+      const { info, warn } = describeReseal(report)
+      // eslint-disable-next-line no-console
+      for (const line of info) console.log(line)
+      // eslint-disable-next-line no-console
+      for (const line of warn) console.warn(line)
       // eslint-disable-next-line no-console
       console.log('metamodels: migrations applied')
       process.exit(0)
