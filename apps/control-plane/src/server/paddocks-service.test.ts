@@ -1,15 +1,15 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { listPaddocks, getPaddock, savePaddock, deletePaddock, setPaddockStatus, SlugTakenError } from './paddocks-service'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { NotFoundError } from './flocks-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
-type TDb = Awaited<ReturnType<typeof freshDb>>
+const testDb = sharedDb()
 
-async function orgWithFlock(db: TDb, role: Actor['role'] = 'admin') {
+async function orgWithFlock(db: TestDb, role: Actor['role'] = 'admin') {
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'ollama', name: 'f', baseUrl: 'http://x' }).returning()
   const actor: Actor = { id: 'u1', orgId: o.id, email: `${role}@x.io`, role, credential: 'session' }
@@ -18,7 +18,7 @@ async function orgWithFlock(db: TDb, role: Actor['role'] = 'admin') {
 
 describe('paddocks-service', () => {
   test('member creates a paddock on an org flock; org-scoped + audited', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db, 'member')
     const p = await savePaddock(db, actor, { flockId: f.id, name: 'Small', slug: 'small', status: 'active', theme: 'plain' })
     expect(p.orgId).toBe(actor.orgId)
@@ -30,7 +30,7 @@ describe('paddocks-service', () => {
   })
 
   test('viewer cannot create (ForbiddenError), nothing written', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db, 'viewer')
     await expect(savePaddock(db, actor, { flockId: f.id, name: 'x', slug: 'x', status: 'active', theme: 'plain' }))
       .rejects.toThrow(ForbiddenError)
@@ -38,7 +38,7 @@ describe('paddocks-service', () => {
   })
 
   test('cannot attach a paddock to a flock in another org (NotFoundError)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { actor } = await orgWithFlock(db)
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const [foreignFlock] = await db.insert(schema.flock).values({ orgId: otherOrg.id, breed: 'ollama', name: 'ff', baseUrl: 'http://y' }).returning()
@@ -48,7 +48,7 @@ describe('paddocks-service', () => {
   })
 
   test('duplicate slug is rejected with SlugTakenError, not a raw DB error', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'dup', status: 'active', theme: 'plain' })
     await expect(savePaddock(db, actor, { flockId: f.id, name: 'B', slug: 'dup', status: 'active', theme: 'plain' }))
@@ -57,7 +57,7 @@ describe('paddocks-service', () => {
   })
 
   test('invalid slug shape is rejected before any write', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     await expect(savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'Not A Slug', status: 'active', theme: 'plain' }))
       .rejects.toThrow()
@@ -65,7 +65,7 @@ describe('paddocks-service', () => {
   })
 
   test('update changes fields within the org; list is org-scoped', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     const created = await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'a', status: 'active', theme: 'plain' })
     const updated = await savePaddock(db, actor, { id: created.id, flockId: f.id, name: 'A2', slug: 'a', status: 'active', theme: 'metaboy' })
@@ -76,7 +76,7 @@ describe('paddocks-service', () => {
   })
 
   test('cannot update or delete a paddock in another org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { actor } = await orgWithFlock(db)
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const [oFlock] = await db.insert(schema.flock).values({ orgId: otherOrg.id, breed: 'ollama', name: 'of', baseUrl: 'http://z' }).returning()
@@ -88,7 +88,7 @@ describe('paddocks-service', () => {
   })
 
   test('setPaddockStatus toggles status and audits it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     const p = await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'a', status: 'active', theme: 'plain' })
     const disabled = await setPaddockStatus(db, actor, p.id, 'disabled')
@@ -99,7 +99,7 @@ describe('paddocks-service', () => {
   })
 
   test('delete removes an org paddock and audits it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     const p = await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'a', status: 'active', theme: 'plain' })
     await deletePaddock(db, actor, p.id)
@@ -109,7 +109,7 @@ describe('paddocks-service', () => {
   })
 
   test('listPaddocks paginates by id and a cursor resumes exactly after it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     const made = []
     for (const s of ['a', 'b', 'c']) {
@@ -125,7 +125,7 @@ describe('paddocks-service', () => {
   })
 
   test('listPaddocks without opts still returns every row (the console path is unchanged)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     // More than one default page, so a regression that paginated the console's bare call would
     // return DEFAULT_LIMIT rows and fail here.
@@ -137,7 +137,7 @@ describe('paddocks-service', () => {
   })
 
   test('getPaddock is org-scoped — another org 404s rather than leaking', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { f, actor } = await orgWithFlock(db)
     const mine = await savePaddock(db, actor, { flockId: f.id, name: 'A', slug: 'a', status: 'active', theme: 'plain' })
     expect((await getPaddock(db, actor, mine.id)).id).toBe(mine.id)

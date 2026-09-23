@@ -2,12 +2,14 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import type { Actor } from '../auth/authorize'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg } from '../test/db'
 import { writeAudit } from './audit'
+
+const testDb = sharedDb()
 
 describe('writeAudit', () => {
   test('persists an org-scoped audit row with actor/action/target/detail', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const actor: Actor = {
       id: 'u1', orgId: o.id, email: 'admin@x.io', role: 'admin', credential: 'session',
@@ -22,7 +24,7 @@ describe('writeAudit', () => {
   })
 
   test('derives orgId, actor and changed_by from one Actor', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const actor: Actor = {
       id: 'u1', orgId: o.id, email: 'op@x.test', role: 'admin',
@@ -37,7 +39,7 @@ describe('writeAudit', () => {
   })
 
   test('the console session path records `session`', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const actor: Actor = {
       id: 'u1', orgId: o.id, email: 'op@x.test', role: 'admin', credential: 'session',

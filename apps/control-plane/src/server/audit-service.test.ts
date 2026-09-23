@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { listAudit, auditFilterOptions } from './audit-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
   const o = await seedOrg(db)
@@ -15,7 +17,7 @@ async function seedAudit(db: TestDb, orgId: string, actor: string, action: strin
 
 describe('audit-service', () => {
   test('listAudit returns this org newest-first, honoring limit', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'flock.create', 'flock:1')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'key.create', 'key:2', { name: 'Acme' })
@@ -29,7 +31,7 @@ describe('audit-service', () => {
   })
 
   test('listAudit is org-scoped (no cross-org leak) and filters by action + actor', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'flock.create', 'flock:1')
     await seedAudit(db, actor.orgId, 'jo@x.io', 'key.create', 'key:2')
@@ -44,7 +46,7 @@ describe('audit-service', () => {
   })
 
   test('auditFilterOptions returns distinct sorted actions + actors for this org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'admin')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'key.revoke', 'key:2')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'flock.create', 'flock:1')
@@ -58,14 +60,14 @@ describe('audit-service', () => {
   })
 
   test('viewer can read the audit log', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const actor = await actorFor(db, 'viewer')
     await seedAudit(db, actor.orgId, 'carmelo@x.io', 'flock.create', 'flock:1')
     expect(await listAudit(db, actor, { limit: 10 })).toHaveLength(1)
   })
 
   test('a non-read role is rejected', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const noRead: Actor = { id: 'u1', orgId: o.id, email: 'x@x.io', role: 'viewer', credential: 'session' }
     // sanity: viewer HAS read; assert the capability gate exists by calling requireCapability path via a bad role cast

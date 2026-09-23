@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg, type TestDb } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { BASE_SEATS, getSeatLimit, countActiveUsers, countPendingInvites, seatUsage } from './seats'
 import { saveEntitlement, GRACE_MS } from './entitlement-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
+
+const testDb = sharedDb()
 
 const NOW = 1_800_000_000_000
 
@@ -19,14 +21,14 @@ async function addInvite(db: TestDb, orgId: string, email: string, expiresAt: Da
 
 describe('seats', () => {
   test('getSeatLimit is BASE_SEATS (1) in 5.7a', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     expect(BASE_SEATS).toBe(1)
     expect(await getSeatLimit(db, o.id, NOW)).toBe(1)
   })
 
   test('countActiveUsers ignores deactivated and other orgs', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const other = await seedOrg(db, 'other')
     await addUser(db, o.id, 'a@x.io', 'active')
@@ -36,7 +38,7 @@ describe('seats', () => {
   })
 
   test('countPendingInvites counts only un-accepted, un-expired, same-org invites', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     await addInvite(db, o.id, 'pending@x.io', new Date(NOW + 1000), null)      // pending
     await addInvite(db, o.id, 'expired@x.io', new Date(NOW - 1000), null)      // expired → not counted
@@ -45,7 +47,7 @@ describe('seats', () => {
   })
 
   test('seatUsage sums active + pending against the limit', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     await addUser(db, o.id, 'a@x.io', 'active')
     await addInvite(db, o.id, 'p@x.io', new Date(NOW + 1000), null)
@@ -54,7 +56,7 @@ describe('seats', () => {
   })
 
   test('seatUsage requires user.manage', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const viewer: Actor = { id: 'v', orgId: o.id, email: 'v@x.io', role: 'viewer', credential: 'session' }
     await expect(seatUsage(db, viewer, 1, NOW)).rejects.toThrow(ForbiddenError)
@@ -67,12 +69,12 @@ describe('getSeatLimit reads the entitlement', () => {
   const admin = (orgId: string): Actor => ({ id: 'a', orgId, email: 'a@x.io', role: 'admin', credential: 'session' })
 
   test('no entitlement → BASE_SEATS (1)', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     expect(await getSeatLimit(db, o.id, NOW)).toBe(1)
   })
 
   test('active entitlement → its seats; expired past grace → base', async () => {
-    const db = await freshDb(); const o = await seedOrg(db)
+    const db = testDb(); const o = await seedOrg(db)
     await saveEntitlement(db, admin(o.id), {
       licenseKey: 'K', instanceId: 'i', status: 'active', seats: 5, tier: 'Team 5',
       lastValidatedAt: new Date(NOW), graceUntil: new Date(NOW + GRACE_MS),

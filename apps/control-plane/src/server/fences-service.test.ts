@@ -1,16 +1,17 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { getFence, saveFence } from './fences-service'
 import { NotFoundError } from './flocks-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 import { buildBreedRegistry } from './flock-health'
 
-const registry = buildBreedRegistry()
-type TDb = Awaited<ReturnType<typeof freshDb>>
+const testDb = sharedDb()
 
-async function orgFlockPaddock(db: TDb, breed = 'ollama', role: Actor['role'] = 'admin') {
+const registry = buildBreedRegistry()
+
+async function orgFlockPaddock(db: TestDb, breed = 'ollama', role: Actor['role'] = 'admin') {
   const o = await seedOrg(db)
   const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed, name: 'f', baseUrl: 'http://x' }).returning()
   const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
@@ -20,7 +21,7 @@ async function orgFlockPaddock(db: TDb, breed = 'ollama', role: Actor['role'] = 
 
 describe('fences-service', () => {
   test('saves a valid ollama fence (validated + audited), then getFence returns it', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await orgFlockPaddock(db)
     const fence = await saveFence(db, actor, registry, {
       paddockId: p.id,
@@ -37,7 +38,7 @@ describe('fences-service', () => {
   })
 
   test('saving twice updates the same fence (one per paddock)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await orgFlockPaddock(db)
     const a = await saveFence(db, actor, registry, { paddockId: p.id, constraintJson: { allowedRoutes: ['chat'] } })
     const b = await saveFence(db, actor, registry, { paddockId: p.id, constraintJson: { allowedRoutes: ['chat', 'read'] } })
@@ -47,7 +48,7 @@ describe('fences-service', () => {
   })
 
   test('rejects an invalid constraint before any write', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await orgFlockPaddock(db)
     await expect(saveFence(db, actor, registry, { paddockId: p.id, constraintJson: { allowedRoutes: ['pull'] } }))
       .rejects.toThrow()
@@ -55,7 +56,7 @@ describe('fences-service', () => {
   })
 
   test('rejects an invalid rate limit before any write', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await orgFlockPaddock(db)
     await expect(saveFence(db, actor, registry, {
       paddockId: p.id, constraintJson: { allowedRoutes: ['chat'] }, rateLimit: { windowSec: 0, max: -5 },
@@ -64,14 +65,14 @@ describe('fences-service', () => {
   })
 
   test('viewer cannot save a fence', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { p, actor } = await orgFlockPaddock(db, 'ollama', 'viewer')
     await expect(saveFence(db, actor, registry, { paddockId: p.id, constraintJson: { allowedRoutes: ['chat'] } }))
       .rejects.toThrow(ForbiddenError)
   })
 
   test('cannot save or read a fence on a paddock in another org', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const { actor } = await orgFlockPaddock(db)
     const [otherOrg] = await db.insert(schema.org).values({ name: 'other' }).returning()
     const [of] = await db.insert(schema.flock).values({ orgId: otherOrg.id, breed: 'ollama', name: 'of', baseUrl: 'http://z' }).returning()
@@ -83,7 +84,7 @@ describe('fences-service', () => {
   })
 
   test('omitting constraintJson preserves the stored constraint (comfyui rate/quota edit)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()
@@ -101,7 +102,7 @@ describe('fences-service', () => {
   })
 
   test('omitting constraintJson on a fresh comfyui fence applies the empty-templates default', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     const [f] = await db.insert(schema.flock).values({ orgId: o.id, breed: 'comfyui', name: 'f', baseUrl: 'http://x' }).returning()
     const [p] = await db.insert(schema.paddock).values({ orgId: o.id, flockId: f.id, slug: 's', name: 'P' }).returning()

@@ -1,13 +1,15 @@
 import { eq } from 'drizzle-orm'
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
-import { freshDb } from '../test/db'
+import { sharedDb } from '../test/db'
 import { NotAdminError, seedAdmin } from './seed'
 import { verifyPassword } from '@metamodels/schema'
 
+const testDb = sharedDb()
+
 describe('seedAdmin', () => {
   test('creates an org + active admin whose password verifies', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const r = await seedAdmin(db, { email: 'admin@x.io', password: 'hunter2hunter2', orgName: 'Acme' })
     expect(r.created).toBe(true)
     expect(r.actor.role).toBe('admin')
@@ -17,7 +19,7 @@ describe('seedAdmin', () => {
   })
 
   test('is idempotent — second call does not create or mutate', async () => {
-    const db = await freshDb()
+    const db = testDb()
     await seedAdmin(db, { email: 'admin@x.io', password: 'hunter2hunter2' })
     const r2 = await seedAdmin(db, { email: 'admin@x.io', password: 'DIFFERENT-pass' })
     expect(r2.created).toBe(false)
@@ -27,7 +29,7 @@ describe('seedAdmin', () => {
   })
 
   test('refuses when the email belongs to an existing non-admin user', async () => {
-    const db = await freshDb()
+    const db = testDb()
     await seedAdmin(db, { email: 'admin@x.io', password: 'hunter2hunter2' })
     const [o] = await db.select().from(schema.org)
     await db.insert(schema.user).values({

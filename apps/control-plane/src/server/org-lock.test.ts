@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'vitest'
 import { sql } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg } from '../test/db'
 import { acquireOrgLock } from './org-lock'
+
+const testDb = sharedDb()
 
 describe('acquireOrgLock', () => {
   test('locks an existing org row inside a transaction without error', async () => {
-    const db = await freshDb()
+    const db = testDb()
     const o = await seedOrg(db)
     await db.transaction(async (tx) => {
       await acquireOrgLock(tx, o.id) // must not throw; row exists
@@ -17,7 +19,7 @@ describe('acquireOrgLock', () => {
   })
 
   test('is a no-op-shaped lock for a missing org (no row to lock, no throw)', async () => {
-    const db = await freshDb()
+    const db = testDb()
     await db.transaction(async (tx) => {
       await expect(acquireOrgLock(tx, '00000000-0000-0000-0000-000000000000')).resolves.toBeUndefined()
     })
