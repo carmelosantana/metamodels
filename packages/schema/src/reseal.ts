@@ -10,7 +10,21 @@ export interface ResealReport {
   resealed: number
   /** Rows this keyring cannot open — never an id's secret, only which flock needs re-entering. */
   unreadable: { id: string; name: string; reason: UnsealReason }[]
+  /**
+   * The post-reseal table rewrite. `not-needed` when nothing was re-encrypted. A failure is
+   * reported rather than thrown: the reseal has already committed, and a re-run would find nothing
+   * to re-encrypt and skip the rewrite, so the caller must say how to run it by hand.
+   */
+  vacuum: 'done' | 'not-needed' | { failed: string }
 }
+
+export interface ResealOptions {
+  /** How to rewrite the table. Injectable only so a test can make it fail. */
+  vacuum?: (db: PgDatabase<any, any, any>) => Promise<unknown>
+}
+
+/** The rewrite, exactly as an operator would run it by hand. */
+export const VACUUM_FLOCK_SQL = 'VACUUM FULL "flock"'
 
 /**
  * Brings every stored upstream credential under the CURRENT key, then validates the format check
@@ -23,8 +37,12 @@ export interface ResealReport {
  * closed; re-entering it through the console or `PUT /flocks/{id}` re-seals it), not keep the whole
  * stack from starting. And it is kept, not nulled, so putting the right key back recovers it.
  */
-export async function resealUpstreamAuth(db: PgDatabase<any, any, any>, ring: SealKeyring): Promise<ResealReport> {
-  const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [] }
+export async function resealUpstreamAuth(
+  db: PgDatabase<any, any, any>,
+  ring: SealKeyring,
+  opts: ResealOptions = {},
+): Promise<ResealReport> {
+  const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' }
   await db.transaction(async (tx) => {
     const rows = await tx
       .select({ id: flock.id, name: flock.name, value: flock.upstreamAuthEnc })
@@ -53,11 +71,18 @@ export async function resealUpstreamAuth(db: PgDatabase<any, any, any>, ring: Se
     }
     await tx.execute(sql`ALTER TABLE "flock" VALIDATE CONSTRAINT "flock_upstream_auth_sealed"`)
   })
-  // An UPDATE leaves the old row version, plaintext and all, in the table's pages until it happens
-  // to be overwritten. VACUUM FULL rewrites the table without them. It cannot run in a transaction
-  // and takes an exclusive lock, which is harmless here because nothing else runs until `migrate`
-  // exits. It runs only on the pass that actually sealed plaintext. It cannot reach the WAL or
-  // existing backups; docs/DEPLOY.md says what to do about those.
-  if (report.sealed > 0) await db.execute(sql`VACUUM FULL "flock"`)
+  // An UPDATE leaves the old row version in the table's pages until it happens to be overwritten:
+  // the plaintext on an upgrade, or the envelope under a retired key on a rotation. VACUUM FULL
+  // rewrites the table without them. It cannot run in a transaction and takes an exclusive lock,
+  // which is harmless here because nothing else runs until `migrate` exits. It cannot reach the WAL
+  // or existing backups; docs/DEPLOY.md says what to do about those.
+  if (report.sealed > 0 || report.resealed > 0) {
+    try {
+      await (opts.vacuum ?? ((d) => d.execute(sql.raw(VACUUM_FLOCK_SQL))))(db)
+      report.vacuum = 'done'
+    } catch (e) {
+      report.vacuum = { failed: e instanceof Error ? e.message : String(e) }
+    }
+  }
   return report
 }

@@ -13,8 +13,8 @@ describe('loadDatabaseUrl', () => {
 
 describe('describeReseal', () => {
   test('is quiet about nothing and says what it sealed', () => {
-    expect(describeReseal({ sealed: 0, resealed: 0, unreadable: [] })).toEqual({ info: [], warn: [] })
-    expect(describeReseal({ sealed: 2, resealed: 1, unreadable: [] }).info)
+    expect(describeReseal({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' })).toEqual({ info: [], warn: [] })
+    expect(describeReseal({ sealed: 2, resealed: 1, unreadable: [], vacuum: 'done' }).info)
       .toEqual(['metamodels: sealed 2 plaintext upstream credential(s); re-sealed 1 under the current key'])
   })
 
@@ -22,10 +22,20 @@ describe('describeReseal', () => {
     const { warn } = describeReseal({
       sealed: 0, resealed: 0,
       unreadable: [{ id: 'f-1', name: 'gpu box', reason: 'unknown-key' }],
+      vacuum: 'not-needed',
     })
     expect(warn.join('\n')).toMatch(/f-1/)
     expect(warn.join('\n')).toMatch(/gpu box/)
     expect(warn.join('\n')).toMatch(/UPSTREAM_AUTH_PREVIOUS_KEYS/)
     expect(warn.join('\n')).toMatch(/re-enter/i)
+  })
+})
+
+describe('describeReseal — a failed VACUUM', () => {
+  test('warns with the exact command to run by hand, and the reason', () => {
+    const { warn } = describeReseal({ sealed: 1, resealed: 0, unreadable: [], vacuum: { failed: 'lock timeout' } })
+    expect(warn).toHaveLength(1)
+    expect(warn[0]).toContain(`psql "$DATABASE_URL" -c 'VACUUM FULL "flock"'`)
+    expect(warn[0]).toContain('lock timeout')
   })
 })

@@ -3,7 +3,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
-import { resealUpstreamAuth, type ResealReport } from '@metamodels/schema/reseal'
+import { resealUpstreamAuth, VACUUM_FLOCK_SQL, type ResealReport } from '@metamodels/schema/reseal'
 
 // apps/migrate/src/ -> repo root is three levels up, then the frozen drizzle folder.
 const migrationsFolder = fileURLToPath(new URL('../../../packages/schema/drizzle', import.meta.url))
@@ -23,6 +23,12 @@ export function describeReseal(r: ResealReport): { info: string[]; warn: string[
     `metamodels: flock ${u.id} (${u.name}): upstream credential cannot be opened (${u.reason}). ` +
     'Its requests fail until either the key that sealed it is added to UPSTREAM_AUTH_PREVIOUS_KEYS, ' +
     'or the credential is re-entered on the flock.')
+  if (typeof r.vacuum === 'object') {
+    // The re-encryption committed; only the rewrite that clears the old row versions did not, and a
+    // re-run will not retry it (it finds nothing left to re-encrypt). So say exactly what to run.
+    warn.push(`metamodels: the flock table rewrite failed (${r.vacuum.failed}). The old row versions ` +
+      `still hold the previous values; run it by hand: psql "$DATABASE_URL" -c '${VACUUM_FLOCK_SQL}'`)
+  }
   return { info, warn }
 }
 

@@ -55,7 +55,7 @@ describe('migration 0008 + resealUpstreamAuth — the upgrade path', () => {
 
     const r = ring(key())
     const report = await resealUpstreamAuth(db, r)
-    expect(report).toEqual({ sealed: 1, resealed: 0, unreadable: [] })
+    expect(report).toEqual({ sealed: 1, resealed: 0, unreadable: [], vacuum: 'done' })
     const [after] = await db.select().from(flock)
     expect(after.upstreamAuthEnc).not.toContain('legacy-token')
     expect(openSealed(after.upstreamAuthEnc!, r)).toBe('Bearer legacy-token')
@@ -102,7 +102,7 @@ describe('resealUpstreamAuth', () => {
     const old = key()
     const f = await addFlock(db, orgId, 'f', seal('tok', ring(old)))
     const r = ring(key(), [old])
-    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 1, unreadable: [] })
+    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 1, unreadable: [], vacuum: 'done' })
     const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
     expect(row.upstreamAuthEnc!.split(':')[2]).toBe(r.current.kid)
     expect(openSealed(row.upstreamAuthEnc!, r)).toBe('tok')
@@ -114,7 +114,7 @@ describe('resealUpstreamAuth', () => {
     const env = seal('tok', r)
     await addFlock(db, orgId, 'a', env)
     await addFlock(db, orgId, 'b', null)
-    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 0, unreadable: [] })
+    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' })
     const rows = await db.select().from(flock)
     expect(rows.map((x) => x.upstreamAuthEnc).sort()).toEqual([env, null].sort())
   })
@@ -125,8 +125,33 @@ describe('resealUpstreamAuth', () => {
     const f = await addFlock(db, orgId, 'restored', foreign)
     const r = ring(key())
     const report = await resealUpstreamAuth(db, r)
-    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: f.id, name: 'restored', reason: 'unknown-key' }] })
+    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: f.id, name: 'restored', reason: 'unknown-key' }], vacuum: 'not-needed' })
     const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
     expect(row.upstreamAuthEnc).toBe(foreign)
+  })
+
+  test('a rotation rewrites the table too, so envelopes under the retired key are not left behind', async () => {
+    const { db, orgId } = await migratedDb()
+    const old = key()
+    await addFlock(db, orgId, 'f', seal('tok', ring(old)))
+    const filenode = async () =>
+      ((await db.execute(sql`select pg_relation_filenode('flock') as n`)).rows[0] as { n: number }).n
+    const before = await filenode()
+    await resealUpstreamAuth(db, ring(key(), [old]))
+    expect(await filenode()).not.toBe(before)
+  })
+
+  test('a VACUUM failure after the reseal committed is reported, not thrown, and the reseal stands', async () => {
+    const { db, orgId } = await migratedDb()
+    const old = key()
+    const f = await addFlock(db, orgId, 'f', seal('tok', ring(old)))
+    const r = ring(key(), [old])
+    const report = await resealUpstreamAuth(db, r, {
+      vacuum: async () => { throw new Error('could not extend file: No space left on device') },
+    })
+    expect(report.resealed).toBe(1)
+    expect(report.vacuum).toEqual({ failed: 'could not extend file: No space left on device' })
+    const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
+    expect(row.upstreamAuthEnc!.split(':')[2]).toBe(r.current.kid)
   })
 })

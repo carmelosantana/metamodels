@@ -356,7 +356,9 @@ scope.
    `control-plane` and `data-plane`.
 3. **Redeploy.** `migrate` renames `flock.upstream_auth` to `upstream_auth_enc`, encrypts each
    existing credential, logs how many it encrypted, and then rewrites the `flock` table
-   (`VACUUM FULL`) so the old plaintext row versions are not left in its data files.
+   (`VACUUM FULL`) so the old plaintext row versions are not left in its data files. If that
+   rewrite fails, `migrate` still succeeds but logs a warning with the exact command to run by
+   hand. Run it: a later deploy will not retry it.
 
 Afterwards:
 
