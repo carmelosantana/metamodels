@@ -124,9 +124,41 @@ should cost that one flock, not stop the whole stack from starting. It also keep
 value rather than nulling it, so putting the right key back recovers it. `docs/DEPLOY.md` covers
 rotation, restore and leak response.
 
-## 3. Not in this milestone
+## 3. Reconciliation with the scoping spec (5fc652e, Kanboard #4512–#4519)
+
+A separate scoping session wrote its own spec for this milestone. It was never pushed, and it lives
+at `claude/flock-upstream-auth-spec`, commit `5fc652e`, in
+`docs/superpowers/specs/2026-09-23-flock-upstream-auth-at-rest.md`. Its decisions are D1–D8. This
+table records, for each place the two specs differ, what this PR does and why, so those decisions
+are not lost.
+
+| Decision | That spec (5fc652e) | This PR | Kept or changed, and why |
+|---|---|---|---|
+| D1 key env | `FLOCK_AUTH_KEY` / `FLOCK_AUTH_PREVIOUS_KEYS` | `UPSTREAM_AUTH_KEY` / `UPSTREAM_AUTH_PREVIOUS_KEYS` | **Kept.** Already wired through three compose files, `new-stack.sh`, CI and `DEPLOY.md`, and it names what the key protects. |
+| D1 envelope | `v1.<kid>.<iv>.<ct>.<tag>` in the same column | `sealed:v1:<kid>:<iv>:<ct>:<tag>` in the renamed `upstream_auth_enc` | **Kept.** Both are unambiguous. The `sealed:v1:` prefix is what the database CHECK tests. |
+| D1 AAD | `flock:<orgId>:<flockId>` | Was `sealed:v1:<kid>`; now `flock:<orgId>:<flockId>` | **Changed to that spec.** It stops an envelope being moved to another flock or tenant. It was cheap, because no release shipped the earlier format. |
+| D1 flock id on create | Minted by the service with `randomUUID()` | Minted by the service with `randomUUID()` | **Changed to that spec**, because the AAD needs the id before the INSERT. |
+| D1 key derivation | Raw key, no HKDF; kid = hash of the raw key | HKDF with a purpose label; kid = hash of the derived key | **Kept.** Domain separation costs nothing. That spec's objection was to deriving from *another* secret, which this does not do. |
+| D2 rotation | Batched, resumable `rewrap` command with SKIP LOCKED; retire a key once its count reaches 0 | `migrate` re-encrypts every row in one transaction on each deploy | **Kept.** `flock` is tiny, and rotation finishes on the deploy that introduces the key, with nothing extra to run. |
+| D3 who holds the key | control-plane and data-plane only; never `migrate` | `migrate`, control-plane and data-plane | **Kept.** `migrate` has to encrypt legacy rows before the CHECK can be validated and before any service reads the column. |
+| D3 boot validation | Both apps refuse to start | All three exit with status 1 on a missing or invalid key | **Kept.** The console's `register()` now exits instead of rejecting, which Next swallowed. |
+| D4 read shape | `hasUpstreamAuth` through a service view | Allowlist `flockView` plus `hasUpstreamAuth` | **Kept.** Same outcome. An allowlist is stricter than a view that drops one column. |
+| D4 console | Password input, "credential set" marker, per-row Replace, Remove and server-side Test | Password input, "Stored" marker, create-only | **Follow-up** before the first release tag (§4). Until then, changing a credential in the console means deleting the flock, which deletes its paddocks. |
+| D5 PUT | Tri-state: omitted keeps, `null` clears, a string replaces | The same tri-state, plus a **409** when an omitted credential would follow a changed `baseUrl` or a newly enabled `tlsTrust` | **Kept.** That spec leaves open the case where a writer re-points a flock and receives its kept credential. |
+| D5 audit | `set` / `cleared` / `unchanged` | `set` / `cleared`; no key when unchanged | **Kept.** An absent key already means unchanged. |
+| D6 migration | No DDL. Background boot pass in the control plane. Plaintext stays readable for one release | Column rename, NOT VALID CHECK, re-encryption in `migrate`. Plaintext is never read after the upgrade | **Kept.** No window where plaintext is read, and the database refuses new unsealed writes. |
+| D6 rollback | `rewrap --to-plaintext` required before a downgrade | Downgrade only by restoring a database backup, as documented | **Kept.** A tool that decrypts everything is a footgun, and nothing has been released that anyone would downgrade to. |
+| D7 `info.version` | 2.0.0 if M2 is in a release tag, otherwise 1.0.0 | 1.0.0 | **Same outcome.** The latest tag, v0.4.1, predates M2. |
+| D8 auth contract | Store the bare token. One helper sends `Bearer` on every path, including both health checks and ComfyUI `upstreamRaw`. Reject a scheme prefix, whitespace and CR/LF. Strip a legacy `Bearer ` | Not in this PR | **Separate PR** ("Unify how upstreamAuth is sent upstream"). Values are encrypted now, so it must strip `Bearer ` inside the reseal pass: open, normalise, encrypt again. |
+| Proof | A real-Postgres test that resumes after a crash, plus an e2e on an isolated compose stack | PGlite unit tests, manual runs on Postgres 16, and `scripts/smoke.sh` | **Follow-up** before the first release tag (§4). |
+
+## 4. Not in this milestone
 
 - **Changing the credentials at the upstream servers.** Credentials in pre-upgrade backups, or in
   listings already fetched, stay exposed. `DEPLOY.md` tells operators to reissue them if needed.
-- **Editing a flock in the console.** The console can only create a flock, so recovering one
-  credential goes through `PUT /api/admin/v1/flocks/{id}`.
+- **Follow-ups due before the first release tag:**
+  - Console Replace, Remove and Test controls for a stored credential (scoping spec D4). Until
+    then, recovering a single credential goes through `PUT /api/admin/v1/flocks/{id}`.
+  - A real-Postgres test that resumes the reseal after a crash, and an e2e on an isolated compose
+    stack (scoping spec proof).
+  - The D8 auth contract, in its own PR.
