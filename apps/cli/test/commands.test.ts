@@ -88,6 +88,35 @@ describe('main: API commands', () => {
     expect(readCredentials(w.path, w.op.url)).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2' })
   })
 
+  test('an expired stored token is refreshed once through the OP before the call, and the API never sees it', async () => {
+    const w = await world()
+    w.signIn({ accessExpiresAt: Date.now() - 60_000 })
+    w.api.on('GET /api/admin/v1/flocks', (r) => r.headers.authorization === 'Bearer at-2' ? ok([]) : { status: 401, json: { title: 'Unauthorized', status: 401 } })
+    w.op.on('POST /token', () => ok({ access_token: 'at-2', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rt-2', scope: 'read' }))
+    expect(await w.run('flocks', 'list')).toBe(0)
+    expect(w.op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
+    expect(w.api.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2'])
+    expect(readCredentials(w.path, w.op.url)).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2' })
+  })
+
+  test('a fresh stored token is sent without a refresh', async () => {
+    const w = await world()
+    w.signIn()
+    w.api.on('GET /api/admin/v1/flocks', () => ok([]))
+    expect(await w.run('flocks', 'list')).toBe(0)
+    expect(w.op.requests.filter((r) => r.path === '/token')).toHaveLength(0)
+    expect(w.api.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-1'])
+  })
+
+  test('an expired stored token with no refresh token still says to sign in again', async () => {
+    const w = await world()
+    w.signIn({ accessExpiresAt: Date.now() - 60_000, refreshToken: undefined })
+    w.api.on('GET /api/admin/v1/flocks', () => ({ status: 401, json: { title: 'Unauthorized', status: 401 } }))
+    expect(await w.run('flocks', 'list')).toBe(1)
+    expect(w.stderr()).toMatch(/mm login/)
+    expect(w.op.requests.filter((r) => r.path === '/token')).toHaveLength(0)
+  })
+
   test('when the refresh is refused, it says to sign in again, exits non-zero, and prints no token', async () => {
     const w = await world()
     w.signIn({ accessToken: 'at-secret-1', refreshToken: 'rt-secret-1' })

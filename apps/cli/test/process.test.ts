@@ -24,7 +24,9 @@ afterEach(async () => {
   stubs = []
 })
 
-function mm(args: string[], env: Record<string, string>): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function mm(
+  args: string[], env: Record<string, string>, onStderr?: (text: string) => void,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const [cmd, ...base] = START.split(' ')
   expect(cmd).toBe('node')
   return new Promise((resolve, reject) => {
@@ -38,7 +40,7 @@ function mm(args: string[], env: Record<string, string>): Promise<{ code: number
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d) => { stdout += d })
-    child.stderr.on('data', (d) => { stderr += d })
+    child.stderr.on('data', (d) => { stderr += d; onStderr?.(stderr) })
     child.on('error', reject)
     child.on('close', (code) => resolve({ code, stdout, stderr }))
   })
@@ -62,8 +64,11 @@ describe('the mm process', () => {
     const resource = adminApiResource(api.url)
     const env = { XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'mm-cli-')), METAMODELS_ISSUER: op.url, METAMODELS_CONSOLE_URL: api.url }
     const path = credentialsPath(env)
+    // Unexpired by the client's clock, so `mm` sends it and only the API's 401 says otherwise: the
+    // fallback a client with a skewed clock relies on.
     writeCredentials(path, {
-      issuer: op.url, resource, scope: 'read', accessToken: 'at-1', accessExpiresAt: 0, refreshToken: 'rt-1', obtainedAt: 0,
+      issuer: op.url, resource, scope: 'read', accessToken: 'at-1', accessExpiresAt: Date.now() + 3_600_000,
+      refreshToken: 'rt-1', obtainedAt: 0,
     })
 
     // Both processes must be past their first 401 before the OP answers the first refresh, so the
@@ -94,6 +99,48 @@ describe('the mm process', () => {
       // Nothing else on stderr. Whether the second process finds the lock still held (and says so)
       // or already released depends on timing: both are right.
       expect(['', 'mm: waiting for the credentials lock…\n']).toContain(run.stderr)
+      expect(run.code).toBe(0)
+      expect(JSON.parse(run.stdout)).toEqual([{ id: 'f1' }])
+    }
+    expect(readCredentials(path, op.url)).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2' })
+  }, T)
+
+  test('two processes holding an expired token refresh exactly once between them, before either calls the API', async () => {
+    const op = await startStub()
+    const api = await startStub()
+    stubs.push(op, api)
+    serveDiscovery(op)
+    const resource = adminApiResource(api.url)
+    const env = { XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'mm-cli-')), METAMODELS_ISSUER: op.url, METAMODELS_CONSOLE_URL: api.url }
+    const path = credentialsPath(env)
+    writeCredentials(path, {
+      issuer: op.url, resource, scope: 'read', accessToken: 'at-1', accessExpiresAt: Date.now() - 60_000,
+      refreshToken: 'rt-1', obtainedAt: 0,
+    })
+
+    // The refresh is held until one process says it is waiting for the credentials lock, so the
+    // second really does arrive while the first is refreshing.
+    let lockWaited!: () => void
+    const waiting = new Promise<void>((r) => { lockWaited = r })
+    const onStderr = (text: string) => { if (text.includes('waiting for the credentials lock')) lockWaited() }
+    api.on('GET /api/admin/v1/flocks', (req) => req.headers.authorization === 'Bearer at-2'
+      ? { status: 200, json: [{ id: 'f1' }] }
+      : { status: 401, json: { title: 'Unauthorized', status: 401 } })
+    const spent = new Set<string>()
+    op.on('POST /token', async (req) => {
+      const presented = req.form.refresh_token
+      if (spent.has(presented) || presented !== 'rt-1') return { status: 400, json: { error: 'invalid_grant' } }
+      spent.add(presented)
+      await waiting
+      return { status: 200, json: { access_token: 'at-2', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rt-2', scope: 'read' } }
+    })
+
+    const [a, b] = await Promise.all([mm(['flocks', 'list'], env, onStderr), mm(['flocks', 'list'], env, onStderr)])
+    expect(op.requests.filter((r) => r.path === '/token')).toHaveLength(1)
+    // The expired token never reached the API: each process sent the refreshed one, once.
+    expect(api.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2', 'Bearer at-2'])
+    expect([a.stderr, b.stderr].sort()).toEqual(['', 'mm: waiting for the credentials lock…\n'])
+    for (const run of [a, b]) {
       expect(run.code).toBe(0)
       expect(JSON.parse(run.stdout)).toEqual([{ id: 'f1' }])
     }

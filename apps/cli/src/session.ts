@@ -31,7 +31,8 @@ export function loadCredential(ctx: SessionContext): StoredCredential {
 }
 
 /**
- * Replace `stale` — a credential whose access token was just refused — with a refreshed one, under
+ * Replace `stale` — a credential whose access token was just refused, or has expired or is about to
+ * (`callApi` refreshes those before sending) — with a refreshed one, under
  * the credentials lock so that concurrent `mm` processes present a refresh token at most once.
  *
  * After taking the lock it re-reads the store: if another process has refreshed in the meantime,

@@ -9,13 +9,19 @@ afterEach(async () => {
   stub = undefined
 })
 
-function cred(accessToken: string): StoredCredential {
-  return { issuer: 'http://op.test', resource: 'http://c.test/api/admin', scope: 'read', accessToken, accessExpiresAt: 0, refreshToken: 'rt-secret', obtainedAt: 0 }
+const HOUR_MS = 3_600_000
+
+/** An access token good for another hour unless `over` says otherwise. */
+function cred(accessToken: string, over: Partial<StoredCredential> = {}): StoredCredential {
+  return {
+    issuer: 'http://op.test', resource: 'http://c.test/api/admin', scope: 'read', accessToken,
+    accessExpiresAt: Date.now() + HOUR_MS, refreshToken: 'rt-secret', obtainedAt: 0, ...over,
+  }
 }
 
-/** A session holding at-1 that refreshes to at-2, counting refreshes. */
-function session(): ApiSession & { refreshes: string[] } {
-  let current = cred('at-1')
+/** A session holding at-1 (fresh unless `over` says otherwise) that refreshes to a fresh at-2, counting refreshes. */
+function session(over: Partial<StoredCredential> = {}): ApiSession & { refreshes: string[] } {
+  let current = cred('at-1', over)
   const refreshes: string[] = []
   return {
     refreshes,
@@ -79,6 +85,47 @@ describe('callApi', () => {
     expect(sess.refreshes).toHaveLength(1)
     expect(s.requests).toHaveLength(2)
     for (const secret of ['at-1', 'at-2', 'rt-secret']) expect((err as Error).message).not.toContain(secret)
+  })
+
+  test('an expired stored token is refreshed before sending: the API never sees it', async () => {
+    const s = await api('GET /api/admin/v1/flocks', (auth) => auth === 'Bearer at-2' ? { status: 200, json: [] } : unauthorized)
+    const sess = session({ accessExpiresAt: Date.now() - 1000 })
+    const res = await callApi(s.url, sess, { method: 'GET', path: '/flocks' })
+    expect(res.status).toBe(200)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2'])
+  })
+
+  test('a token within 30 seconds of expiring is refreshed first; one with longer left is sent as it is', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => ({ status: 200, json: [] }))
+    const soon = session({ accessExpiresAt: Date.now() + 29_000 })
+    await callApi(s.url, soon, { method: 'GET', path: '/flocks' })
+    expect(soon.refreshes).toEqual(['at-1'])
+    const later = session({ accessExpiresAt: Date.now() + 60_000 })
+    await callApi(s.url, later, { method: 'GET', path: '/flocks' })
+    expect(later.refreshes).toEqual([])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2', 'Bearer at-1'])
+  })
+
+  test('a 401 after a refresh made before sending is surfaced, not refreshed again', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unauthorized)
+    const sess = session({ accessExpiresAt: 0 })
+    const err = await callApi(s.url, sess, { method: 'GET', path: '/flocks' }).catch((e: unknown) => e)
+    expect((err as ApiProblemError).status).toBe(401)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-2'])
+  })
+
+  test('an expired token with no refresh token is sent as it is: the 401 path says to sign in again, as before', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unauthorized)
+    const sess = session({ accessExpiresAt: 0, refreshToken: undefined })
+    sess.refresh = async (stale) => {
+      sess.refreshes.push(stale.accessToken)
+      throw new Error('the stored sign-in cannot be renewed')
+    }
+    await expect(callApi(s.url, sess, { method: 'GET', path: '/flocks' })).rejects.toThrow(/cannot be renewed/)
+    expect(sess.refreshes).toEqual(['at-1'])
+    expect(s.requests.map((r) => r.headers.authorization)).toEqual(['Bearer at-1'])
   })
 
   test('a 204 is a null body', async () => {

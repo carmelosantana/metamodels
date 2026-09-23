@@ -1,7 +1,14 @@
 import { STATUS_CODES } from 'node:http'
 import type { StoredCredential } from './credentials.js'
 
-/** Where the access token comes from, and how a refused one is replaced (`session.ts`). */
+/**
+ * Refresh before sending when the stored access token expires within this long. The margin is on
+ * this machine's clock, so a clock running behind the server's can still send a token the server
+ * holds expired: the refresh on a 401 in `callApi` is the fallback for that.
+ */
+export const REFRESH_MARGIN_MS = 30_000
+
+/** Where the access token comes from, and how a refused or expiring one is replaced (`session.ts`). */
 export interface ApiSession {
   current(): StoredCredential
   refresh(stale: StoredCredential): Promise<StoredCredential>
@@ -84,10 +91,16 @@ function networkCode(e: unknown): string {
  * the API answers a bearer that arrives with a session cookie with 400, and this client keeps no
  * cookie jar to send one from.
  *
- * On a 401 it asks the session for a fresh token once and retries once. A second 401 is surfaced
- * as the API's problem, not retried: a token refreshed a moment ago and still refused will not be
- * fixed by another refresh. Redirects are not followed — the admin API issues none, and following
- * one would carry the bearer somewhere it was not meant for.
+ * A stored access token that has expired, or expires within `REFRESH_MARGIN_MS`, is refreshed
+ * before anything is sent, through the same `session.refresh` a 401 uses (the credentials lock, the
+ * store re-read under it), so the API never sees it. Without a refresh token there is nothing to
+ * refresh with: the token is sent as it is, and a 401 then says to sign in again, as it always did.
+ *
+ * On a 401 to a token it has not refreshed, it asks the session for a fresh token once and retries
+ * once. A 401 to a token refreshed during this call, before sending or after the first 401, is
+ * surfaced as the API's problem, not retried: a token refreshed a moment ago and still refused will
+ * not be fixed by another refresh. Redirects are not followed — the admin API issues none, and
+ * following one would carry the bearer somewhere it was not meant for.
  */
 export async function callApi(
   consoleUrl: string, session: ApiSession, req: ApiRequest, fetchImpl: typeof fetch = fetch,
@@ -113,11 +126,16 @@ export async function callApi(
     }
   }
 
-  const first = session.current()
-  let res = await send(first)
-  if (res.status === 401) {
+  let cred = session.current()
+  let refreshed = false
+  if (cred.refreshToken !== undefined && cred.accessExpiresAt - Date.now() <= REFRESH_MARGIN_MS) {
+    cred = await session.refresh(cred)
+    refreshed = true
+  }
+  let res = await send(cred)
+  if (res.status === 401 && !refreshed) {
     await res.body?.cancel()
-    res = await send(await session.refresh(first))
+    res = await send(await session.refresh(cred))
   }
   if (res.status >= 300 && res.status < 400) {
     throw new Error(`the admin API answered with a redirect (HTTP ${res.status}); check --console`)
