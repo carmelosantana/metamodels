@@ -6,13 +6,46 @@
  */
 export const ISSUER_ENV = 'METAMODELS_ISSUER'
 export const CONSOLE_ENV = 'METAMODELS_CONSOLE_URL'
+export const INSECURE_HTTP_ENV = 'METAMODELS_ALLOW_INSECURE_HTTP'
+export const INSECURE_HTTP_FLAG = '--allow-insecure-http'
+
+/** The opt-in to plain http beyond loopback: `--allow-insecure-http`, or `METAMODELS_ALLOW_INSECURE_HTTP=1`. */
+export function insecureHttpAllowed(flag: boolean | undefined, env: NodeJS.ProcessEnv): boolean {
+  return flag === true || env[INSECURE_HTTP_ENV] === '1'
+}
+
+/** `localhost`, `127.0.0.0/8` or `::1`, as `URL.hostname` spells them (IPv4 forms already normalised). */
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+}
+
+/**
+ * Refuses a URL the CLI would send a credential to (the bearer token, the refresh token, the
+ * device code) unless it is https, or plain http to a loopback host, or plain http with the opt-in.
+ * Plain http anywhere else puts the tokens on the network in clear text.
+ */
+export function requireSecureTransport(url: string, what: string, allowInsecureHttp: boolean): void {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error(`${what} is not a URL: ${JSON.stringify(url)}`)
+  }
+  if (parsed.protocol === 'https:') return
+  if (parsed.protocol !== 'http:') throw new Error(`${what} must be an http(s) URL, got ${JSON.stringify(url)}`)
+  if (isLoopback(parsed.hostname) || allowInsecureHttp) return
+  throw new Error(
+    `${what} ${url} is plain http to a host that is not loopback: tokens sent to it could be read on the ` +
+    `network. Use https, or pass ${INSECURE_HTTP_FLAG} (or set ${INSECURE_HTTP_ENV}=1) to allow it.`,
+  )
+}
 
 /**
  * An http(s) origin, normalised to `URL.origin` (no trailing slash). The issuer must match the OP's
  * `issuer` byte for byte, and the console URL feeds `adminApiResource()`, which must match what the
  * console verifies — so neither may carry a path.
  */
-function origin(value: string, what: string): string {
+function origin(value: string, what: string, allowInsecureHttp: boolean): string {
   let url: URL
   try {
     url = new URL(value)
@@ -23,21 +56,24 @@ function origin(value: string, what: string): string {
       url.username !== '' || url.password !== '') {
     throw new Error(`${what} must be an http(s) origin such as https://host:port, with no path, got ${JSON.stringify(value)}`)
   }
+  requireSecureTransport(url.origin, `the ${what}`, allowInsecureHttp)
   return url.origin
 }
 
-function pick(flag: string | undefined, env: NodeJS.ProcessEnv, name: string, flagName: string, what: string): string {
+function pick(
+  flag: string | undefined, env: NodeJS.ProcessEnv, name: string, flagName: string, what: string, allowInsecureHttp: boolean,
+): string {
   const value = flag ?? (env[name] || undefined)
   if (value === undefined) throw new Error(`no ${what} configured: pass ${flagName} or set ${name}`)
-  return origin(value, what)
+  return origin(value, what, allowInsecureHttp)
 }
 
 /** The OP's issuer URL: `--issuer`, else `METAMODELS_ISSUER`. */
-export function resolveIssuer(flag: string | undefined, env: NodeJS.ProcessEnv): string {
-  return pick(flag, env, ISSUER_ENV, '--issuer', 'issuer')
+export function resolveIssuer(flag: string | undefined, env: NodeJS.ProcessEnv, allowInsecureHttp = false): string {
+  return pick(flag, env, ISSUER_ENV, '--issuer', 'issuer', allowInsecureHttp)
 }
 
 /** The console's public URL: `--console`, else `METAMODELS_CONSOLE_URL`. */
-export function resolveConsoleUrl(flag: string | undefined, env: NodeJS.ProcessEnv): string {
-  return pick(flag, env, CONSOLE_ENV, '--console', 'console URL')
+export function resolveConsoleUrl(flag: string | undefined, env: NodeJS.ProcessEnv, allowInsecureHttp = false): string {
+  return pick(flag, env, CONSOLE_ENV, '--console', 'console URL', allowInsecureHttp)
 }

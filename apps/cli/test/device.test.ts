@@ -288,3 +288,56 @@ describe('a malformed token from the OP is refused before it is stored', () => {
     expect(cred).toMatchObject({ accessToken: jwt, refreshToken: 'Zm9v_bar-baz' })
   })
 })
+
+describe('plain http in discovery', () => {
+  const ISSUER = 'https://op.lan.test'
+
+  /** Reaches the stub for the non-loopback names these tests use, without any real network. */
+  function viaStub(s: Stub): typeof fetch {
+    return (input, init) => fetch(String(input).replace(/^https?:\/\/op\.lan\.test/, s.url), init)
+  }
+
+  async function lanOp(tokenEndpoint: string, revocationEndpoint = `${ISSUER}/token/revocation`): Promise<Stub> {
+    stub = await startStub()
+    stub.on('GET /.well-known/openid-configuration', () => ({
+      status: 200,
+      json: {
+        issuer: ISSUER, token_endpoint: tokenEndpoint, device_authorization_endpoint: `${ISSUER}/device/auth`,
+        revocation_endpoint: revocationEndpoint,
+      },
+    }))
+    stub.on('POST /token', () => ({ status: 200, json: TOKEN }))
+    stub.on('POST /token/revocation', () => ({ status: 200, text: '' }))
+    return stub
+  }
+
+  test('an https issuer advertising an http token endpoint is refused, and the refresh token is not sent', async () => {
+    const s = await lanOp('http://op.lan.test/token')
+    const err = await refresh({ issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })
+      .catch((e: unknown) => e)
+    expect(s.requests.map((r) => r.path)).toEqual(['/.well-known/openid-configuration'])
+    expect((err as Error).message).toMatch(/token_endpoint.*http:\/\/op\.lan\.test\/token/)
+    expect((err as Error).message).toMatch(/--allow-insecure-http/)
+  })
+
+  test('an http revocation endpoint is refused too', async () => {
+    const s = await lanOp(`${ISSUER}/token`, 'http://op.lan.test/token/revocation')
+    expect(await revokeRefreshToken({ issuer: ISSUER, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })).toBe(false)
+    expect(s.requests.some((r) => r.path === '/token/revocation')).toBe(false)
+  })
+
+  test('with the opt-in, the http endpoint is used', async () => {
+    const s = await lanOp('http://op.lan.test/token')
+    const cred = await refresh(
+      { issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s), allowInsecureHttp: true },
+    )
+    expect(cred.accessToken).toBe('at-1')
+    expect(s.requests.find((r) => r.path === '/token')!.form.refresh_token).toBe('rt-1')
+  })
+
+  test('an https endpoint needs no opt-in', async () => {
+    const s = await lanOp(`${ISSUER}/token`)
+    const cred = await refresh({ issuer: ISSUER, resource: RESOURCE, refreshToken: 'rt-1' }, { ...fakeDeps(), fetch: viaStub(s) })
+    expect(cred.accessToken).toBe('at-1')
+  })
+})

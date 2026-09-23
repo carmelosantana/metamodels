@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util'
 import { adminApiResource, CAPABILITIES, type Capability } from '@metamodels/schema'
 import { callApi, type ApiSession } from './client.js'
-import { resolveConsoleUrl, resolveIssuer, CONSOLE_ENV, ISSUER_ENV } from './config.js'
+import {
+  insecureHttpAllowed, resolveConsoleUrl, resolveIssuer, CONSOLE_ENV, INSECURE_HTTP_ENV, INSECURE_HTTP_FLAG, ISSUER_ENV,
+} from './config.js'
 import {
   credentialsPath, deleteCredentials, readCredentials, withCredentialsLock, writeCredentials, type LockOptions,
 } from './credentials.js'
@@ -93,6 +95,7 @@ const OPTIONS: ParseArgsOptionsConfig = {
   data: { type: 'string' },
   file: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
+  'allow-insecure-http': { type: 'boolean' },
   ...Object.fromEntries(QUERY_FLAGS.map((flag) => [flag, { type: 'string' }])),
 }
 
@@ -146,6 +149,9 @@ export function helpText(): string {
     '',
     `Every command takes --issuer URL (or ${ISSUER_ENV}), the sign-in service, and all but`,
     `logout take --console URL (or ${CONSOLE_ENV}), the console the admin API lives on.`,
+    'Both, and the endpoints the sign-in service advertises, must be https or plain http to a loopback',
+    `host. ${INSECURE_HTTP_FLAG} (or ${INSECURE_HTTP_ENV}=1) allows plain http to any host, with a`,
+    'warning on every run.',
     'Output is JSON on stdout; errors go to stderr with a non-zero exit code (2 for usage errors).',
     '--file - reads a JSON body from stdin.',
     '',
@@ -162,9 +168,12 @@ function unknownCommand(group: string | undefined, action: string | undefined): 
   return new UsageError(`unknown command \`mm ${[group, action].filter(Boolean).join(' ')}\`; see \`mm --help\``)
 }
 
+/** Flags every command accepts. */
+const GLOBAL_FLAGS = new Set(['help', 'allow-insecure-http'])
+
 function allowOnly(values: Values, allowed: readonly string[], command: string): void {
   for (const [k, v] of Object.entries(values)) {
-    if (v !== undefined && k !== 'help' && !allowed.includes(k)) throw new UsageError(`--${k} does not apply to \`${command}\``)
+    if (v !== undefined && !GLOBAL_FLAGS.has(k) && !allowed.includes(k)) throw new UsageError(`--${k} does not apply to \`${command}\``)
   }
 }
 
@@ -203,7 +212,7 @@ async function readJsonBody(values: Values, io: MainIo, command: string): Promis
   }
 }
 
-async function runApi(spec: CommandSpec, rest: string[], values: Values, io: MainIo): Promise<number> {
+async function runApi(spec: CommandSpec, rest: string[], values: Values, io: MainIo, insecure: boolean): Promise<number> {
   const command = `mm ${spec.group} ${spec.action}`
   const params = pathParams(spec)
   const expected = params.length + (typeof spec.body === 'object' ? 1 : 0)
@@ -223,11 +232,11 @@ async function runApi(spec: CommandSpec, rest: string[], values: Values, io: Mai
   if (spec.body === 'json') body = await readJsonBody(values, io, command)
   else if (typeof spec.body === 'object') body = { [spec.body.field]: rest[params.length] }
 
-  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env))
-  const consoleUrl = config(() => resolveConsoleUrl(values.console as string | undefined, io.env))
+  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env, insecure))
+  const consoleUrl = config(() => resolveConsoleUrl(values.console as string | undefined, io.env, insecure))
   const ctx: SessionContext = {
     path: credentialsPath(io.env), issuer, resource: adminApiResource(consoleUrl), lock: lockOptions(io),
-    ...(io.op ? { deps: io.op } : {}),
+    deps: { ...io.op, allowInsecureHttp: insecure },
   }
   const session: ApiSession = { current: () => loadCredential(ctx), refresh: (stale) => refreshStored(ctx, stale) }
   const res = await callApi(consoleUrl, session, { method: spec.method, path, query, body }, io.fetch)
@@ -247,15 +256,15 @@ function parseScopes(raw: string): Capability[] {
   return scopes as Capability[]
 }
 
-async function login(rest: string[], values: Values, io: MainIo): Promise<number> {
+async function login(rest: string[], values: Values, io: MainIo, insecure: boolean): Promise<number> {
   if (rest.length) throw new UsageError('usage: mm login [--scope read,resource.write]')
   allowOnly(values, ['issuer', 'console', 'scope'], 'mm login')
   const scopes = parseScopes((values.scope as string | undefined) ?? 'read')
-  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env))
-  const consoleUrl = config(() => resolveConsoleUrl(values.console as string | undefined, io.env))
+  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env, insecure))
+  const consoleUrl = config(() => resolveConsoleUrl(values.console as string | undefined, io.env, insecure))
   const cred = await deviceLogin(
     { issuer, resource: adminApiResource(consoleUrl), scopes },
-    { ...io.op, print: (line) => io.stderr(`${line}\n`) },
+    { ...io.op, allowInsecureHttp: insecure, print: (line) => io.stderr(`${line}\n`) },
   )
   const path = credentialsPath(io.env)
   // Under the lock, so a refresh running in another process cannot interleave with this write.
@@ -268,10 +277,10 @@ async function login(rest: string[], values: Values, io: MainIo): Promise<number
   return 0
 }
 
-async function logout(rest: string[], values: Values, io: MainIo): Promise<number> {
+async function logout(rest: string[], values: Values, io: MainIo, insecure: boolean): Promise<number> {
   if (rest.length) throw new UsageError('usage: mm logout')
   allowOnly(values, ['issuer'], 'mm logout')
-  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env))
+  const issuer = config(() => resolveIssuer(values.issuer as string | undefined, io.env, insecure))
   const path = credentialsPath(io.env)
   return withCredentialsLock(path, async () => {
     const cred = readCredentials(path, issuer)
@@ -281,7 +290,7 @@ async function logout(rest: string[], values: Values, io: MainIo): Promise<numbe
     }
     const revoked = cred.refreshToken === undefined
       ? null
-      : await revokeRefreshToken({ issuer, refreshToken: cred.refreshToken }, io.op)
+      : await revokeRefreshToken({ issuer, refreshToken: cred.refreshToken }, { ...io.op, allowInsecureHttp: insecure })
     // Forget it whatever the OP said: the operator asked for this machine to stop holding it.
     deleteCredentials(path, issuer)
     io.stdout(`${JSON.stringify({ issuer, revoked: revoked === true }, null, 2)}\n`)
@@ -322,13 +331,20 @@ export async function main(argv: string[], io: MainIo): Promise<number> {
     io.stderr(helpText())
     return 2
   }
+  const insecure = insecureHttpAllowed(values['allow-insecure-http'] as boolean | undefined, io.env)
+  if (insecure) {
+    io.stderr(
+      `mm: warning: plain http to hosts that are not loopback is allowed (${INSECURE_HTTP_FLAG} / ${INSECURE_HTTP_ENV}=1); ` +
+      'tokens sent over it can be read on the network\n',
+    )
+  }
   try {
     const [group, action, ...rest] = positionals
-    if (group === 'login') return await login(positionals.slice(1), values, io)
-    if (group === 'logout') return await logout(positionals.slice(1), values, io)
+    if (group === 'login') return await login(positionals.slice(1), values, io, insecure)
+    if (group === 'logout') return await logout(positionals.slice(1), values, io, insecure)
     const spec = COMMANDS.find((c) => c.group === group && c.action === action)
     if (spec === undefined) throw unknownCommand(group, action)
-    return await runApi(spec, rest, values, io)
+    return await runApi(spec, rest, values, io, insecure)
   } catch (e) {
     if (e instanceof UsageError) {
       io.stderr(`mm: ${e.message}\n`)

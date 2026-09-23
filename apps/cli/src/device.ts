@@ -1,4 +1,5 @@
 import { CLI_CLIENT_ID, type Capability } from '@metamodels/schema'
+import { requireSecureTransport } from './config.js'
 import type { StoredCredential } from './credentials.js'
 
 /**
@@ -15,6 +16,8 @@ export interface OpDeps {
   now?: () => number
   /** Where operator-facing lines go (stderr in the CLI). */
   print?: (line: string) => void
+  /** Accept plain-http OP endpoints on hosts that are not loopback (`--allow-insecure-http`). */
+  allowInsecureHttp?: boolean
 }
 
 /**
@@ -105,6 +108,14 @@ export async function discover(issuer: string, o: OpDeps = {}): Promise<OpMetada
   }
   if (typeof meta.token_endpoint !== 'string' || typeof meta.device_authorization_endpoint !== 'string') {
     throw new Error(`${issuer} does not offer the device authorization grant`)
+  }
+  // Each of these receives a credential (device code, refresh token), and the document can name any
+  // URL: the issuer being https says nothing about them.
+  const allow = o.allowInsecureHttp ?? false
+  requireSecureTransport(meta.token_endpoint, `the OP's token_endpoint`, allow)
+  requireSecureTransport(meta.device_authorization_endpoint, `the OP's device_authorization_endpoint`, allow)
+  if (typeof meta.revocation_endpoint === 'string') {
+    requireSecureTransport(meta.revocation_endpoint, `the OP's revocation_endpoint`, allow)
   }
   return {
     tokenEndpoint: meta.token_endpoint,

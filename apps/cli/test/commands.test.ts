@@ -271,6 +271,50 @@ describe('main: usage errors exit 2 and send nothing', () => {
   })
 })
 
+describe('main: plain http to a host that is not loopback', () => {
+  const LAN = 'http://console.lan.test'
+  const WARNING = /^mm: warning: .*plain http/m
+
+  /** The world, with its console reached as LAN (non-loopback, plain http) through the stub. */
+  async function lanWorld() {
+    const w = await world()
+    w.signIn({ resource: adminApiResource(LAN) })
+    w.api.on('GET /api/admin/v1/flocks', () => ok([]))
+    const io: MainIo = {
+      ...w.io,
+      env: { ...w.env, METAMODELS_CONSOLE_URL: LAN },
+      fetch: (input, init) => fetch(String(input).replace(LAN, w.api.url), init),
+    }
+    return { ...w, io }
+  }
+
+  test('is refused before anything is sent, naming the opt-in', async () => {
+    const w = await lanWorld()
+    expect(await main(['flocks', 'list'], w.io)).toBe(2)
+    expect(w.stderr()).toMatch(/--allow-insecure-http/)
+    expect(w.stderr()).toMatch(/METAMODELS_ALLOW_INSECURE_HTTP=1/)
+    expect(w.api.requests).toHaveLength(0)
+  })
+
+  test.each([
+    ['the flag', ['--allow-insecure-http'], {}],
+    ['the environment', [], { METAMODELS_ALLOW_INSECURE_HTTP: '1' }],
+  ])('is allowed with %s, with a one-line warning on stderr', async (_name, flags, env) => {
+    const w = await lanWorld()
+    expect(await main(['flocks', 'list', ...flags], { ...w.io, env: { ...w.io.env, ...env } })).toBe(0)
+    expect(w.api.requests[0].headers.authorization).toBe('Bearer at-1')
+    expect(w.stderr().match(new RegExp(WARNING, 'gm'))).toHaveLength(1)
+  })
+
+  test('loopback http needs no opt-in and prints no warning', async () => {
+    const w = await world()
+    w.signIn()
+    w.api.on('GET /api/admin/v1/flocks', () => ok([]))
+    expect(await w.run('flocks', 'list')).toBe(0)
+    expect(w.stderr()).not.toMatch(WARNING)
+  })
+})
+
 describe('main: login', () => {
   const token = { access_token: 'at-new-secret', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rt-new-secret', scope: 'read resource.write' }
 
