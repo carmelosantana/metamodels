@@ -5,6 +5,10 @@ import { KeySetUnavailableError, TokenError } from './admin-token'
 import { NotFoundError } from './flocks-service'
 import { SlugTakenError } from './paddocks-service'
 import { problem, problemForError } from './problem'
+// The three real producers whose `ZodError`s this module has to answer 422.
+import { readJsonObject } from './json-body'
+import { parsePathId } from './path-id'
+import { dailyQuery } from './usage-query'
 
 describe('problem', () => {
   test('is application/problem+json with the RFC 9457 members', async () => {
@@ -39,24 +43,69 @@ describe('problemForError', () => {
    * `ZodError` is no longer the body parser's private error. Three sources reach this arm now —
    * `readJsonObject` (a body), `parsePathId` (a path segment) and the usage reports' query schemas
    * (a query string) — and `GET /flocks/my-flock` carries no body at all. A `detail` naming the
-   * body contradicts the `errors[]` beside it, on a response Task 10 is about to document.
+   * body contradicts the `errors[]` beside it, on a response the OpenAPI document publishes.
    *
    * The issues themselves are the precise half; `detail` is the half that must not lie. Nothing in
    * a `ZodError` records which of the three threw it, so the fix is for `detail` to stop naming a
    * source rather than to guess one.
+   *
+   * ⚠ Each row REALLY CALLS ITS SOURCE. An earlier version of this table handed three synthetic
+   * `ZodError`s to the same arm with only `path` differing, which proved one thing three times and
+   * would have kept passing if two of the three producers had stopped throwing `ZodError` at all —
+   * the failure that would put a 500 in front of a caller. What is under test is that three
+   * separate modules still converge on this arm, so the errors come from the modules.
    */
-  test.each([
-    ['a body', ['name'] as const],
-    ['a path segment', ['id'] as const],
-    ['a query parameter', ['startBucket'] as const],
-  ])('the 422 detail does not claim a body when the fault was %s', async (_src, path) => {
-    const res = problemForError(new z.ZodError([{ code: 'custom', path: [...path], message: 'bad' }]))
-    const body = await res.json() as { detail: string; errors: { path: string }[] }
-    // The positive anchor: this really is the issue under test, not some other 422.
-    expect(body.errors).toEqual([{ path: path[0], message: 'bad' }])
-    expect(body.detail).toBe('request failed validation')
-    expect(body.detail).not.toContain('body')
-  })
+  const ZOD_ERROR_SOURCES: [string, () => Promise<unknown>, string][] = [
+    [
+      'a body',
+      async () => {
+        try {
+          await readJsonObject(new Request('https://console.test/x', { method: 'POST', body: '{"name":' }))
+        } catch (e) {
+          return e
+        }
+        throw new Error('readJsonObject accepted a truncated body')
+      },
+      '',
+    ],
+    [
+      'a path segment',
+      async () => {
+        try {
+          parsePathId('my-flock')
+        } catch (e) {
+          return e
+        }
+        throw new Error('parsePathId accepted a non-uuid')
+      },
+      'id',
+    ],
+    [
+      'a query parameter',
+      // The bad bucket is the END one deliberately: digits sort before letters, so a malformed
+      // START bucket also trips the runs-forwards refinement and the row would be asserting two
+      // issues where it means to assert one.
+      async () =>
+        dailyQuery.safeParse({ dim: 'tokens_out', startBucket: '2026-01-01T00', endBucket: 'nope' }).error,
+      'endBucket',
+    ],
+  ]
+
+  test.each(ZOD_ERROR_SOURCES)(
+    'the 422 detail does not claim a body when the fault was %s',
+    async (_src, produce, expectedPath) => {
+      const err = await produce()
+      // The producer really threw the error this arm claims to handle — not a lookalike.
+      expect(err).toBeInstanceOf(z.ZodError)
+      const res = problemForError(err)
+      expect(res.status).toBe(422)
+      const body = await res.json() as { detail: string; errors: { path: string }[] }
+      // The positive anchor: this really is the issue under test, not some other 422.
+      expect(body.errors.map((e) => e.path)).toEqual([expectedPath])
+      expect(body.detail).toBe('request failed validation')
+      expect(body.detail).not.toContain('body')
+    },
+  )
 
   test('TokenError becomes 401', () => {
     expect(problemForError(new TokenError('expired')).status).toBe(401)

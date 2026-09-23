@@ -147,6 +147,26 @@ describe('/api/admin/v1/flocks', () => {
     expect(res.headers.get('content-type')).toBe('application/problem+json')
   })
 
+  /**
+   * The body half of the 422 contract, END TO END. `problem.test.ts` pins the mapping at the unit
+   * level, and `admin-route.test.ts` pins a malformed PATH over a real route, but until now nothing
+   * asserted what a real route answers for a malformed BODY — which is the case a caller meets most
+   * and the one the OpenAPI document publishes. The detail must be the same generic string here as
+   * everywhere else: only `errors[]` says which part of the request was wrong.
+   */
+  test('a body that fails the schema is a 422 whose detail names no source', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const res = await call(collection, 'POST', '/flocks', t, { ...FLOCK, baseUrl: 'not-a-url' })
+    expect(res.status).toBe(422)
+    expect(res.headers.get('content-type')).toBe('application/problem+json')
+    const p = await res.json() as { status: number; detail: string; errors: { path: string }[] }
+    // The positive anchor: this really is the body issue under test, not a path or query 422.
+    expect(p.errors.map((e) => e.path)).toEqual(['baseUrl'])
+    expect(p.status).toBe(422)
+    expect(p.detail).toBe('request failed validation')
+    expect(p.detail).not.toContain('body')
+  })
+
   test('PUT with a malformed body is 422, never an opaque 500', async () => {
     const t = await tok.mint({ sub: adminUserId })
     const created = await (await call(collection, 'POST', '/flocks', t, FLOCK)).json() as { id: string }
@@ -170,6 +190,24 @@ describe('/api/admin/v1/flocks', () => {
       { ...FLOCK, name: 'renamed', tlsTrust: false }, { id: created.id })
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ id: created.id, name: 'renamed', tlsTrust: false })
+  })
+
+  /**
+   * The half of "full replace" that only bites on an OPTIONAL field, and the one the OpenAPI
+   * document now publishes: `saveFlock` does `set(values)` with `upstreamAuth: data.upstreamAuth ??
+   * null`, so omitting it CLEARS the stored credential rather than leaving it alone. Worth pinning
+   * precisely because it is silent — a client doing GET → change the name → PUT drops the upstream
+   * credential and gets a 200 for it.
+   */
+  test('PUT /{id} omitting upstreamAuth CLEARS it — replace, not merge', async () => {
+    const t = await tok.mint({ sub: adminUserId })
+    const created = await (await call(collection, 'POST', '/flocks', t, { ...FLOCK, upstreamAuth: 'secret' }))
+      .json() as { id: string; upstreamAuth: string | null }
+    // The positive anchor: the credential really was stored, so the null below means "cleared".
+    expect(created.upstreamAuth).toBe('secret')
+    const res = await call(item, 'PUT', `/flocks/${created.id}`, t, { ...FLOCK, name: 'renamed' }, { id: created.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ name: 'renamed', upstreamAuth: null })
   })
 
   test('PUT /{id} of another org 404s before it writes anything', async () => {

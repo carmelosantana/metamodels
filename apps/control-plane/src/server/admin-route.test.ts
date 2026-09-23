@@ -179,8 +179,11 @@ describe('a malformed path id is 422, never an opaque 500', () => {
     const p = await res.json() as { status: number; detail: string; errors?: { path: string }[] }
     expect(p.status).toBe(422)
     expect(p.errors?.map((e) => e.path)).toContain('id')
-    // These are GETs and DELETEs with no body at all, so a detail blaming one would be a
-    // response contradicting its own `errors[]`.
+    // The detail must name no source, and this table is why. Eight of these rows are GETs and
+    // DELETEs carrying no body at all, so a detail blaming a body would describe one that does not
+    // exist; the other six carry a DELIBERATELY VALID body (see the CASES comment above), so the
+    // same detail would blame the one part of the request that was fine. Either way it would
+    // contradict the `errors[]` sitting beside it, which says `id`.
     expect(p.detail).toBe('request failed validation')
   })
 
