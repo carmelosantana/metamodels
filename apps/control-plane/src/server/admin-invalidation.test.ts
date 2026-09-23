@@ -217,7 +217,7 @@ describe('admin mutations invalidate the data plane config cache, as the console
     ['PUT /paddocks/{id}/status (invalid body)', statusRoute, '/paddocks/x/status', () => ({ status: 'nope' })],
   ] as const)('%s publishes nothing when refused with 422', async (_n, mod, path, body) => {
     const t = await tok.mint({ sub: adminUserId })
-    const params = mod === statusRoute ? { id: ids.paddockId } : {}
+    const params: Record<string, string> = mod === statusRoute ? { id: ids.paddockId } : {}
     const res = await call(mod as Mod, mod === statusRoute ? 'PUT' : 'POST', path, t, body(), params)
     expect(res.status).toBe(422)
     expect(publish).not.toHaveBeenCalled()
