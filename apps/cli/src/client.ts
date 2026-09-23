@@ -34,8 +34,8 @@ export interface ApiResponse {
 export class ApiProblemError extends Error {
   readonly status: number
   readonly problem: unknown
-  constructor(status: number, problem: unknown) {
-    super(formatProblem(status, problem))
+  constructor(status: number, problem: unknown, retryAfter?: string | null) {
+    super(formatProblem(status, problem, retryAfter))
     this.name = 'ApiProblemError'
     this.status = status
     this.problem = problem
@@ -43,11 +43,22 @@ export class ApiProblemError extends Error {
 }
 
 /**
+ * RFC 9110 §10.2.3: delay-seconds or an HTTP-date. Anything else is not printed, so a header cannot
+ * put arbitrary text on the operator's terminal.
+ */
+function retryAfterText(value: string | null | undefined): string | undefined {
+  if (!value) return undefined
+  if (/^\d{1,9}$/.test(value)) return `${value} seconds`
+  return /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) ? value : undefined
+}
+
+/**
  * An RFC 9457 problem as terminal text: `status title: detail`, then the missing `capability`
- * (so a scope mistake reads as one, not as a bare 403) and any validation `errors`, one per line.
+ * (so a scope mistake reads as one, not as a bare 403) and any validation `errors`, one per line,
+ * then the response's `Retry-After` when it has one (the admin API sends it with a 503).
  * Only those members are printed; the API puts nothing token-derived in any of them.
  */
-export function formatProblem(status: number, problem: unknown): string {
+export function formatProblem(status: number, problem: unknown, retryAfter?: string | null): string {
   const p = typeof problem === 'object' && problem !== null ? (problem as Record<string, unknown>) : {}
   const title = typeof p.title === 'string' ? p.title : (STATUS_CODES[status] ?? 'Error')
   const lines = [typeof p.detail === 'string' ? `${status} ${title}: ${p.detail}` : `${status} ${title}`]
@@ -58,6 +69,8 @@ export function formatProblem(status: number, problem: unknown): string {
       lines.push(`  ${path}: ${String(e?.message)}`)
     }
   }
+  const retry = retryAfterText(retryAfter)
+  if (retry !== undefined) lines.push(`  retry after: ${retry}`)
   return lines.join('\n')
 }
 
@@ -159,7 +172,7 @@ export async function callApi(
     throw new Error(`the admin API answered with a redirect (HTTP ${res.status}); check --console`)
   }
   const body = await readBody(res)
-  if (!res.ok) throw new ApiProblemError(res.status, body)
+  if (!res.ok) throw new ApiProblemError(res.status, body, res.headers.get('retry-after'))
   const next = nextCursor(res.headers.get('link'), url)
   return { status: res.status, body, ...(next === undefined ? {} : { next }) }
 }

@@ -220,6 +220,34 @@ describe('callApi', () => {
   })
 })
 
+describe('callApi: Retry-After', () => {
+  const unavailable = (headers: Record<string, string>): Reply => ({
+    status: 503, headers: { 'content-type': 'application/problem+json', ...headers },
+    json: { type: 'about:blank', title: 'Service Unavailable', status: 503, detail: 'the signing keys could not be fetched' },
+  })
+
+  test('a 503 carrying Retry-After says when to retry', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unavailable({ 'retry-after': '30' }))
+    const err = await callApi(s.url, session(), { method: 'GET', path: '/flocks' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiProblemError)
+    expect((err as Error).message).toBe(
+      '503 Service Unavailable: the signing keys could not be fetched\n  retry after: 30 seconds')
+    expect(s.requests).toHaveLength(1)
+  })
+
+  test('an HTTP-date Retry-After is printed as given', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unavailable({ 'retry-after': 'Wed, 23 Sep 2026 07:28:00 GMT' }))
+    const err = await callApi(s.url, session(), { method: 'GET', path: '/flocks' }).catch((e: unknown) => e)
+    expect((err as Error).message).toMatch(/\n  retry after: Wed, 23 Sep 2026 07:28:00 GMT$/)
+  })
+
+  test('a 503 without Retry-After prints no retry line', async () => {
+    const s = await api('GET /api/admin/v1/flocks', () => unavailable({}))
+    const err = await callApi(s.url, session(), { method: 'GET', path: '/flocks' }).catch((e: unknown) => e)
+    expect((err as Error).message).toBe('503 Service Unavailable: the signing keys could not be fetched')
+  })
+})
+
 describe('formatProblem', () => {
   test('title, detail, capability and validation errors, one per line', () => {
     expect(formatProblem(422, {

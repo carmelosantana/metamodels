@@ -272,7 +272,7 @@ Every error is [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem detail
 - `500` has no `detail` at all, so nothing internal can leak through it.
 
 `mm` prints these as one line, `403 Forbidden: …`, followed by the capability or the validation
-errors.
+errors, and by the `Retry-After` value when the response has one (`retry after: 30 seconds`).
 
 ## Pagination
 
