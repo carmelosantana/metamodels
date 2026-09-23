@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
 import { listPaddocks, getPaddock, savePaddock, deletePaddock, setPaddockStatus, SlugTakenError } from './paddocks-service'
-import { encodeCursor } from './page'
+import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { NotFoundError } from './flocks-service'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
@@ -127,10 +127,13 @@ describe('paddocks-service', () => {
   test('listPaddocks without opts still returns every row (the console path is unchanged)', async () => {
     const db = await freshDb()
     const { f, actor } = await orgWithFlock(db)
-    for (const s of ['a', 'b', 'c']) {
-      await savePaddock(db, actor, { flockId: f.id, name: s, slug: s, status: 'active', theme: 'plain' })
-    }
-    expect(await listPaddocks(db, actor)).toHaveLength(3)
+    // More than one default page, so a regression that paginated the console's bare call would
+    // return DEFAULT_LIMIT rows and fail here.
+    const n = DEFAULT_LIMIT + 1
+    await db.insert(schema.paddock).values(Array.from({ length: n }, (_, i) => ({
+      orgId: actor.orgId, flockId: f.id, name: `p${i}`, slug: `p${i}`,
+    })))
+    expect(await listPaddocks(db, actor)).toHaveLength(n)
   })
 
   test('getPaddock is org-scoped — another org 404s rather than leaking', async () => {

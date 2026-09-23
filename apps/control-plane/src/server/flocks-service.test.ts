@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg } from '../test/db'
 import { listFlocks, getFlock, saveFlock, deleteFlock, NotFoundError } from './flocks-service'
-import { encodeCursor } from './page'
+import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: Awaited<ReturnType<typeof freshDb>>, role: Actor['role']): Promise<Actor> {
@@ -98,8 +98,13 @@ describe('flocks-service', () => {
   test('listFlocks without opts still returns every row (the console path is unchanged)', async () => {
     const db = await freshDb()
     const actor = await actorFor(db, 'admin')
-    for (const n of ['a', 'b', 'c']) await saveFlock(db, actor, { ...base, name: n })
-    expect(await listFlocks(db, actor)).toHaveLength(3)
+    // More than one default page, so a regression that paginated the console's bare call would
+    // return DEFAULT_LIMIT rows and fail here.
+    const n = DEFAULT_LIMIT + 1
+    await db.insert(schema.flock).values(Array.from({ length: n }, (_, i) => ({
+      orgId: actor.orgId, breed: 'ollama', name: `f${i}`, baseUrl: 'http://ollama:11434',
+    })))
+    expect(await listFlocks(db, actor)).toHaveLength(n)
   })
 
   test('an empty cursor is rejected, not quietly treated as page one', async () => {

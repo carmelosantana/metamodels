@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { freshDb, seedOrg, type TestDb } from '../test/db'
 import { listKeys, createKey, revokeKey, NotFoundError } from './keys-service'
-import { encodeCursor } from './page'
+import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
 async function actorFor(db: TestDb, role: Actor['role']): Promise<Actor> {
@@ -215,7 +215,18 @@ describe('keys-service listKeys pagination', () => {
   test('listKeys without opts still returns every row (the console path is unchanged)', async () => {
     const db = await freshDb()
     const actor = await actorFor(db, 'admin')
-    await threeKeysEachScopedToTwoPaddocks(db, actor)
-    expect(await listKeys(db, actor)).toHaveLength(3)
+    // More than one default page of keys, each on two paddocks so the join has twice as many rows
+    // as there are keys: a regression that paginated the console's bare call, or limited join rows
+    // rather than keys, returns fewer than every key and fails here.
+    const a = await paddockIn(db, actor.orgId, 'pa')
+    const b = await paddockIn(db, actor.orgId, 'pb')
+    const n = DEFAULT_LIMIT + 1
+    const keys = await db.insert(schema.apiKey).values(Array.from({ length: n }, (_, i) => ({
+      orgId: actor.orgId, name: `k${i}`, prefix: `mm_${i}`, hash: `hash-${i}`,
+    }))).returning({ id: schema.apiKey.id })
+    await db.insert(schema.keyPaddock).values(keys.flatMap((k) => [{ keyId: k.id, paddockId: a }, { keyId: k.id, paddockId: b }]))
+    const all = await listKeys(db, actor)
+    expect(all).toHaveLength(n)
+    expect(all.every((k) => k.paddockSlugs.length === 2)).toBe(true)
   })
 })
