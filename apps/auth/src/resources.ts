@@ -1,5 +1,5 @@
 import { errors, type Client, type ResourceServer } from 'oidc-provider'
-import { adminApiResource, CAPABILITIES, CLI_CLIENT_ID, CONSOLE_CLIENT_ID } from '@metamodels/schema'
+import { adminApiResource, CAPABILITIES, CLI_CLIENT_ID } from '@metamodels/schema'
 
 /**
  * Every resource server this OP issues access tokens for. Tokens are RFC 9068 JWTs so resource
@@ -31,15 +31,14 @@ export function accessTokenTtl(
 /**
  * Which resources each statically registered client may ask for. A client absent from this map
  * may ask for none — including every `extraClients` entry and any client M4 admits later until it
- * is listed here. The CLI exists to reach the admin API; the console keeps the admin-API access it
- * has had since M1, though the admin API itself accepts no console session (spec §3.2).
+ * is listed here. Only the CLI may reach the admin API, and only through the device flow, which asks
+ * for the password every time (spec A4). The console is deliberately absent (spec A15): it signs
+ * operators in with `openid` alone, and its authorization-code flow auto-consents on a live OP
+ * session, so an admin-API token for it would need no fresh password. The admin API refuses any
+ * other client's token too (`verifyAdminToken`), so listing a client here is not enough on its own.
  */
 export function resourcesByClient(consoleUrl: string): ReadonlyMap<string, ReadonlySet<string>> {
-  const admin = adminApiResource(consoleUrl)
-  return new Map([
-    [CONSOLE_CLIENT_ID, new Set([admin])],
-    [CLI_CLIENT_ID, new Set([admin])],
-  ])
+  return new Map([[CLI_CLIENT_ID, new Set([adminApiResource(consoleUrl)])]])
 }
 
 /**

@@ -6,20 +6,36 @@ import {
   accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers,
 } from '../src/resources.js'
 import { seedUser } from './helpers/db.js'
-import { authorize, CONSOLE_URL, exchangeCode, opJwks, startTestOp, type TestOp } from './helpers/flow.js'
+import {
+  approveDevice, authorize, CONSOLE_URL, deviceAuthorization, deviceToken, exchangeCode, opJwks, startTestOp,
+  type DeviceAuthorization, type TestOp,
+} from './helpers/flow.js'
 
 const T = 20_000
 const ADMIN = adminApiResource(CONSOLE_URL)
+const EMAIL = 'admin@x.io'
+const PASSWORD = 'hunter2hunter2'
 let op: TestOp | undefined
 afterEach(async () => { await op?.close(); op = undefined })
 
+/** The console's authorization-code flow, signed in; `resource` is added to the request when given. */
 async function signedIn(scope: string, resource?: string) {
   op = await startTestOp()
-  const id = await seedUser(op.db, { email: 'admin@x.io', password: 'hunter2hunter2' })
-  const out = await authorize(op, {
-    email: 'admin@x.io', password: 'hunter2hunter2', scope, extra: resource ? { resource } : {},
-  })
+  const id = await seedUser(op.db, { email: EMAIL, password: PASSWORD })
+  const out = await authorize(op, { email: EMAIL, password: PASSWORD, scope, extra: resource ? { resource } : {} })
   return { id, out }
+}
+
+/** The CLI's device flow for `scope`, approved in a browser; returns the token response. */
+async function cliToken(scope: string) {
+  op = await startTestOp()
+  const id = await seedUser(op.db, { email: EMAIL, password: PASSWORD })
+  const auth = await deviceAuthorization(op, { scope, resource: ADMIN })
+  expect(auth.status).toBe(200)
+  await approveDevice(op, auth.json as unknown as DeviceAuthorization, { email: EMAIL, password: PASSWORD })
+  const token = await deviceToken(op, String(auth.json.device_code), { resource: ADMIN })
+  expect(token.status).toBe(200)
+  return { id, token }
 }
 
 describe('resource servers', () => {
@@ -31,11 +47,7 @@ describe('resource servers', () => {
   })
 
   test('requesting the admin API yields an RFC 9068 JWT bound to it', async () => {
-    const { id, out } = await signedIn('openid read resource.write', ADMIN)
-    if (out.kind !== 'redirect' || !out.url.searchParams.get('code')) throw new Error('expected a code')
-    const token = await exchangeCode(op!, out.url.searchParams.get('code')!, out.verifier, { resource: ADMIN })
-    expect(token.status).toBe(200)
-
+    const { id, token } = await cliToken('openid read resource.write')
     const { payload, protectedHeader } = await jwtVerify(token.json.access_token as string, await opJwks(op!), {
       issuer: op!.issuer, audience: ADMIN, typ: 'at+jwt', algorithms: ['RS256'],
     })
@@ -45,16 +57,14 @@ describe('resource servers', () => {
     // restriction M2 and M4 depend on.
     expect(payload.aud).toBe(ADMIN)
     expect(payload.sub).toBe(id)
-    expect(payload.client_id).toBe(CONSOLE_CLIENT_ID)
+    expect(payload.client_id).toBe(CLI_CLIENT_ID)
     expect(String(payload.scope).split(' ').sort()).toEqual(['read', 'resource.write'])
     expect(typeof payload.jti).toBe('string')
     expect(payload.exp! - payload.iat!).toBe(3600)
   }, T)
 
   test('a token carries only the scopes that were asked for', async () => {
-    const { out } = await signedIn('openid read', ADMIN)
-    if (out.kind !== 'redirect') throw new Error('expected a code')
-    const token = await exchangeCode(op!, out.url.searchParams.get('code')!, out.verifier, { resource: ADMIN })
+    const { token } = await cliToken('openid read')
     const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op!), { issuer: op!.issuer, audience: ADMIN })
     expect(payload.aud).toBe(ADMIN)
     expect(payload.scope).toBe('read')
@@ -88,40 +98,62 @@ describe('per-client resource gating', () => {
     ...resourceServers(CONSOLE_URL),
     [OTHER, { scope: 'read', accessTokenFormat: 'jwt' }],
   ])
+  // Arbitrary ids: these pin the gate's logic, not the production map (tested below).
+  const A = 'client-a'
+  const B = 'client-b'
   const get = makeGetResourceServerInfo(servers, new Map([
-    [CONSOLE_CLIENT_ID, new Set([ADMIN])],
-    [CLI_CLIENT_ID, new Set([ADMIN, OTHER])],
+    [A, new Set([ADMIN])],
+    [B, new Set([ADMIN, OTHER])],
   ]))
   const client = (clientId: string) => ({ clientId })
 
   test('a known client gets a resource it is allowed', async () => {
-    await expect(get({}, ADMIN, client(CONSOLE_CLIENT_ID))).resolves.toBe(servers.get(ADMIN))
-    await expect(get({}, ADMIN, client(CLI_CLIENT_ID))).resolves.toBe(servers.get(ADMIN))
-    await expect(get({}, OTHER, client(CLI_CLIENT_ID))).resolves.toBe(servers.get(OTHER))
+    await expect(get({}, ADMIN, client(A))).resolves.toBe(servers.get(ADMIN))
+    await expect(get({}, ADMIN, client(B))).resolves.toBe(servers.get(ADMIN))
+    await expect(get({}, OTHER, client(B))).resolves.toBe(servers.get(OTHER))
   })
 
   test('an unknown client is refused a resource a known client gets', async () => {
-    await expect(get({}, ADMIN, client(CONSOLE_CLIENT_ID))).resolves.toBeDefined()
+    await expect(get({}, ADMIN, client(A))).resolves.toBeDefined()
     await expect(get({}, ADMIN, client('someone-else'))).rejects.toThrow(errors.InvalidTarget)
   })
 
   test('a known client is refused a declared resource outside its own set', async () => {
-    await expect(get({}, OTHER, client(CLI_CLIENT_ID))).resolves.toBeDefined()
-    await expect(get({}, OTHER, client(CONSOLE_CLIENT_ID))).rejects.toThrow(errors.InvalidTarget)
+    await expect(get({}, OTHER, client(B))).resolves.toBeDefined()
+    await expect(get({}, OTHER, client(A))).rejects.toThrow(errors.InvalidTarget)
   })
 
   test('an undeclared resource is refused even to a client that lists it', async () => {
-    const lax = makeGetResourceServerInfo(servers, new Map([[CLI_CLIENT_ID, new Set(['http://ghost.test/api', ADMIN])]]))
-    await expect(lax({}, ADMIN, client(CLI_CLIENT_ID))).resolves.toBeDefined()
-    await expect(lax({}, 'http://ghost.test/api', client(CLI_CLIENT_ID))).rejects.toThrow(errors.InvalidTarget)
+    const lax = makeGetResourceServerInfo(servers, new Map([[B, new Set(['http://ghost.test/api', ADMIN])]]))
+    await expect(lax({}, ADMIN, client(B))).resolves.toBeDefined()
+    await expect(lax({}, 'http://ghost.test/api', client(B))).rejects.toThrow(errors.InvalidTarget)
   })
 
-  test('the production map lets exactly the console and the CLI ask for the admin API', () => {
+  test('the production map lets exactly the CLI ask for the admin API', () => {
     const allowed = resourcesByClient(CONSOLE_URL)
-    expect([...allowed.keys()].sort()).toEqual([CLI_CLIENT_ID, CONSOLE_CLIENT_ID].sort())
-    expect([...allowed.get(CONSOLE_CLIENT_ID)!]).toEqual([ADMIN])
+    expect([...allowed.keys()]).toEqual([CLI_CLIENT_ID])
     expect([...allowed.get(CLI_CLIENT_ID)!]).toEqual([ADMIN])
+    // The console signs operators in (`openid` only) and needs no admin-API token (spec A15).
+    expect(allowed.has(CONSOLE_CLIENT_ID)).toBe(false)
   })
+
+  /**
+   * Spec A15. The console's authorization-code flow auto-consents on a live OP session with no fresh
+   * password, so an admin-API token for the console would be one leaked code plus the console
+   * secret away from `user.manage`. The refusal is paired with the same console, signed in without
+   * the resource, which still gets a code.
+   */
+  test('through the real OP: the console is refused the admin API at the authorization endpoint', async () => {
+    const { out: control } = await signedIn('openid')
+    if (control.kind !== 'redirect') throw new Error('expected a code')
+    expect(control.url.searchParams.get('code')).toBeTruthy()
+
+    // The same browser, its OP session live: no login form, and still no code for the admin API.
+    const out = await authorize(op!, { scope: 'openid read user.manage', extra: { resource: ADMIN }, jar: control.jar })
+    if (out.kind !== 'redirect') throw new Error(`expected an error redirect to the console, got ${out.status}`)
+    expect(out.url.searchParams.get('error')).toBe('invalid_target')
+    expect(out.url.searchParams.get('code')).toBeNull()
+  }, T)
 
   test('through the real OP: a registered but ungranted client is refused the admin API', async () => {
     op = await startTestOp({
@@ -133,9 +165,9 @@ describe('per-client resource gating', () => {
         response_types: ['code'],
       }],
     })
-    // Same request shape, the console: allowed — it reaches the login form rather than an error.
-    const control = await authorize(op, { scope: 'openid read', extra: { resource: ADMIN } })
-    if (control.kind !== 'page') throw new Error(`expected the console to reach login, got ${control.url.href}`)
+    // The same client without the resource: allowed — it reaches the login form rather than an error.
+    const control = await authorize(op, { clientId: 'third-party', redirectUri: 'http://third.test/cb', scope: 'openid' })
+    if (control.kind !== 'page') throw new Error(`expected the client to reach login, got ${control.url.href}`)
     expect(control.body).toContain('<form method="post"')
 
     const out = await authorize(op, {
