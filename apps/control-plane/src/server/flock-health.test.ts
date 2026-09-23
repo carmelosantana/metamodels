@@ -77,7 +77,7 @@ describe('listFlockModels', () => {
   test('sends the opened credential to the flock', async () => {
     const db = await freshDb()
     const actor = await actorFor(db)
-    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'Bearer up-tok' })
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'up-tok' })
     const fetchMock = vi.fn(async (_u: unknown, _init?: RequestInit) =>
       new Response(JSON.stringify({ models: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
