@@ -4,7 +4,7 @@ import { makeFindAccount } from './account.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
 import type { Db } from './db.js'
-import { interactionMiddleware, interactionPolicyWithFreshDeviceLogin } from './interactions.js'
+import { interactionMiddleware, interactionPolicyWithFreshDeviceLogin, loadExistingGrant } from './interactions.js'
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
 import { accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers } from './resources.js'
@@ -103,6 +103,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
       policy: interactionPolicyWithFreshDeviceLogin(),
     },
+    // A new grant for every device approval; the console keeps the default (see loadExistingGrant).
+    loadExistingGrant,
     // The library default, named so devicePrefillMiddleware matches the path this route is served
     // on. (deviceSwitchAccountMiddleware keys on the matched route name, device_resume, not a path.)
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
@@ -176,9 +178,9 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       // Idle window clamped to the absolute cap — see refreshTokenTtl.
       RefreshToken: refreshTokenTtl,
       // Every refresh re-validates the grant, so the grant must outlive every refresh token issued
-      // under it or its expiry, not the refresh-token policy, becomes the real bound. A grant is
-      // saved at consent, at most one device-code lifetime before its first refresh token. (A grant
-      // reused from the same OP session is older still — that can only make the bound tighter.)
+      // under it or its expiry, not the refresh-token policy, becomes the real bound. Every device
+      // approval saves a new grant at consent (see loadExistingGrant), at most one device-code
+      // lifetime before its first refresh token.
       // For the console (no refresh tokens) a grant without a live OP session signs no one in, so
       // the long lifetime is harmless there.
       Grant: REFRESH_TOKEN_ABSOLUTE_TTL + DEVICE_CODE_TTL,

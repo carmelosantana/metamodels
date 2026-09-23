@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { Middleware, ParameterizedContext } from 'koa'
 import type Provider from 'oidc-provider'
+import type { Grant, KoaContextWithOIDC } from 'oidc-provider'
 import { errors, interactionPolicy } from 'oidc-provider'
 import { verifyLogin } from './account.js'
 import type { Db } from './db.js'
@@ -48,6 +49,27 @@ export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.Defau
       : Check.NO_NEED_TO_PROMPT,
   ))
   return policy
+}
+
+/**
+ * `loadExistingGrant`: which grant an authorization request starts from. oidc-provider's default
+ * takes the grant the consent step just handed back (`result.consent.grantId`), and failing that
+ * the one the browser session already holds for the client (`session.grantIdFor(clientId)`).
+ *
+ * A device approval (`DEVICE_APPROVAL_ROUTES`) skips the session's grant, so every approval starts
+ * from an empty grant: the consent prompt then lists every scope the device asked for, and
+ * `consentFor` saves them in a new grant. (RFC 8628: each device authorization is its own. A shared
+ * grant would let revoking one machine's refresh token sign every machine approved in that browser
+ * out.) The consent step's own grant is still taken: oidc-provider then records it as the session's
+ * grant for the client, and binds the device code to that. The session so points at the newest
+ * device grant. An older one is not revoked; it lives on for the refresh tokens issued under it.
+ *
+ * Every other route (the console's authorization-code flow) keeps the default.
+ */
+export async function loadExistingGrant(ctx: KoaContextWithOIDC): Promise<Grant | undefined> {
+  const grantId = ctx.oidc.result?.consent?.grantId
+    ?? (DEVICE_APPROVAL_ROUTES.has(ctx.oidc.route) ? undefined : ctx.oidc.session!.grantIdFor(ctx.oidc.client!.clientId))
+  return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined
 }
 
 const INTERACTION_PATH = /^\/interaction\/([A-Za-z0-9_-]+)(\/login)?$/
@@ -134,10 +156,22 @@ async function showInteraction(ctx: Ctx, deps: InteractionDeps): Promise<void> {
 /**
  * Automatic consent for a first-party client: grant exactly what this request is missing, and
  * nothing more. Mirrors oidc-provider's reference consent handler, minus the screen.
+ *
+ * Which grant it writes to is decided by `details.grantId`, the saved grant the request started
+ * from (see `loadExistingGrant`):
+ * - Set (the console's authorization-code flow, when its browser session already holds a grant for
+ *   the client): the missing scopes are added to that grant in place, and nothing is handed back.
+ * - Unset: a NEW grant is saved and its id handed back, and the provider binds the request to it.
+ *   Every device approval takes this branch: `loadExistingGrant` starts it from an unsaved grant,
+ *   so it never carries the session's grant here, and the missing scopes are all it asked for.
+ *   A device approval that did carry one is refused rather than given a shared grant.
  */
 async function consentFor(provider: Provider, details: InteractionDetails): Promise<{ grantId?: string }> {
   const accountId = details.session?.accountId
   if (!accountId) throw new Error('consent prompt reached without an authenticated session')
+  if (details.deviceCode !== undefined && details.grantId !== undefined) {
+    throw new Error('device approval reached consent with an existing grant; each device gets its own')
+  }
 
   const existing = details.grantId ? await provider.Grant.find(details.grantId) : undefined
   const grant = existing ?? new provider.Grant({ accountId, clientId: String(details.params.client_id) })
