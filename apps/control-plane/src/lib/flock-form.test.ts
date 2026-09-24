@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { flockFormToInput } from './flock-form'
+import { flockFormToInput, movesCredential } from './flock-form'
 import { saveFlockInput } from './flock-schema'
 
 const form = (fields: Record<string, string>) => {
@@ -64,6 +64,22 @@ describe('flockFormToInput: the credential choice', () => {
 
   test('an unknown choice is refused rather than guessed at', () => {
     expect(() => flockFormToInput(form({ ...EDIT, credential: 'nope' }))).toThrow()
+  })
+})
+
+// The rule behind the rebind 409, shared by `saveFlock` (which enforces it) and the edit drawer
+// (which warns before the operator hits it).
+describe('movesCredential', () => {
+  const stored = { baseUrl: 'http://a', tlsTrust: false }
+  test('a different base URL moves it', () => {
+    expect(movesCredential(stored, { baseUrl: 'http://b', tlsTrust: false })).toBe(true)
+  })
+  test('turning TLS trust on moves it', () => {
+    expect(movesCredential(stored, { baseUrl: 'http://a', tlsTrust: true })).toBe(true)
+  })
+  test('the same URL, or turning TLS trust off, does not', () => {
+    expect(movesCredential(stored, { baseUrl: 'http://a', tlsTrust: false })).toBe(false)
+    expect(movesCredential({ baseUrl: 'http://a', tlsTrust: true }, { baseUrl: 'http://a', tlsTrust: false })).toBe(false)
   })
 })
 

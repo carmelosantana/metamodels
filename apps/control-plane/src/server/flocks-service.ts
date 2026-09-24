@@ -7,6 +7,7 @@ import type { Db } from './db'
 import { requireCapability, type Actor } from '../auth/authorize'
 import { writeAudit } from './audit'
 import { saveFlockInput } from '../lib/flock-schema'
+import { movesCredential } from '../lib/flock-form'
 import { decodeCursor, type PageOpts } from './page'
 
 export class NotFoundError extends Error {
@@ -152,7 +153,7 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
           .from(flock)
           .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
           .for('update')
-        if (current?.enc != null && (current.baseUrl !== data.baseUrl || (!current.tlsTrust && data.tlsTrust))) {
+        if (current?.enc != null && movesCredential(current, data)) {
           throw new CredentialRebindError()
         }
       }

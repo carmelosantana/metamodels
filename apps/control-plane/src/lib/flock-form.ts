@@ -32,3 +32,14 @@ export function flockFormToInput(fd: FormData) {
     tlsTrust: String(fd.get('tlsTrust') ?? 'false') === 'true',
   }
 }
+
+type Endpoint = { baseUrl: string; tlsTrust: boolean }
+
+/**
+ * Whether saving `next` over `stored` would carry a stored credential somewhere new: a different
+ * base URL, or TLS trust switched on. `saveFlock` refuses that unless the credential is re-sent or
+ * cleared (`CredentialRebindError`); the edit drawer uses the same rule to warn before it does.
+ */
+export function movesCredential(stored: Endpoint, next: Endpoint): boolean {
+  return stored.baseUrl !== next.baseUrl || (!stored.tlsTrust && next.tlsTrust)
+}
