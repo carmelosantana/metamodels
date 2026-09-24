@@ -105,7 +105,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // A new grant for every device approval; the console keeps the default (see loadExistingGrant).
     loadExistingGrant,
     // The library default, named so devicePrefillMiddleware matches the path this route is served
-    // on. (switchAccountMiddleware keys on the matched route name, device_resume, not a path.)
+    // on. (switchAccountMiddleware keys on the matched route names, resume and device_resume, not
+    // on a path.)
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
       devInteractions: { enabled: false },
