@@ -1,4 +1,4 @@
-import { BreedRegistry, comfyuiBreed, ollamaBreed, upstreamAuthHeaders, type ModelListResult } from '@metamodels/connectors'
+import { BreedRegistry, comfyuiBreed, ollamaBreed, upstreamAuthHeaders, type FlockRef, type ModelListResult } from '@metamodels/connectors'
 import type { Db } from './db'
 import type { Actor } from '../auth/authorize'
 import { getFlockConnection, NotFoundError } from './flocks-service'
@@ -49,17 +49,8 @@ export async function testStoredFlockConnection(
   }
   // Fail closed, as `listFlockModels` does: probing without it would report the upstream's 401.
   if (f.upstreamAuthError) return { ok: false, detail: 'upstream credential unavailable' }
-  // The token as it goes on the wire: a legacy leading `Bearer ` is dropped by the same helper.
-  const token = upstreamAuthHeaders(f).authorization?.slice('Bearer '.length)
-  // A row sealed before bare tokens were validated can hold a value no header may carry, and the
-  // error fetch raises for an illegal header quotes it. Refuse it here instead.
-  if (token !== undefined && !UPSTREAM_AUTH_PATTERN.test(token)) {
-    return { ok: false, detail: 'the stored credential is not a valid bearer token; replace it' }
-  }
-  const r = await registry.get(f.breed).health({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust })
-  // `detail` is the client's error text, which goes to the browser. Never let it carry the token.
-  if (token && r.detail?.includes(token)) return { ok: r.ok, detail: 'the request to the flock failed' }
-  return r
+  return callWithStoredToken(f, (detail) => ({ ok: false, detail }), () =>
+    registry.get(f.breed).health({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust }))
 }
 
 export async function listFlockModels(
@@ -76,9 +67,33 @@ export async function listFlockModels(
     throw e
   }
   const breed = registry.get(f.breed)
-  if (!breed.listModels) return { ok: false, models: [], detail: 'unsupported' }
+  const listModels = breed.listModels?.bind(breed)
+  if (!listModels) return { ok: false, models: [], detail: 'unsupported' }
   // Fail closed, like the data plane: asking without the credential would come back as the
   // upstream's 401 and send the operator looking at the wrong system.
   if (f.upstreamAuthError) return { ok: false, models: [], detail: 'upstream credential unavailable' }
-  return breed.listModels({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust })
+  return callWithStoredToken(f, (detail) => ({ ok: false, models: [], detail }), () =>
+    listModels({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust }))
+}
+
+/**
+ * Calls a flock with its stored credential and returns the result for the browser. `detail` is the
+ * client's error text, so it must never carry the token: a row sealed before bare tokens were
+ * validated (the D8 ruling) can hold a value no header may carry, and the error fetch raises for an
+ * illegal header quotes it. Such a token is refused without calling the flock, and any `detail`
+ * that still quotes the token is replaced.
+ */
+async function callWithStoredToken<R extends { ok: boolean; detail?: string }>(
+  f: Pick<FlockRef, 'upstreamAuth'>,
+  refuse: (detail: string) => R,
+  call: () => Promise<R>,
+): Promise<R> {
+  // The token as it goes on the wire: a legacy leading `Bearer ` is dropped by the same helper.
+  const token = upstreamAuthHeaders(f).authorization?.slice('Bearer '.length)
+  if (token !== undefined && !UPSTREAM_AUTH_PATTERN.test(token)) {
+    return refuse('the stored credential is not a valid bearer token; replace it')
+  }
+  const r = await call()
+  if (token && r.detail?.includes(token)) return { ...r, detail: 'the request to the flock failed' }
+  return r
 }
