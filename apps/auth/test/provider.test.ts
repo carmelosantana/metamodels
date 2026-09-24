@@ -186,6 +186,9 @@ describe('auth service — invite sign-in while another account is signed in', (
   const A = { email: 'admin@x.io', password: 'hunter2hunter2' }
   const B = { email: 'invitee@x.io', password: 'invitee-pass-123' }
   const form = { 'content-type': 'application/x-www-form-urlencoded' }
+  // Each test signs in twice and presses Continue, so it gets more than the file's `T`, which
+  // overrides `--testTimeout`.
+  const SWITCH_T = 60_000
 
   /** A's browser, then an invite sign-in for B in it: the page the resume after B's login ends on. */
   async function inviteSignIn() {
@@ -222,7 +225,7 @@ describe('auth service — invite sign-in while another account is signed in', (
     expect(out.body).not.toMatch(/<script|<noscript|\son[a-z]+=/i)
     expect(out.csp).toBe(authCsp([CONSOLE_URL]))
     expect(out.csp).not.toMatch(/script-src|unsafe-inline/)
-  }, T)
+  }, SWITCH_T)
 
   test('Continue ends A\'s session and completes the sign-in as B', async () => {
     const { idA, idB, out } = await inviteSignIn()
@@ -238,7 +241,7 @@ describe('auth service — invite sign-in while another account is signed in', (
     const { payload } = await jwtVerify(tokens.json.id_token as string, await opJwks(op!), { issuer: op!.issuer })
     expect(payload.sub).toBe(idB)
     expect(payload.sub).not.toBe(idA)
-  }, T)
+  }, SWITCH_T)
 
   test('the same POST without the xsrf field is refused, and A stays signed in', async () => {
     const { idA, out } = await inviteSignIn()
@@ -251,7 +254,7 @@ describe('auth service — invite sign-in while another account is signed in', (
     if (silent.kind !== 'redirect') throw new Error(`expected a silent sign-in, got ${silent.status}`)
     const tokens = await exchangeCode(op!, silent.url.searchParams.get('code')!, silent.verifier)
     expect((await jwtVerify(tokens.json.id_token as string, await opJwks(op!), { issuer: op!.issuer })).payload.sub).toBe(idA)
-  }, T)
+  }, SWITCH_T)
 })
 
 describe('auth service — signing-key rotation overlap', () => {
