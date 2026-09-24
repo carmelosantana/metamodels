@@ -6,6 +6,7 @@ import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { saveFlock } from './flocks-service'
 import { buildBreedRegistry, listFlockModels, testFlockConnection, testStoredFlockConnection } from './flock-health'
 import type { Actor } from '../auth/authorize'
+import { upstreamAuthKeys } from './seal-keys'
 
 const testDb = sharedDb()
 
@@ -140,6 +141,48 @@ describe('testStoredFlockConnection', () => {
     const r = await testStoredFlockConnection(registry, db, actor, f.id)
     expect(r.ok).toBe(false)
     expect(JSON.stringify(r)).not.toContain('s3cr3t')
+  })
+
+  test('a probe error that quotes the credential comes back without it', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 's3cr3t' })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('invalid header value "Bearer s3cr3t"') }))
+    const r = await testStoredFlockConnection(registry, db, actor, f.id)
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('s3cr3t')
+  })
+
+  // Rows sealed before bare tokens were validated keep their value as it was (the D8 ruling), so one
+  // can hold whitespace or a control character. No such value is a legal header, and the error a
+  // client raises for an illegal header typically quotes it.
+  test('a legacy credential that is not a legal bearer token is not sent, and is not quoted', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const id = randomUUID()
+    await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'legacy', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('s3cr3t\r\nx', upstreamAuthKeys(), { orgId: actor.orgId, flockId: id }),
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await testStoredFlockConnection(registry, db, actor, id)
+    expect(r).toEqual({ ok: false, detail: 'the stored credential is not a valid bearer token; replace it' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('a legacy credential with a leading "Bearer " is still sent as one bearer token', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const id = randomUUID()
+    await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'legacy', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('Bearer old-tok', upstreamAuthKeys(), { orgId: actor.orgId, flockId: id }),
+    })
+    const fetchMock = vi.fn(async (_u: unknown, _init?: RequestInit) => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testStoredFlockConnection(registry, db, actor, id)).toEqual({ ok: true })
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer old-tok')
   })
 
   test('a credential no held key opens fails closed, without calling the flock', async () => {
