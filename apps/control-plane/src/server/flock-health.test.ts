@@ -4,7 +4,7 @@ import { flock } from '@metamodels/schema'
 import { loadSealKeyring, seal } from '@metamodels/schema/sealed'
 import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import { saveFlock } from './flocks-service'
-import { buildBreedRegistry, listFlockModels, testFlockConnection } from './flock-health'
+import { buildBreedRegistry, listFlockModels, testFlockConnection, testStoredFlockConnection } from './flock-health'
 import type { Actor } from '../auth/authorize'
 
 const testDb = sharedDb()
@@ -100,6 +100,73 @@ describe('listFlockModels', () => {
     vi.stubGlobal('fetch', fetchMock)
     expect(await listFlockModels(registry, db, actor, f.id))
       .toEqual({ ok: false, models: [], detail: 'upstream credential unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// The console's Test for a saved flock. The flock id is the only input: the URL, TLS setting and
+// credential are the stored ones, opened on the server, so nothing a caller sends can redirect the
+// credential somewhere new, and nothing about it goes back to the caller.
+describe('testStoredFlockConnection', () => {
+  const okFetch = () => vi.fn(async (_u: unknown, _init?: RequestInit) => new Response('{}', { status: 200 }))
+
+  test('probes the stored URL with the opened credential', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'up-tok' })
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await testStoredFlockConnection(registry, db, actor, f.id)
+    expect(r).toEqual({ ok: true })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('http://o:11434/api/version')
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer up-tok')
+  })
+
+  test('with no credential stored, sends no authorization header', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'comfyui', name: 'c', baseUrl: 'http://c:8188', tlsTrust: false })
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testStoredFlockConnection(registry, db, actor, f.id)).toEqual({ ok: true })
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('authorization')).toBe(false)
+  })
+
+  test('a failed probe reports the failure, never the credential', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 's3cr3t' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })))
+    const r = await testStoredFlockConnection(registry, db, actor, f.id)
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('s3cr3t')
+  })
+
+  test('a credential no held key opens fails closed, without calling the flock', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
+    await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('t', foreign, { orgId: actor.orgId, flockId: id }),
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testStoredFlockConnection(registry, db, actor, id))
+      .toEqual({ ok: false, detail: 'upstream credential unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('a flock in another org is not found, and is not probed', async () => {
+    const db = testDb()
+    const mine = await actorFor(db)
+    const otherOrg = await seedOrg(db)
+    const stranger: Actor = { id: 'u2', orgId: otherOrg.id, email: 'x@y.io', role: 'admin', credential: 'session' }
+    const f = await saveFlock(db, stranger, { breed: 'ollama', name: 'theirs', baseUrl: 'http://o', tlsTrust: false, upstreamAuth: 'theirs' })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testStoredFlockConnection(registry, db, mine, f.id)).toEqual({ ok: false, detail: 'flock not found' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
