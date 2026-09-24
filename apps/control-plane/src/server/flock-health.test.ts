@@ -58,6 +58,16 @@ describe('listFlockModels', () => {
     expect(r).toEqual({ ok: true, models: ['qwen2.5-coder:0.5b'] })
   })
 
+  test('an id that is not a uuid is not found, rather than a driver error', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await listFlockModels(registry, db, actor, 'my-flock'))
+      .toEqual({ ok: false, models: [], detail: 'flock not found' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test('a flock in another org is not found (no cross-org read)', async () => {
     const db = testDb()
     const mine = await actorFor(db)

@@ -59,6 +59,8 @@ export async function listFlockModels(
   actor: Actor,
   flockId: string,
 ): Promise<ModelListResult> {
+  // Same guard as testStoredFlockConnection: a non-uuid id names no flock.
+  if (!uuidSchema.safeParse(flockId).success) return { ok: false, models: [], detail: 'flock not found' }
   let f
   try {
     f = await getFlockConnection(db, actor, flockId)
