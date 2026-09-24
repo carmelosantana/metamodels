@@ -204,7 +204,8 @@ describe('auth service — invite sign-in while another account is signed in', (
 
   /** Press the page's button: post its form, then follow redirects to the console's callback. */
   async function pressContinue(jar: CookieJar, body: string, fields: Record<string, string>) {
-    const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(body)![1]
+    const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(body)?.[1]
+    if (!action) throw new Error(`expected the "Switch account?" form, got: ${body.slice(0, 200)}`)
     let res = await send(jar, new URL(action, op!.issuer).href, {
       method: 'POST', headers: form, body: new URLSearchParams(fields).toString(),
     })
