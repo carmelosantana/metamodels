@@ -158,6 +158,15 @@ describe('testStoredFlockConnection', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  test('an id that is not a uuid is not found, rather than a driver error', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testStoredFlockConnection(registry, db, actor, 'my-flock')).toEqual({ ok: false, detail: 'flock not found' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test('a flock in another org is not found, and is not probed', async () => {
     const db = testDb()
     const mine = await actorFor(db)

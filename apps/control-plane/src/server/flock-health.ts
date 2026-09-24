@@ -3,6 +3,7 @@ import type { Db } from './db'
 import type { Actor } from '../auth/authorize'
 import { getFlockConnection, NotFoundError } from './flocks-service'
 import { flockConnectionInput } from '../lib/flock-schema'
+import { uuidSchema } from './path-id'
 
 export function buildBreedRegistry(): BreedRegistry {
   const registry = new BreedRegistry()
@@ -36,6 +37,9 @@ export async function testStoredFlockConnection(
   actor: Actor,
   flockId: string,
 ): Promise<{ ok: boolean; detail?: string }> {
+  // A server action is an endpoint anyone signed in can post to. A non-uuid id names no flock, and
+  // would otherwise reach Postgres as an invalid uuid literal and come back as a driver error.
+  if (!uuidSchema.safeParse(flockId).success) return { ok: false, detail: 'flock not found' }
   let f
   try {
     f = await getFlockConnection(db, actor, flockId)
