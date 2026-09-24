@@ -191,6 +191,32 @@ console, so a token that expires in between fails the run instead of passing it.
 `200` both times, the token proves nothing: get a fresh one. A `503` from the second console usually
 means it could not fetch the key set.
 
+### A flock's stored credential (`specs/flock-credential.spec.ts`)
+
+The console's Replace, Remove and Test for a flock's upstream credential, which it never shows. The
+spec starts its own fake upstream that records the `Authorization` header of every request, so it
+checks what was actually stored and sent rather than what the page says.
+
+| Step | Claim under test |
+|------|------------------|
+| 1–2 | Before saving, Test sends the typed token. After saving, the row says only "Stored", the page's HTML never contains the token, and the row's Test sends the stored token to the stored URL |
+| 3 | Keeping the credential while changing the base URL is warned about, and saving is refused with the console's own 409 wording |
+| 4 | A replacement with a `Bearer ` prefix is refused, the refusal does not quote it, and the old token stays |
+| 5–6 | Replace stores the typed token, still does after a Test in the same form, and works alongside a new base URL |
+| 7–9 | Remove, which needs its own danger button, clears the credential (also after a Test), and the next Test sends no `Authorization` |
+
+`E2E_UPSTREAM_HOST` opts in; without it the spec skips. It is this machine's address **as the
+control-plane container reaches it**, for example the compose network's gateway
+(`docker network inspect <project>_default -f '{{(index .IPAM.Config 0).Gateway}}'`). The fake
+upstream listens on a random port on all interfaces for the length of the run. It writes to the
+stack, so point it at a throwaway one:
+
+```bash
+E2E_BASE_URL=http://localhost:13000 E2E_AUTH_URL=http://localhost:13100 \
+E2E_UPSTREAM_HOST=<gateway address> OPERATOR_PASSWORD=<its password> \
+  pnpm exec playwright test specs/flock-credential.spec.ts
+```
+
 ## Running it
 
 The suite drives a stack that is already running — it does not start one.
@@ -220,6 +246,7 @@ still runs.
 | `E2E_AUTH_URL` | `http://localhost:3100` | Auth service. Must equal the stack's `OIDC_ISSUER` |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | `admin@example.com` / `change-me` | The seeded operator |
 | `E2E_VIEWER_EMAIL` / `E2E_VIEWER_PASSWORD` | *(unset — admin-api spec skips)* | A second seeded user, demoted to `viewer` by `admin-api.spec.ts` |
+| `E2E_UPSTREAM_HOST` | *(unset — flock-credential spec skips)* | This machine as the control-plane container reaches it; the spec's fake upstream listens there |
 
 `admin-api.spec.ts` ignores the `E2E_BASE_URL` and `E2E_AUTH_URL` defaults above: both must be set
 explicitly or it skips. The CLI it runs accepts plain http only to a loopback host. For a plain-http
