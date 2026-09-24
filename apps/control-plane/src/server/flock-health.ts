@@ -24,6 +24,30 @@ export async function testFlockConnection(
   })
 }
 
+/**
+ * The console's Test for a saved flock: its health probe, run with what is STORED — URL, TLS
+ * setting and the credential, opened here on the server. The id is the only input, so a caller
+ * cannot point the stored credential at a URL of its choosing (the same rebind `saveFlock` refuses
+ * with a 409), and only the probe's outcome goes back.
+ */
+export async function testStoredFlockConnection(
+  registry: BreedRegistry,
+  db: Db,
+  actor: Actor,
+  flockId: string,
+): Promise<{ ok: boolean; detail?: string }> {
+  let f
+  try {
+    f = await getFlockConnection(db, actor, flockId)
+  } catch (e) {
+    if (e instanceof NotFoundError) return { ok: false, detail: 'flock not found' }
+    throw e
+  }
+  // Fail closed, as `listFlockModels` does: probing without it would report the upstream's 401.
+  if (f.upstreamAuthError) return { ok: false, detail: 'upstream credential unavailable' }
+  return registry.get(f.breed).health({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust })
+}
+
 export async function listFlockModels(
   registry: BreedRegistry,
   db: Db,
