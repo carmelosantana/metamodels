@@ -7,6 +7,8 @@ import { acceptInvite, InviteError } from './invites-service'
 import { verifyPassword } from '@metamodels/schema'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
+const testDb = sharedDb()
+
 const NOW = 1_800_000_000_000
 
 async function seedAdminUser(db: TestDb, orgId: string): Promise<Actor> {
@@ -133,8 +135,6 @@ describe('invites-service acceptInvite', () => {
 })
 
 import { DuplicateInviteError } from './invites-service'
-
-const testDb = sharedDb()
 
 describe('inviteUser duplicate guard', () => {
   test('rejects an email that already has a pending invite', async () => {
