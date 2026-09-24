@@ -103,6 +103,32 @@ describe('listFlockModels', () => {
       .toEqual({ ok: false, models: [], detail: 'upstream credential unavailable' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  // `detail` goes to the browser, as it does for testStoredFlockConnection below.
+  test('an error that quotes the credential comes back without it', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 's3cr3t' })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('invalid header value "Bearer s3cr3t"') }))
+    const r = await listFlockModels(registry, db, actor, f.id)
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('s3cr3t')
+  })
+
+  test('a legacy credential that is not a legal bearer token is not sent, and is not quoted', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const id = randomUUID()
+    await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'legacy', baseUrl: 'http://o',
+      upstreamAuthEnc: seal('s3cr3t\r\nx', upstreamAuthKeys(), { orgId: actor.orgId, flockId: id }),
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await listFlockModels(registry, db, actor, id))
+      .toEqual({ ok: false, models: [], detail: 'the stored credential is not a valid bearer token; replace it' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 // The console's Test for a saved flock. The flock id is the only input: the URL, TLS setting and
