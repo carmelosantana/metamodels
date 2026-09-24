@@ -155,6 +155,27 @@ describe('per-client resource gating', () => {
     expect(out.url.searchParams.get('code')).toBeNull()
   }, T)
 
+  /**
+   * The same refusal at the token endpoint: a code from the console's ordinary `openid` sign-in,
+   * exchanged with `resource` naming the admin API. Paired with a second code from the same browser,
+   * exchanged without it, which succeeds.
+   */
+  test('through the real OP: the console is refused the admin API at the token endpoint', async () => {
+    const { out: control } = await signedIn('openid')
+    if (control.kind !== 'redirect') throw new Error('expected a code')
+    const ok = await exchangeCode(op!, control.url.searchParams.get('code')!, control.verifier)
+    expect(ok.status).toBe(200)
+
+    const out = await authorize(op!, { jar: control.jar })
+    if (out.kind !== 'redirect') throw new Error(`expected a silent sign-in, got ${out.status}`)
+    const code = out.url.searchParams.get('code')
+    expect(code).toBeTruthy()
+    const token = await exchangeCode(op!, code!, out.verifier, { resource: ADMIN })
+    expect(token.status).toBe(400)
+    expect(token.json.error).toBe('invalid_target')
+    expect(token.json.access_token).toBeUndefined()
+  }, T)
+
   test('through the real OP: a registered but ungranted client is refused the admin API', async () => {
     op = await startTestOp({
       extraClients: [{
