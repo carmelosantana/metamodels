@@ -277,21 +277,23 @@ in brackets says what to do. `migrate` never modifies a value it cannot open.
   back into `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploying recovers it.
 - **`tampered` or `malformed`:** no key will open it. This covers a value that was altered, and a
   value copied from another flock's row, since each value is bound to its own flock and org. Send
-  that flock a new credential with `PUT /api/admin/v1/flocks/{id}`. Until then that flock's paddocks answer
+  that flock a new credential: in the console, **Flocks → Edit → Replace**, or with
+  `PUT /api/admin/v1/flocks/{id}`. Until then that flock's paddocks answer
 `503 {"error":"upstream credential unavailable"}` rather than calling the flock without its
 credential.
 
 **Restoring a database backup taken under a different key** puts you in exactly that state: the
 warning names each affected flock. Either add the key that was current when the backup was taken
-to `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy, or send each affected flock a new credential with
-`PUT /api/admin/v1/flocks/{id}` and a fresh `upstreamAuth`. So keep retired keys with the backups
+to `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy, or send each affected flock a new credential
+(**Flocks → Edit → Replace**, or `PUT /api/admin/v1/flocks/{id}` with a fresh `upstreamAuth`). So keep retired keys with the backups
 they can open.
 
 **If `UPSTREAM_AUTH_KEY` itself may have leaked**, re-encrypting protects nothing: anyone holding
 the key and a copy of the database can already read every credential. Revoke and reissue the
 credentials **at each upstream server**. Then set a new `UPSTREAM_AUTH_KEY` with
-`UPSTREAM_AUTH_PREVIOUS_KEYS` empty, redeploy, and send each flock its new credential with
-`PUT /api/admin/v1/flocks/{id}`.
+`UPSTREAM_AUTH_PREVIOUS_KEYS` empty, redeploy, and send each flock its new credential
+(**Flocks → Edit → Replace**, or `PUT /api/admin/v1/flocks/{id}`). **Test** on each flock's row then
+checks it with the stored credential.
 
 ### Forcing everyone to sign in again
 

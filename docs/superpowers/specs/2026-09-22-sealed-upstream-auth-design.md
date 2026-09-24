@@ -145,7 +145,7 @@ are not lost.
 | D3 who holds the key | control-plane and data-plane only; never `migrate` | `migrate`, control-plane and data-plane | **Kept.** `migrate` has to encrypt legacy rows before the CHECK can be validated and before any service reads the column. |
 | D3 boot validation | Both apps refuse to start | All three exit with status 1 on a missing or invalid key | **Kept.** The console's `register()` now exits instead of rejecting, which Next swallowed. |
 | D4 read shape | `hasUpstreamAuth` through a service view | Allowlist `flockView` plus `hasUpstreamAuth` | **Kept.** Same outcome. An allowlist is stricter than a view that drops one column. |
-| D4 console | Password input, "credential set" marker, per-row Replace, Remove and server-side Test | Password input, "Stored" marker, create-only | **Follow-up** before the first release tag (§4). Until then, changing a credential in the console means deleting the flock, which deletes its paddocks. |
+| D4 console | Password input, "credential set" marker, per-row Replace, Remove and server-side Test | Password input, "Stored" marker, create-only; then, after v0.5.0, an Edit drawer with Keep / Replace / Remove and a per-row Test | **Done after v0.5.0.** Replace and Remove save through `saveFlock`. Test takes only the flock id, and the server opens the stored credential and uses the stored URL and TLS setting, so a caller cannot redirect it. Keeping the credential while changing `baseUrl` or turning on `tlsTrust` shows a warning, and the save gets the console's 409 wording. |
 | D5 PUT | Tri-state: omitted keeps, `null` clears, a string replaces | The same tri-state, plus a **409** when an omitted credential would follow a changed `baseUrl` or a newly enabled `tlsTrust` | **Kept.** That spec leaves open the case where a writer re-points a flock and receives its kept credential. |
 | D5 audit | `set` / `cleared` / `unchanged` | `set` / `cleared`; no key when unchanged | **Kept.** An absent key already means unchanged. |
 | D6 migration | No DDL. Background boot pass in the control plane. Plaintext stays readable for one release | Column rename, NOT VALID CHECK, re-encryption in `migrate`. Plaintext is never read after the upgrade | **Kept.** No window where plaintext is read, and the database refuses new unsealed writes. |
@@ -159,8 +159,8 @@ are not lost.
 - **Changing the credentials at the upstream servers.** Credentials in pre-upgrade backups, or in
   listings already fetched, stay exposed. `DEPLOY.md` tells operators to reissue them if needed.
 - **Follow-ups due before the first release tag:**
-  - Console Replace, Remove and Test controls for a stored credential (scoping spec D4). Until
-    then, recovering a single credential goes through `PUT /api/admin/v1/flocks/{id}`.
+  - Console Replace, Remove and Test controls for a stored credential (scoping spec D4). Done
+    after v0.5.0: **Flocks → Edit** and the per-row **Test**.
   - A real-Postgres test that resumes the reseal after a crash, and an e2e on an isolated compose
     stack (scoping spec proof).
   - The D8 auth contract: PR #21.
