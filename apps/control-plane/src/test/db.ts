@@ -1,5 +1,5 @@
 import { PGlite } from '@electric-sql/pglite'
-import { afterAll, beforeAll, beforeEach } from 'vitest'
+import { afterAll, afterEach, beforeEach } from 'vitest'
 import { drizzle } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
 import { dirname, resolve } from 'node:path'
@@ -35,11 +35,23 @@ export async function resetDb(db: TestDb): Promise<void> {
 /**
  * One database for the enclosing file (or `describe`), emptied before each case and closed after
  * the last. Call it once at the top level; each case reads its database from the returned getter.
+ *
+ * A case that fails, above all by timing out, may still be running against the database: writing
+ * rows into the next case, or holding a transaction open that would block every later TRUNCATE.
+ * So a failed case's database is abandoned, and the next case builds a fresh one.
  */
 export function sharedDb(): () => TestDb {
   let db: TestDb | undefined
-  beforeAll(async () => { db = await freshDb() })
-  beforeEach(async () => { await resetDb(db!) })
+  beforeEach(async () => {
+    if (db) await resetDb(db)
+    else db = await freshDb()
+  })
+  afterEach(({ task }) => {
+    if (task.result?.state !== 'fail' || !db) return
+    // Not awaited: closing waits behind a transaction that may never end.
+    db.$client.close().catch(() => {})
+    db = undefined
+  })
   afterAll(async () => { await db?.$client.close() })
   return () => db!
 }
