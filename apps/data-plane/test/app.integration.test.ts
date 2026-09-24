@@ -103,6 +103,18 @@ describe('data-plane /p/:slug', () => {
     expect(b).not.toContain('expired')
   })
 
+  // RFC 9110 §11.1: the auth scheme is case-insensitive, and every 401 now advertises `Bearer`,
+  // so a client that answers the challenge as `bearer <key>` must not be told its key is missing.
+  test('the Bearer scheme is matched case-insensitively', async () => {
+    for (const scheme of ['bearer', 'BEARER']) {
+      const res = await app.request('http://dp.local/p/small/api/chat', {
+        ...chat('llama3.2:1b'),
+        headers: { 'content-type': 'application/json', authorization: `${scheme} ${fx.keyPlaintext}` },
+      })
+      expect(res.status).not.toBe(401)
+    }
+  })
+
   test('404 for an unknown paddock slug', async () => {
     const res = await call('/p/ghost/api/chat', chat('llama3.2:1b'))
     expect(res.status).toBe(404)
