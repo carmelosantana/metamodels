@@ -41,6 +41,8 @@ const SWITCH_PAGES: Readonly<Record<string, (action: string, xsrf: string) => st
  *   or expired resume cookie (a reload of "Signed in" is one), oidc-provider's
  *   `lib/shared/error_handler.js` sets the state to `{ secret }` alone and re-renders
  *   `userCodeInputSource` with that secret in its xsrf input, so the secret check passes there.
+ *   On `resume` an error goes to our `renderError` page instead, which carries no xsrf, so the
+ *   secret check alone rejects it.
  * Every other resume response passes through unchanged.
  */
 export function switchAccountMiddleware(): Middleware {
