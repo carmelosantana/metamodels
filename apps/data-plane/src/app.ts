@@ -37,7 +37,9 @@ export interface AppDeps {
 const DEFAULT_RATE_LIMIT: RateLimit = { windowSec: 60, max: 60 }
 
 function extractKey(header: string | undefined, xApiKey: string | undefined): string | null {
-  if (header && header.startsWith('Bearer ')) return header.slice('Bearer '.length).trim()
+  // The scheme is case-insensitive (RFC 9110 §11.1), as in the admin API's bearer match.
+  const bearer = header ? /^Bearer +(.+)$/i.exec(header) : null
+  if (bearer) return bearer[1]!.trim()
   if (xApiKey) return xApiKey.trim()
   return null
 }
