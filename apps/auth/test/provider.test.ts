@@ -206,15 +206,28 @@ describe('auth service — invite sign-in while another account is signed in', (
   async function pressContinue(jar: CookieJar, body: string, fields: Record<string, string>) {
     const action = /<form id="op\.switchAccountForm" method="post" action="([^"]+)">/.exec(body)?.[1]
     if (!action) throw new Error(`expected the "Switch account?" form, got: ${body.slice(0, 200)}`)
-    let res = await send(jar, new URL(action, op!.issuer).href, {
+    return toCallback(jar, await send(jar, new URL(action, op!.issuer).href, {
       method: 'POST', headers: form, body: new URLSearchParams(fields).toString(),
-    })
+    }))
+  }
+
+  /** Follow redirects to the console's callback, or to the first page that is not a redirect. */
+  async function toCallback(jar: CookieJar, res: Response) {
     for (let hop = 0; hop < 12 && res.status >= 300 && res.status < 400; hop++) {
       const next = new URL(res.headers.get('location')!, op!.issuer)
-      if (next.href.startsWith(REDIRECT_URI)) return { status: res.status, callback: next }
+      if (next.href.startsWith(REDIRECT_URI)) return { status: res.status, callback: next, body: '' }
       res = await send(jar, next.href)
     }
-    return { status: res.status, callback: undefined }
+    return { status: res.status, callback: undefined, body: await res.text() }
+  }
+
+  /** Submit the sign-in's login form (the page `authorize` stopped on) as `who`. */
+  async function submitLogin(jar: CookieJar, loginPage: string, who: { email: string; password: string }) {
+    const action = /<form method="post" action="(\/interaction\/[^"]+\/login)">/.exec(loginPage)?.[1]
+    if (!action) throw new Error(`expected the login form, got: ${loginPage.slice(0, 200)}`)
+    return toCallback(jar, await send(jar, new URL(action, op!.issuer).href, {
+      method: 'POST', headers: form, body: new URLSearchParams(who).toString(),
+    }))
   }
 
   test('shows a page with a visible button, not a blank script page, under the unchanged CSP', async () => {
@@ -255,6 +268,37 @@ describe('auth service — invite sign-in while another account is signed in', (
     if (silent.kind !== 'redirect') throw new Error(`expected a silent sign-in, got ${silent.status}`)
     const tokens = await exchangeCode(op!, silent.url.searchParams.get('code')!, silent.verifier)
     expect((await jwtVerify(tokens.json.id_token as string, await opJwks(op!), { issuer: op!.issuer })).payload.sub).toBe(idA)
+  }, SWITCH_T)
+
+  // The console route's cover for switchAccountMiddleware's secret guard. The abandoned switch
+  // leaves its state in the OP session: a secret, and a postLogoutRedirectUri that is this same
+  // resume's URL, so the URI guard passes and only the secret check tells the later resume apart
+  // from a switch. (The URI guard has no case of its own here: on `resume`, errors go to our
+  // renderError page, which carries no xsrf, so the secret check already rejects them.)
+  test('an abandoned account switch does not turn a later same-account sign-in into "Switch account?"', async () => {
+    op = await startTestOp()
+    const idA = await seedUser(op.db, A)
+    await seedUser(op.db, B)
+    const first = await authorize(op, A)
+    if (first.kind !== 'redirect') throw new Error(`A's sign-in failed: ${first.status}`)
+    const login = await authorize(op, { jar: first.jar, extra: { prompt: 'login', login_hint: B.email } })
+    if (login.kind !== 'page') throw new Error(`expected the login form, got a redirect to ${login.url.href}`)
+
+    // B's password: the library asks to end A's session first. The operator does not continue.
+    const switched = await submitLogin(login.jar, login.body, B)
+    expect(switched.status).toBe(200)
+    expect(switched.body).toContain('<h1>Switch account?</h1>')
+
+    // Back to the same login form, now with A's own password: no switch is needed any more.
+    const done = await submitLogin(login.jar, login.body, A)
+    if (!done.callback) throw new Error(`expected a redirect to the console, got ${done.status}: ${done.body.slice(0, 200)}`)
+    expect(done.callback.searchParams.get('state')).toBe('state-123')
+    const code = done.callback.searchParams.get('code')
+    expect(code).toBeTruthy()
+    const tokens = await exchangeCode(op, code!, login.verifier)
+    expect(tokens.status).toBe(200)
+    const { payload } = await jwtVerify(tokens.json.id_token as string, await opJwks(op), { issuer: op.issuer })
+    expect(payload.sub).toBe(idA)
   }, SWITCH_T)
 })
 
