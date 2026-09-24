@@ -122,7 +122,7 @@ minimal deploy only needs seven secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.4.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.5.0 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
@@ -174,7 +174,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.4.0` | Image tag. The git tag `v0.4.0` publishes images as `0.4.0` — the `v` is stripped |
+| `TAG` | `0.5.0` | Image tag. The git tag `v0.5.0` publishes images as `0.5.0` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -353,33 +353,45 @@ here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which 
 publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
 as soon as possible, and losing the in-flight tokens signed with it is the point.
 
-### Upgrading to encrypted upstream credentials
+### Upgrading from 0.4.x
 
-This release stops storing flock upstream credentials in plaintext, and stops returning them from
-any read. Before it, `GET /api/admin/v1/flocks` returned them to any token holding the `read`
-scope.
+0.5.0 adds the admin API and its `mm` CLI ([docs/admin-api.md](admin-api.md)), and stops storing
+flock upstream credentials in plaintext. An existing stack keeps its database, its operators and
+its secrets, and gains two variables. **This upgrade cannot be undone short of a database
+restore**, so take the backup in step 1.
 
-1. **Add `UPSTREAM_AUTH_KEY`** (`openssl rand -base64 32`) to the stack's environment, and an
-   empty `UPSTREAM_AUTH_PREVIOUS_KEYS`. Keep every other variable you already have.
-2. **Replace the stack file** with the current one. It passes the key to `migrate`,
-   `control-plane` and `data-plane`.
-3. **Redeploy.** `migrate` renames `flock.upstream_auth` to `upstream_auth_enc`, encrypts each
-   existing credential, logs how many it encrypted, and then rewrites the `flock` table
+1. **Back up the database** with `pg_dump`. Older images read a column this release renames, so
+   the dump is the only way back.
+2. **Add `UPSTREAM_AUTH_KEY`** (`openssl rand -base64 32`) to the stack's environment, and an
+   empty `UPSTREAM_AUTH_PREVIOUS_KEYS`. Store the key where you store backups: a restore needs the
+   key it was taken under. Keep every other variable you already have; do not paste a whole
+   fresh `new-stack.sh` block (see [Upgrading from 0.3.x](#upgrading-from-03x) for why).
+3. **Replace the stack file** with the current one. It passes the key to `migrate`,
+   `control-plane` and `data-plane`, and refuses to deploy without it.
+4. **Set `TAG` to `0.5.0`** if your stack pins it, and redeploy. `migrate` renames
+   `flock.upstream_auth` to `upstream_auth_enc`, encrypts each existing credential, logs
+   `sealed N plaintext upstream credential(s)`, and then rewrites the `flock` table
    (`VACUUM FULL`) so the old plaintext row versions are not left in its data files. If that
    rewrite fails, `migrate` still succeeds but logs a warning with the exact command to run by
-   hand. Run it: a later deploy will not retry it.
+   hand. Run it.
 
-Afterwards:
+What changes for operators:
 
-- **The API.** A flock is returned with `hasUpstreamAuth` in place of `upstreamAuth`. On
-  `PUT /flocks/{id}`, omitting `upstreamAuth` now leaves the stored credential alone; send `null`
-  to clear it.
-- **There is no downgrade short of a database restore.** Older images read a column that no
-  longer exists.
+- **Flock credentials are write-only.** The console shows only whether one is stored, and the
+  admin API returns `hasUpstreamAuth` in place of `upstreamAuth`. On `PUT /flocks/{id}`, omitting
+  `upstreamAuth` keeps the stored credential and `null` clears it.
+- **A flock credential is a bare token.** MetaModels sends it upstream as
+  `Authorization: Bearer <token>` on every call, including health checks and ComfyUI uploads,
+  which sent none before. A new credential that includes a scheme such as `Bearer `, or any
+  whitespace, is refused. One stored before this release with a leading `Bearer ` keeps working.
 - **Backups taken before the upgrade still hold every credential in plaintext.** So do Postgres's
-  write-ahead log and any WAL archive from before the upgrade, and any listing already fetched
-  through the API. If any of those may have left your control, reissue the credentials at the
-  upstream servers.
+  write-ahead log and any WAL archive from before the upgrade. If any of those may have left
+  your control, reissue the credentials at the upstream servers.
+- **The proxy's 401s are uniform.** A refused `mm_live_` key gets `{"error":"invalid api key"}`
+  whether it is unknown, revoked or expired, and every 401 carries `WWW-Authenticate: Bearer`.
+  The `Bearer` scheme is now matched case-insensitively.
+- **The admin API is new.** Sign in with `mm login` once the stack runs 0.5.0. Only the CLI can
+  hold an admin-API token, and every device approval asks for the password.
 
 ### Upgrading from 0.3.x
 
