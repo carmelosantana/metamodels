@@ -139,9 +139,9 @@ describe('per-client resource gating', () => {
 
   /**
    * Spec A15. The console's authorization-code flow auto-consents on a live OP session with no fresh
-   * password, so an admin-API token for the console would be one leaked code plus the console
-   * secret away from `user.manage`. The refusal is paired with the same console, signed in without
-   * the resource, which still gets a code.
+   * password, so an admin-API token for the console would be the console secret plus an
+   * authorization request with the attacker's own PKCE verifier away from `user.manage`. The
+   * refusal is paired with the same console, signed in without the resource, which still gets a code.
    */
   test('through the real OP: the console is refused the admin API at the authorization endpoint', async () => {
     const { out: control } = await signedIn('openid')
