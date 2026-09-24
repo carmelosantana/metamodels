@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { PageHeader } from '../../../components/page-header'
 import { DataTable } from '../../../components/ui/data-table'
 import { Button } from '../../../components/ui/button'
@@ -38,9 +38,10 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
   const [test, setTest] = useState<TestResult | null>(null)
   const [rowTests, setRowTests] = useState<Record<string, TestResult | 'pending'>>({})
   const [error, setError] = useState<string | undefined>()
-  // Controlled, because React resets a form once its action resolves. "Test connection"
-  // is an action, so uncontrolled fields would be wiped the moment the test came back —
-  // leaving the operator staring at "Connection OK" above an empty form.
+  // Controlled, so Edit can pre-fill them. The drawer submits through `onSubmit`, NOT a form
+  // `action`: React resets a form once its action settles, and a reset puts a controlled radio or
+  // select back to its default without telling React. The drawer would still show Remove while
+  // the form posted Keep, and the token stayed stored.
   const [breed, setBreed] = useState('ollama')
   const [name, setName] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -54,6 +55,12 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
   // the server's refusal is still what stops it.
   const rebind = stored && credential === 'keep' && editing !== null &&
     movesCredential(editing, { baseUrl: baseUrl.trim(), tlsTrust: tls })
+  // Under Keep, Test checks the flock as SAVED, credential and all, so it only runs while the
+  // form still matches what is saved.
+  const keepTestsSaved = stored && credential === 'keep'
+  const unsaved = editing !== null &&
+    (breed !== editing.breed || baseUrl.trim() !== editing.baseUrl || tls !== editing.tlsTrust)
+  const formRef = useRef<HTMLFormElement>(null)
 
   function resetForm(row: Row | null) {
     setEditing(row)
@@ -79,7 +86,9 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
     setTest(null)
   }
 
-  async function onSave(fd: FormData) {
+  async function onSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const fd = new FormData(e.currentTarget)
     fd.set('tlsTrust', String(tls))
     const r = await saveFlockAction(null, fd)
     if (r.error) { setError(r.error); return }
@@ -89,20 +98,32 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
     close()
   }
 
-  async function onTest(fd: FormData) {
-    // Keeping a stored credential: test the flock as saved, with the credential opened on the
-    // server. The form's URL and TLS are unchanged here, or the button is disabled (`rebind`).
-    if (editing && stored && credential === 'keep') {
-      setTest(await testStoredFlockAction(editing.id))
-      return
+  async function onTest() {
+    try {
+      // Keeping a stored credential: test the flock as saved, with the credential opened on the
+      // server. The button is disabled unless the form still matches what is saved.
+      if (editing && keepTestsSaved) {
+        setTest(await testStoredFlockAction(editing.id))
+        return
+      }
+      const form = formRef.current
+      if (!form?.reportValidity()) return
+      const fd = new FormData(form)
+      fd.set('tlsTrust', String(tls))
+      setTest(await testConnectionAction(fd))
+    } catch {
+      setTest({ ok: false, detail: 'the test could not run' })
     }
-    fd.set('tlsTrust', String(tls))
-    setTest(await testConnectionAction(fd))
   }
 
   async function onRowTest(id: string) {
     setRowTests((t) => ({ ...t, [id]: 'pending' }))
-    const r = await testStoredFlockAction(id)
+    let r: TestResult
+    try {
+      r = await testStoredFlockAction(id)
+    } catch {
+      r = { ok: false, detail: 'the test could not run' }
+    }
     setRowTests((t) => ({ ...t, [id]: r }))
   }
 
@@ -149,7 +170,7 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
       </DataTable>
 
       <Drawer open={open} onClose={close} title={editing ? 'Edit flock' : 'Connect a flock'}>
-        <form action={onSave} className="flex flex-col gap-4">
+        <form ref={formRef} onSubmit={onSave} className="flex flex-col gap-4">
           {editing && <input type="hidden" name="id" value={editing.id} />}
           <div>
             <Label htmlFor="breed">Breed</Label>
@@ -184,8 +205,10 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
               {credential === 'remove' && (
                 <p className="mt-2 text-xs text-[var(--color-danger)]">The stored token is deleted when you save, and calls to this flock go out without one.</p>
               )}
-              {rebind && (
+              {rebind ? (
                 <p className="mt-2 text-xs text-[var(--color-danger)]">Changing the base URL or trusting self-signed TLS needs the token re-entered: choose Replace, or Remove.</p>
+              ) : keepTestsSaved && unsaved && (
+                <p className="mt-2 text-xs text-[var(--color-muted)]">Test checks the saved settings with the stored token. Save first to test your changes.</p>
               )}
             </fieldset>
           ) : (
@@ -206,7 +229,7 @@ export function FlocksClient({ flocks, canWrite }: { flocks: Row[]; canWrite: bo
             {credential === 'remove'
               ? <Button type="submit" variant="danger">Remove token and save</Button>
               : <Button type="submit">Save</Button>}
-            <Button type="submit" variant="ghost" formAction={onTest} disabled={rebind}>Test connection</Button>
+            <Button type="button" variant="ghost" onClick={onTest} disabled={keepTestsSaved && unsaved}>Test connection</Button>
           </div>
         </form>
       </Drawer>
