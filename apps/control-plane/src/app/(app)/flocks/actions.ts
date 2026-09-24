@@ -4,7 +4,7 @@ import { getDb } from '../../../server/db'
 import { requireUser } from '../../../server/guard'
 import { requireCapability } from '../../../auth/authorize'
 import { saveFlock, deleteFlock } from '../../../server/flocks-service'
-import { testFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
+import { testFlockConnection, testStoredFlockConnection, listFlockModels, buildBreedRegistry } from '../../../server/flock-health'
 import type { ModelListResult } from '@metamodels/connectors'
 import { publishConfigInvalidation } from '../../../server/config-publisher'
 import { flockFormToInput } from '../../../lib/flock-form'
@@ -42,6 +42,13 @@ export async function testConnectionAction(fd: FormData): Promise<{ ok: boolean;
     upstreamAuth: (String(fd.get('upstreamAuth') ?? '').trim() || null),
     tlsTrust: String(fd.get('tlsTrust') ?? 'false') === 'true',
   })
+}
+
+/** Tests a saved flock as stored. Takes only its id: the credential is opened on the server and never sent back. */
+export async function testStoredFlockAction(flockId: string): Promise<{ ok: boolean; detail?: string }> {
+  const actor = await requireUser()
+  requireCapability(actor, 'resource.write')
+  return testStoredFlockConnection(registry, getDb(), actor, flockId)
 }
 
 export async function listFlockModelsAction(flockId: string): Promise<ModelListResult> {
