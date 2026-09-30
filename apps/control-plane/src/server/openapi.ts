@@ -443,13 +443,13 @@ const COMPONENT_RESPONSES: Record<string, ResponseObject> = {
     'No bearer token, or one that was rejected. `detail` is **fixed and does not vary with the ' +
       'reason**, deliberately: one internal reason distinguishes a valid token for a deactivated ' +
       'account from a bad token, which would be an account-enumeration oracle. `WWW-Authenticate` ' +
-      'is the bare scheme for the same reason — RFC 6750\'s `error=` parameter would restate in a ' +
-      'header exactly the distinction the body refuses to make.',
+      'is `Bearer` plus `resource_metadata` (RFC 9728) and nothing else, for the same reason — RFC ' +
+      '6750\'s `error=` parameter would restate in a header exactly the distinction the body refuses to make.',
     {
       headers: {
         'WWW-Authenticate': {
-          description: 'The bare challenge RFC 9110 §15.5.2 makes mandatory. No `error=` parameter, ever.',
-          schema: { type: 'string', const: 'Bearer' },
+          description: 'The challenge RFC 9110 §15.5.2 makes mandatory: `Bearer resource_metadata="<CONSOLE_URL>/.well-known/oauth-protected-resource/api/admin"`. No `error=` parameter, ever.',
+          schema: { type: 'string', pattern: '^Bearer( resource_metadata="[^"]+")?$' },
         },
       },
     },

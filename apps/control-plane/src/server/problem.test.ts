@@ -269,13 +269,28 @@ describe('problemForError', () => {
   })
 
   // RFC 9110 §15.5.2 makes WWW-Authenticate a MUST on a 401 — an HTTP conformance rule, not an
-  // OAuth nicety. The bare scheme and nothing else: an `error="invalid_token"` parameter would
-  // reopen the very enumeration oracle the fixed 401 detail closes.
-  test('the 401 carries a bare Bearer challenge with no error parameter', async () => {
-    const res = problemForError(new TokenError('subject is not an active user'))
-    expect(res.status).toBe(401)
-    expect(res.headers.get('www-authenticate')).toBe('Bearer')
-    expect(res.headers.get('www-authenticate')).not.toContain('error')
+  // OAuth nicety. The scheme plus RFC 9728's `resource_metadata` and nothing else: an
+  // `error="invalid_token"` parameter would reopen the very enumeration oracle the fixed 401 detail closes.
+  test('the 401 carries the Bearer challenge naming the admin API\'s metadata, and no error parameter', () => {
+    vi.stubEnv('CONSOLE_URL', 'https://console.example.test')
+    try {
+      const res = problemForError(new TokenError('subject is not an active user'))
+      expect(res.status).toBe(401)
+      expect(res.headers.get('www-authenticate'))
+        .toBe('Bearer resource_metadata="https://console.example.test/.well-known/oauth-protected-resource/api/admin"')
+      expect(res.headers.get('www-authenticate')).not.toContain('error')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  test('without CONSOLE_URL the challenge falls back to the bare scheme, never to a malformed one', () => {
+    vi.stubEnv('CONSOLE_URL', '')
+    try {
+      expect(problemForError(new TokenError('x')).headers.get('www-authenticate')).toBe('Bearer')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   test('an unknown error becomes 500 and leaks no message', async () => {

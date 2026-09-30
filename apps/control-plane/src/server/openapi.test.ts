@@ -323,11 +323,11 @@ describe('the authentication and error contract', () => {
     }
   })
 
-  test('the 401 carries the bare Bearer challenge, with no error= parameter', () => {
+  test('the 401 carries the Bearer challenge with resource_metadata, and no error= parameter', () => {
     const res = doc.components.responses.Unauthorized!
-    // An exact equality, not a subset match: a `const` of the bare scheme is the whole claim, and
-    // `toMatchObject` would pass just as happily against a schema that also allowed a parameter.
-    expect(res.headers?.['WWW-Authenticate']?.schema).toEqual({ type: 'string', const: 'Bearer' })
+    // An exact equality, not a subset match: the pattern IS the claim, and `toMatchObject` would pass
+    // just as happily against a schema that also allowed an `error=` parameter.
+    expect(res.headers?.['WWW-Authenticate']?.schema).toEqual({ type: 'string', pattern: '^Bearer( resource_metadata="[^"]+")?$' })
   })
 
   test('the 401 detail is documented as fixed, and why', () => {

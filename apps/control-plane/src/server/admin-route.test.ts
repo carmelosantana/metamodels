@@ -81,10 +81,16 @@ describe('withAdmin — authentication triage', () => {
     expect(actorFromToken).toHaveBeenCalledWith(expect.anything(), 'x.y.z')
   })
 
-  test('the no-credential 401 carries a bare Bearer challenge', async () => {
-    const res = await call({})
-    expect(res.headers.get('www-authenticate')).toBe('Bearer')
-    expect(res.headers.get('www-authenticate')).not.toContain('error')
+  test('the no-credential 401 carries the Bearer challenge with resource_metadata and no error', async () => {
+    vi.stubEnv('CONSOLE_URL', 'https://console.test')
+    try {
+      const res = await call({})
+      expect(res.headers.get('www-authenticate'))
+        .toBe('Bearer resource_metadata="https://console.test/.well-known/oauth-protected-resource/api/admin"')
+      expect(res.headers.get('www-authenticate')).not.toContain('error')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   test('a valid bearer with no cookie reaches the handler with the actor and params', async () => {
