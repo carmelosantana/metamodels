@@ -59,6 +59,12 @@ export function consentAsserter(opts: { issuer: string; consoleUrl: string; sign
   }
 }
 
+const describeError = (e: unknown): string => {
+  if (!(e instanceof Error)) return String(e)
+  const cause = e.cause instanceof Error ? e.cause.message : undefined
+  return cause ? `${e.message} (${cause})` : e.message
+}
+
 /** The control plane's `/api/internal/v1/oauth-keys` routes (Task 4), over `CONTROL_PLANE_INTERNAL_URL`. */
 export function httpConsentApi(opts: {
   baseUrl: string
@@ -74,11 +80,17 @@ export function httpConsentApi(opts: {
           headers: { authorization: `Bearer ${opts.assert(r)}` },
           signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
         })
-        if (res.status !== 200) return { allowed: false, reason: PREFLIGHT_UNAVAILABLE }
+        if (res.status !== 200) {
+          // A steady 401 here usually means OIDC_ISSUER or CONSOLE_URL disagree between the two services.
+          console.warn(`[consent] preflight failed: the control plane answered ${res.status}`)
+          return { allowed: false, reason: PREFLIGHT_UNAVAILABLE }
+        }
         const body = (await res.json()) as { allowed?: unknown; reason?: unknown }
         if (body.allowed === true) return { allowed: true }
         return { allowed: false, reason: typeof body.reason === 'string' && body.reason ? body.reason : PREFLIGHT_UNAVAILABLE }
-      } catch {
+      } catch (e) {
+        // The message and its cause only: never the assertion, which is a live bearer for 30 s.
+        console.warn(`[consent] preflight failed: ${describeError(e)}`)
         return { allowed: false, reason: PREFLIGHT_UNAVAILABLE }
       }
     },

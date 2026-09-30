@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from 'vitest'
 import { createLocalJWKSet, jwtVerify, type JWK } from 'jose'
 import { internalApiAudience } from '@metamodels/schema'
 import {
@@ -48,8 +48,11 @@ describe('httpConsentApi', () => {
   let base: string
   let seen: Array<{ method: string; url: string; auth: string | undefined }>
   let reply: { status: number; body: unknown }
+  // Failure paths warn by design; capture them so the run stays quiet and the warnings are checkable.
+  let warn: MockInstance<typeof console.warn>
 
   beforeEach(async () => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     seen = []
     reply = { status: 200, body: {} }
     server = createServer((req, res) => {
@@ -59,7 +62,10 @@ describe('httpConsentApi', () => {
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   })
-  afterEach(async () => { await new Promise<void>((r) => server.close(() => r())) })
+  afterEach(async () => {
+    warn.mockRestore()
+    await new Promise<void>((r) => server.close(() => r()))
+  })
 
   const api = () => httpConsentApi({ baseUrl: base, assert: (r) => `assertion-for-${r.grantId ?? 'preflight'}` })
 
@@ -76,6 +82,18 @@ describe('httpConsentApi', () => {
     expect(await api().preflight(request)).toEqual({ allowed: false, reason: PREFLIGHT_UNAVAILABLE })
     const down = httpConsentApi({ baseUrl: 'http://127.0.0.1:1', assert: () => 'x' })
     expect(await down.preflight(request)).toEqual({ allowed: false, reason: PREFLIGHT_UNAVAILABLE })
+  })
+
+  test('a failed preflight tells the operator why, never with the assertion', async () => {
+    reply = { status: 401, body: {} }
+    expect(await api().preflight(request)).toEqual({ allowed: false, reason: PREFLIGHT_UNAVAILABLE })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]![0])).toMatch(/^\[consent\] preflight failed: .*401/)
+    const down = httpConsentApi({ baseUrl: 'http://127.0.0.1:1', assert: () => 'secret-assertion' })
+    expect(await down.preflight(request)).toEqual({ allowed: false, reason: PREFLIGHT_UNAVAILABLE })
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[1]![0])).toMatch(/^\[consent\] preflight failed: /)
+    for (const call of warn.mock.calls) expect(call.join(' ')).not.toMatch(/assertion|Bearer/)
   })
 
   test('mint POSTs and returns the key id', async () => {
