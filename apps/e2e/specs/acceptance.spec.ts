@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import {
   OLLAMA_URL,
   OLLAMA_MODEL,
+  OPERATOR_EMAIL,
   PROXY_URL,
   RUN_ID,
   skipReason,
@@ -289,7 +290,7 @@ test.describe('v1 acceptance walkthrough', () => {
     // what makes the entry attributable to a human-recognisable resource.
     await newest.click()
     await expect(page.locator('pre').first()).toContainText(PADDOCK_SLUG)
-    await expect(page.getByText('admin@example.com').first()).toBeVisible()
+    await expect(page.getByText(OPERATOR_EMAIL).first()).toBeVisible()
     await shot(page, '07-audit-log')
   })
 })
