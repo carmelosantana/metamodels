@@ -32,12 +32,16 @@ export class MemoryReplayGuard implements ReplayGuard {
 
 /**
  * The replay guard's ioredis options (follow-up ruling F3). With Redis unreachable, ioredis's defaults
- * (20 retries per command, backoff up to 2 s) hold a claim for about 10.5 s before rejecting: longer
- * than the OP's 5 s call timeout (`apps/auth/src/consent-api.ts` `CALL_TIMEOUT_MS`), so the OP gave up
- * first and the route's answer was never seen. One retry rejects a refused connection in well under a
- * second; `connectTimeout` bounds a host that never answers. The route turns the rejection into a 503.
+ * (20 retries per command, backoff up to 2 s) hold a claim for about 10.5 s before rejecting, and a
+ * host that accepts but never answers holds it forever: both longer than the OP's 5 s call timeout
+ * (`apps/auth/src/consent-api.ts` `CALL_TIMEOUT_MS`), so the OP gave up first and the route's answer
+ * was never seen. The retry counter is connection-wide and only resets on ready, so in a long outage
+ * `maxRetriesPerRequest` alone can still hold a claim for several seconds. `commandTimeout` is the
+ * bound: ioredis arms it when the command is sent, offline queue included, so every claim settles
+ * within about 2 s. `connectTimeout` bounds each connection attempt. The route turns a rejection into
+ * a 503. The offline queue stays on: the client is built lazily and the first claim waits for it.
  */
-export const REPLAY_REDIS_OPTIONS = { maxRetriesPerRequest: 1, connectTimeout: 2_000 } as const
+export const REPLAY_REDIS_OPTIONS = { maxRetriesPerRequest: 1, connectTimeout: 2_000, commandTimeout: 2_000 } as const
 
 let singleton: ReplayGuard | undefined
 

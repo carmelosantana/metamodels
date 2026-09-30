@@ -11,8 +11,9 @@ import { replayGuard } from './replay-guard'
 export const REPLAY_WINDOW_SECONDS = 120
 
 /**
- * How long the OP should wait before trying again when the replay guard cannot answer. The guard's
- * ioredis reconnect backoff reaches 2 s at most (`REPLAY_REDIS_OPTIONS`), so 5 s spans a few attempts.
+ * How long the OP should wait before trying again when the replay guard cannot answer. A claim
+ * settles within about 2 s (`REPLAY_REDIS_OPTIONS.commandTimeout`), and ioredis's reconnect delay is
+ * 2 s at most, so 5 s leaves room for at least one more reconnect attempt before the next claim.
  */
 export const REPLAY_GUARD_RETRY_AFTER_SECONDS = '5'
 
