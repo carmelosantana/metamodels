@@ -321,7 +321,8 @@ version the stack already exposes, or `'0.0.0'` if it exposes none.
 On every request:
 
 1. Take the bearer token. If there is none, answer 401 with
-   `WWW-Authenticate: Bearer resource_metadata="<DATA_PLANE_URL>/.well-known/oauth-protected-resource/p/<slug>/mcp"`.
+   `WWW-Authenticate: Bearer resource_metadata="<DATA_PLANE_URL>/.well-known/oauth-protected-resource/p/<slug>/mcp", scope="mcp"`
+   (MCP 2026-07-28 authorization, "Scope Selection Strategy": the `scope` a client asks for first) *(amended 2026-09-30, F5)*.
 2. Verify it with the shared verifier (D6):
    - `iss`, RS256, `typ at+jwt` and required `exp`;
    - `aud` must equal `mcpResource(DATA_PLANE_URL, slug)`. A token for another paddock, or for the
@@ -331,7 +332,7 @@ On every request:
 4. Continue with the paddock gates already in `resolveScope`: unknown or inactive paddock gives 404;
    an `upstreamAuthError` gives 503.
 
-Every refused token gets **one fixed 401 body and the bare challenge plus `resource_metadata`**, as
+Every refused token gets **one fixed 401 body and the same challenge (scheme, `resource_metadata`, `scope`)**, as
 `unauthorized.ts` already does for keys. That avoids an enumeration oracle. A
 `KeySetUnavailableError` answers 503 with `Retry-After: 30`, mirroring the admin API.
 
@@ -424,6 +425,7 @@ cleaned up afterwards):
 | Refresh tokens without `offline_access` | oidc-provider issues refresh tokens only for `offline_access`, which it drops unless `prompt=consent`; real MCP clients send neither | Low: `issueRefreshToken` returns true for a CIMD client allowed `refresh_token` whose grant is bound to an MCP resource; every other client keeps the default |
 | Replay guard falls back to memory without `REDIS_URL` | Matches `publishConfigInvalidation`, a no-op without Redis; every compose stack has Redis | Low: per-process only in single-process dev; DEPLOY.md says so |
 | 32 MiB body limit on every `/p/*` request, MCP included (F2) | A worst-case incompressible 2048² RGBA PNG is 21.34 MiB as base64; MCP's `run_<tpl>` is the same request as `/submit` (D8) | Low: one constant; a larger input image is refused 413 and the limit is raised |
+| `scope="mcp"` on every MCP 401, no `insufficient_scope` 403 (F5) | MCP 2026-07-28 SHOULDs `scope` in the 401 challenge; every MCP token carries exactly `mcp`, and a token without it stays a collapsed 401 | Low: a second scope would add the 403 arm; the admin API's challenge is not governed by the MCP spec and is unchanged |
 
 ## 10. Amendments from planning (2026-09-29)
 
@@ -453,4 +455,5 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 3.4 | `allowClient` refuses grants beyond code/refresh | oidc-provider 9.12.2 drops server-unsupported grants from a CIMD document before `allowClient` runs; the refusal is proven with `device_code`, a grant this OP enables |
 | 4.1 (F1) | `/p/:slug/mcp/` fell through to the proxy catch-all | 404 for every method on `/mcp/` and beneath it; never proxied |
 | 4.1 (F2) | No request body limit on MCP or the proxy | 32 MiB on every `/p/*` body; 413 before authentication for a declared `Content-Length`, as it is read (after authentication) otherwise |
+| 4.2 (F5) | Challenge `Bearer resource_metadata="…"` | `Bearer resource_metadata="…", scope="mcp"` on every MCP 401 |
 
