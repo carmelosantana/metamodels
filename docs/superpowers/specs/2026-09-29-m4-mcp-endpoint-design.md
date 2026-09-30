@@ -236,8 +236,8 @@ M3 gave each breed `toMcp(fence)` but no way to *execute* a tool. M4 adds one op
 mcpCall?(name: string, args: unknown, fence: C):
   | { ok: true; request: { method: 'GET' | 'POST'; path: string; body?: unknown } }
   | { ok: false; error: string }   // → CallToolResult { isError: true }
-/** Shape the proxy's result as MCP content. */
-mcpResult?(name: string, result: { status: number; body: unknown }): McpCallToolResult
+/** Shape the proxy's result as MCP content; the fence can narrow it (Ollama list_models). */
+mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): McpCallToolResult
 ```
 
 - **Dispatch.** The MCP handler builds a `RequestCtx` from the planned request. It then runs the
@@ -430,6 +430,7 @@ Found while writing the plan, each checked against `main` at `4d36af2`. The plan
 | 3.8 | Ollama: chat, generate, embed | Plus M3's `list_models` |
 | 3.8 | — | MCP rate-limits every `tools/call`; the REST result route stays unlimited |
 | 3.8 | Unknown tool gets `-32602` | Answered before `mcpCall` runs |
+| 3.8 | `mcpResult(name, result)` | `mcpResult(name, result, fence)` — list_models filters the listing by the fence (REST /api/tags unchanged) |
 | 4.1 | Modern only; 400 for a bad version header | D9 dual-era; exact modern wire rules (`-32020`, `-32022`, 404 `-32601`, 202, Origin 403) |
 | 4.3 | Nonce CSP; existing switch-account link | Static auth CSP; no such link exists |
 | 3.4 | `AUTH_BIND`/`DATA_PLANE_BIND` stay | They exist only in `docker-compose.portainer.yml` |
