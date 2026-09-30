@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'vitest'
 import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { eq } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/pglite'
 import * as schema from '@metamodels/schema'
 import { seal } from '@metamodels/schema/sealed'
 import { quiet } from './helpers/quiet.js'
@@ -122,5 +123,51 @@ describe('the two key paths (M4 §2)', () => {
     const db = await makeDb()
     await seedFixture(db)
     expect((await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('small'))?.name).toBe('Small models')
+  })
+})
+
+describe('an expired key costs what an unknown key costs (Kanboard #4558, follow-up ruling F9)', () => {
+  /** A store over the same database whose every statement is counted. */
+  function counted(db: TestDb) {
+    const log: string[] = []
+    const counting = drizzle(db.$client, { schema, logger: { logQuery: (query) => { log.push(query) } } })
+    return { store: new DrizzleConfigStore(counting, TEST_RING), log }
+  }
+  const past = () => new Date(Date.now() - 60_000)
+
+  test('resolveKeyByHash: unknown, revoked and expired are each one query and null; a usable key is two', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const [revoked] = await db.insert(schema.apiKey).values({ orgId: fx.orgId, name: 'r', prefix: 'mm_live_r', hash: 'h-revoked', status: 'revoked' }).returning()
+    const [expired] = await db.insert(schema.apiKey).values({ orgId: fx.orgId, name: 'e', prefix: 'mm_live_e', hash: 'h-expired', expiresAt: past() }).returning()
+    await db.insert(schema.keyPaddock).values([{ keyId: revoked!.id, paddockId: fx.paddockId }, { keyId: expired!.id, paddockId: fx.paddockId }])
+    for (const hash of ['0'.repeat(64), 'h-revoked', 'h-expired']) {
+      const { store, log } = counted(db)
+      expect(await store.resolveKeyByHash(hash), hash).toBeNull()
+      expect(log, hash).toHaveLength(1)
+    }
+    const { store, log } = counted(db)
+    expect((await store.resolveKeyByHash(fx.keyHash))?.keyId).toBe(fx.keyId)
+    expect(log).toHaveLength(2)
+  })
+
+  test('a key whose expires_at is still ahead resolves', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    await db.update(schema.apiKey).set({ expiresAt: new Date(Date.now() + 60_000) }).where(eq(schema.apiKey.id, fx.keyId))
+    expect((await new DrizzleConfigStore(db, TEST_RING).resolveKeyByHash(fx.keyHash))?.keyId).toBe(fx.keyId)
+  })
+
+  test('resolveKeyById: unknown, revoked and expired oauth keys are each one query and null', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const revoked = await seedOauthKey(db, fx, { status: 'revoked' })
+    const expired = await seedOauthKey(db, fx)
+    await db.update(schema.apiKey).set({ expiresAt: past() }).where(eq(schema.apiKey.id, expired.keyId))
+    for (const id of ['00000000-0000-4000-8000-000000000000', revoked.keyId, expired.keyId]) {
+      const { store, log } = counted(db)
+      expect(await store.resolveKeyById(id), id).toBeNull()
+      expect(log, id).toHaveLength(1)
+    }
   })
 })
