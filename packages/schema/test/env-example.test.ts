@@ -24,6 +24,8 @@ const EXCLUDED = new Set([
   'E2E_VIEWER_EMAIL',
   'E2E_VIEWER_PASSWORD',
   'E2E_UPSTREAM_HOST',
+  'E2E_CIMD_DOCUMENTS',
+  'E2E_MCP',
 ])
 
 // Dependency and build-output dirs are not "the code": skip them. This also
