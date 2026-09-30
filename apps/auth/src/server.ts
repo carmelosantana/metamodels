@@ -5,17 +5,22 @@ import * as schema from '@metamodels/schema'
 import { sweepExpired } from './adapter.js'
 import { loadAuthConfig, type AuthConfig } from './config.js'
 import type { Db } from './db.js'
-import { createProvider } from './provider.js'
+import { cimdFixtureFromEnv } from './cimd.js'
+import { createProvider, type ProviderOptions } from './provider.js'
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000
 
 /** Start the OP. `db` is injectable for tests; production builds a postgres-js client from DATABASE_URL. */
-export function startAuthServer(cfg: AuthConfig, db: Db = drizzle(postgres(cfg.databaseUrl), { schema })): Server {
+export function startAuthServer(
+  cfg: AuthConfig,
+  db: Db = drizzle(postgres(cfg.databaseUrl), { schema }),
+  opts: ProviderOptions = {},
+): Server {
   if (!cfg.signingKeyPem) {
     // eslint-disable-next-line no-console
     console.warn('[auth] OIDC_ALLOW_EPHEMERAL_KEY: signing with a throwaway key — every token dies on restart. Development only.')
   }
-  const server = createServer(createProvider(cfg, db).callback())
+  const server = createServer(createProvider(cfg, db, opts).callback())
 
   const runSweep = () => {
     // eslint-disable-next-line no-console
@@ -36,5 +41,7 @@ export function startAuthServer(cfg: AuthConfig, db: Db = drizzle(postgres(cfg.d
 
 // Only run when executed directly, not when imported by tests.
 if (process.argv[1] && process.argv[1].endsWith('server.ts')) {
-  startAuthServer(loadAuthConfig(process.env))
+  const cfg = loadAuthConfig(process.env)
+  const fetch = cimdFixtureFromEnv(process.env.E2E_CIMD_DOCUMENTS, cfg.allowEphemeralKey)
+  startAuthServer(cfg, undefined, fetch ? { fetch } : {})
 }

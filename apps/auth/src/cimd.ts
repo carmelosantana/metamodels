@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import type { Client, ClientMetadata, Configuration, KoaContextWithOIDC } from 'oidc-provider'
 import { isValidClientIdUrl } from 'oidc-provider/lib/helpers/client_id_metadata_document.js'
 
@@ -93,4 +94,25 @@ export function cimdFixtureFetch(documents: Readonly<Record<string, ClientMetada
     if (!Object.hasOwn(documents, url)) return fetch(input, init)
     return new Response(JSON.stringify(documents[url]), { status: 200, headers: { 'content-type': 'application/json' } })
   }
+}
+
+/**
+ * The e2e harness's CIMD documents (spec M4 §7), from the JSON file `E2E_CIMD_DOCUMENTS` names: an
+ * array of documents, each served for its own `client_id` instead of being fetched. Any other
+ * `client_id` is fetched for real, through the SSRF guard. A test fixture, so it is refused outright
+ * unless `OIDC_ALLOW_EPHEMERAL_KEY=true`, which every deployed stack hard-wires to `false`.
+ */
+export function cimdFixtureFromEnv(file: string | undefined, allowEphemeralKey: boolean): Configuration['fetch'] | undefined {
+  if (!file) return undefined
+  if (!allowEphemeralKey) {
+    throw new Error('E2E_CIMD_DOCUMENTS is an e2e test fixture and is refused unless OIDC_ALLOW_EPHEMERAL_KEY=true')
+  }
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  if (!Array.isArray(parsed) || !parsed.every((d) => typeof (d as { client_id?: unknown } | null)?.client_id === 'string')) {
+    throw new Error(`E2E_CIMD_DOCUMENTS (${file}) must hold an array of Client ID Metadata Documents, each with a client_id`)
+  }
+  const documents = Object.fromEntries((parsed as ClientMetadata[]).map((d) => [d.client_id, d]))
+  // eslint-disable-next-line no-console
+  console.warn(`[auth] E2E_CIMD_DOCUMENTS: serving ${Object.keys(documents).length} fixture client document(s). Test stacks only.`)
+  return cimdFixtureFetch(documents)
 }
