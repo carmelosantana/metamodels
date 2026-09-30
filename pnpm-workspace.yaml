@@ -1,6 +1,15 @@
 packages:
   - "packages/*"
   - "apps/*"
+# Supply-chain hardening (pnpm 11+). These keys must live here, not in .npmrc: pnpm 11+ reads only
+# auth and registry settings from .npmrc and silently ignores the rest.
+# 24h quarantine on newly-published packages — blocks fresh-version attacks
+# (TanStack / SAP CAP malicious versions were pulled within ~4h of publish).
+minimumReleaseAge: 1440
+# Refuse (CI) or prompt once (TTY) on an immature version instead of auto-excluding it.
+minimumReleaseAgeStrict: true
+# Block git/tarball transitive deps — closes the "hidden payload in a subdep" vector.
+blockExoticSubdeps: true
 allowBuilds:
   esbuild: true
   sharp: false

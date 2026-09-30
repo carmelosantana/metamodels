@@ -6,9 +6,11 @@ incident-response). Work through the "Open" items at your pace.
 
 ## Already in place (verified 2026-07-30) ✅
 
-- **Package-manager quarantine:** `.npmrc` has `minimumReleaseAge=1440` (24h hold on newly-published
-  packages — the single control that would have blocked the recent TanStack/SAP worm versions) and
-  `blockExoticSubdeps=true` (no git/tarball transitive deps). Node floor `>=24`.
+- **Package-manager quarantine:** `pnpm-workspace.yaml` has `minimumReleaseAge: 1440` (24h hold on
+  newly-published packages — the single control that would have blocked the recent TanStack/SAP worm
+  versions), `minimumReleaseAgeStrict: true` and `blockExoticSubdeps: true` (no git/tarball
+  transitive deps). Moved there from `.npmrc` on 2026-09-29: pnpm 11 reads only auth/registry
+  settings from `.npmrc`, so `pnpm config get` read these back as `undefined`. Node floor `>=24`.
 - **Lockfile discipline:** CI installs with `--frozen-lockfile`; no dependency caching in CI (smaller
   attack surface than cache-restore).
 - **CI/CD least-privilege:** `permissions: contents: read` by default; **no `pull_request_target`**;
