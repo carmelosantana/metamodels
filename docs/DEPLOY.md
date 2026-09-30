@@ -14,7 +14,7 @@ docker compose run --rm control-plane pnpm seed   # create the first admin (uses
 - Data-plane proxy: http://localhost:8787 (`/healthz`, `/readyz`)
 - Sign-in service: http://localhost:3100 — the console sends your browser here to sign in, so it must be reachable at exactly `OIDC_ISSUER`
 
-If a host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` / `AUTH_HOST_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected. Moving the console or sign-in port also moves its public URL: update `CONSOLE_URL` / `OIDC_ISSUER` to match.
+If a host port is already taken on your machine, set `CONTROL_PLANE_PORT` / `DATA_PLANE_PORT` / `AUTH_HOST_PORT` in `.env` — only the host side of the mapping moves, so healthchecks and inter-container URLs are unaffected. Moving any of the three ports also moves that service's public URL: update `CONSOLE_URL` / `DATA_PLANE_URL` / `OIDC_ISSUER` to match.
 
 Migrations run automatically via the `migrate` service before the apps start; it exits 0 when the database is up to date.
 
@@ -25,12 +25,14 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | Var | Service(s) | Notes |
 |-----|-----------|-------|
 | `DATABASE_URL` | all | Postgres connection string. |
-| `REDIS_URL` | data-plane (opt), worker (required) | Without it the data-plane runs single-process/in-memory (no durable metering); the worker requires it. |
+| `REDIS_URL` | control-plane (opt), data-plane (opt), worker (required) | Without it the data-plane runs single-process/in-memory (no durable metering), and the console's one-time check on MCP approvals is per-process (see [Remote MCP connectors](#remote-mcp-connectors)); the worker requires it. |
 | `PORT` | data-plane | Default `8787`. |
 | `SESSION_SECRET` | control-plane | ≥16 chars. `openssl rand -hex 32`. |
-| `OIDC_ISSUER` | auth, control-plane | Public URL of the sign-in service, origin only. Also the token issuer, so browsers and clients must see exactly this. |
+| `OIDC_ISSUER` | auth, control-plane, data-plane | Public URL of the sign-in service, origin only. Also the token issuer, so browsers and clients must see exactly this. The data plane requires every MCP access token to carry exactly this `iss`. |
 | `CONSOLE_URL` | auth, control-plane | Public URL of the console, origin only. Its sign-in redirect and post-logout URIs derive from it. |
-| `OIDC_INTERNAL_URL` | control-plane | How the console reaches the sign-in service server-to-server: `http://auth:3100` in compose. Defaults to `OIDC_ISSUER`. |
+| `OIDC_INTERNAL_URL` | control-plane, data-plane | How the console and the data plane reach the sign-in service server-to-server: `http://auth:3100` in compose. The data plane fetches the key set that verifies MCP access tokens from here. Defaults to `OIDC_ISSUER`. |
+| `DATA_PLANE_URL` | auth, control-plane, data-plane | Public URL of the data plane, origin only. Each paddock's MCP endpoint is `<DATA_PLANE_URL>/p/<slug>/mcp`, and the sign-in service issues MCP tokens for exactly that URL, so it must be what MCP clients see. Compose defaults it to `http://localhost:<DATA_PLANE_PORT>`. |
+| `CONTROL_PLANE_INTERNAL_URL` | auth | How the sign-in service reaches the console's internal routes to record an MCP app a user approved: `http://control-plane:3000` in compose (the default). |
 | `CONSOLE_CLIENT_SECRET` | auth, control-plane | ≥16 chars, the same value in both. `openssl rand -hex 32`. |
 | `OIDC_COOKIE_KEYS` | auth | Cookie-signing keys, comma-separated, newest first, each ≥16 chars. |
 | `OIDC_SIGNING_KEY` | auth | Base64 of an RSA ≥2048-bit PKCS#8 PEM that signs every token: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \| openssl base64 -A`. Rotate it through `OIDC_PREVIOUS_SIGNING_KEYS` so issued tokens survive — see [Rotating the sign-in keys](#rotating-the-sign-in-keys). |
@@ -185,6 +187,7 @@ Everything else defaults:
 | `AUTH_BIND` / `AUTH_HOST_PORT` | `127.0.0.1` / `3100` | The sign-in service — loopback, like the console |
 | `CONSOLE_URL` | `http://127.0.0.1:<CONTROL_PLANE_PORT>` | Where you open the console. Must match your browser's address bar exactly |
 | `OIDC_ISSUER` | `http://127.0.0.1:<AUTH_HOST_PORT>` | Where browsers reach the sign-in service; also the token issuer |
+| `DATA_PLANE_URL` | `http://127.0.0.1:<DATA_PLANE_PORT>` | Where MCP clients connect: `<DATA_PLANE_URL>/p/<slug>/mcp`. See [Remote MCP connectors](#remote-mcp-connectors) |
 | `DATA_PLANE_BIND` / `DATA_PLANE_PORT` | `0.0.0.0` / `8787` | The public API |
 | `TRAEFIK_ENABLE` | `false` | `true` to activate the router labels |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | `websecure` / `letsencrypt` | Match your Traefik's names |
@@ -206,6 +209,31 @@ console sends your browser to it to sign in, so forward **both** ports —
 If you put either behind TLS, set `CONSOLE_URL` and `OIDC_ISSUER` to the public `https://`
 origins: both are compared exactly, and a mismatch fails sign-in with an issuer or
 redirect-URI error.
+
+### Remote MCP connectors
+
+Each paddock is an MCP server at `<DATA_PLANE_URL>/p/<slug>/mcp`. An MCP client finds the sign-in
+service from the endpoint's `401` (RFC 9728 metadata), identifies itself with a Client ID Metadata
+Document, and a signed-in `member` or `admin` approves it on a consent screen. The approval appears
+on the Keys page as a key of kind **MCP app**; revoking it there disconnects the app.
+
+Nothing here is public by default. With the defaults, MCP works for clients on the same machine
+(Claude Code, VS Code): the endpoint and the sign-in service are both on loopback. For a cloud
+client (Claude.ai, ChatGPT), **both** must be reachable by that client over HTTPS:
+
+- put the data plane and the sign-in service behind your TLS proxy or tunnel;
+- set `DATA_PLANE_URL` and `OIDC_ISSUER` to their public `https://` origins (and restart all three
+  services: each compares them exactly);
+- the console does **not** need to be public. The sign-in service reaches it over the compose
+  network (`CONTROL_PLANE_INTERNAL_URL`), and browsers only need it to open the Keys page.
+
+Recording an approval is protected by a one-time `jti` check on the sign-in service's assertion.
+Without `REDIS_URL` that check is per-process: run a single console container, or set `REDIS_URL`.
+
+The sign-in service fetches each client's metadata document itself. It refuses documents on
+loopback, private and other special-use addresses, and it turns Client ID Metadata Documents off
+entirely when `OIDC_ISSUER` is neither `https://` nor loopback `http://`: a plain-`http` sign-in
+service on a LAN address can serve the console, but not MCP clients.
 
 ### Retiring the seeded admin
 
@@ -354,6 +382,12 @@ Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-th
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
 publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
 as soon as possible, and losing the in-flight tokens signed with it is the point.
+
+### Upgrading from 0.5.x
+
+Set `DATA_PLANE_URL` if clients reach the data plane anywhere other than the compose default
+(`http://localhost:<DATA_PLANE_PORT>`, or `http://127.0.0.1:<DATA_PLANE_PORT>` on Portainer). The
+migration adds four columns to `api_key`; every existing key becomes kind `live` and keeps working.
 
 ### Upgrading from 0.4.x
 
