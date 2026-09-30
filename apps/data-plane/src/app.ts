@@ -92,6 +92,7 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     if (!plaintext) return { ok: false, res: unauthorizedKey('no key presented') }
     const key = await deps.configStore.resolveKeyByHash(hashApiKey(plaintext))
     if (!key) return { ok: false, res: unauthorizedKey('no key matches the presented hash') }
+    // Not redundant with the store's own filter (ruling F9): a cached key can outlive its expires_at by the cache TTL.
     if (key.expiresAt && key.expiresAt.getTime() < Date.now()) {
       return { ok: false, res: unauthorizedKey('the presented key has expired') }
     }

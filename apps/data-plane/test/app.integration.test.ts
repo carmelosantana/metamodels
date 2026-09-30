@@ -88,6 +88,25 @@ describe('data-plane /p/:slug', () => {
     }
   })
 
+  test('the proxy still refuses a key past its expires_at when the store answers one, as a cached entry can', async () => {
+    const live = await new DrizzleConfigStore(db, TEST_RING).resolveKeyByHash(fx.keyHash)
+    const { app: cachedApp } = createApp({
+      configStore: {
+        resolveKeyByHash: async () => ({ ...live!, expiresAt: new Date(Date.now() - 1_000) }),
+        resolveKeyById: async () => null,
+        getPaddockBySlug: async () => null,
+      },
+      rateLimiter: new InMemoryRateLimiter(),
+      meterSink: new InMemoryMeterSink(),
+      registry: buildRegistry(),
+    })
+    const res = await cachedApp.request('http://dp.local/p/small/api/chat', {
+      ...chat('llama3.2:1b'), headers: { 'content-type': 'application/json', authorization: `Bearer ${fx.keyPlaintext}` },
+    })
+    expect(res.status).toBe(401)
+    expect(warn).toHaveBeenLastCalledWith('[auth] 401 on /p: the presented key has expired')
+  })
+
   // An expired key is a key that existed; an unknown one never did. Telling them apart over the
   // wire grades a `mm_live_` guess, so both answer identically. A REVOKED key already collapsed
   // into the unknown body (`resolveKeyByHash` returns null for any non-active status) — expiry
