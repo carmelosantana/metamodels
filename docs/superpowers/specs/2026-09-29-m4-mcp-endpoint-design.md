@@ -360,6 +360,10 @@ logos are not loaded, because `img-src` stays `'self'`. It shows:
 
 Approve and Deny post back to the OP. Deny ends the interaction with `access_denied`. If the
 preflight (§3.5) returns `allowed: false`, the screen shows the reason and only a Close button.
+If the paddock is unknown or disabled when the screen is shown or submitted (disabled after `/auth`
+accepted the resource), the screen is that same refusal with the preflight's words for another org's
+paddock (`PREFLIGHT_NO_PADDOCK`). Approve or Close then ends with `access_denied` and that description,
+so the two cases cannot be told apart *(amended 2026-09-30, F8)*.
 
 ## 5. RFC 9728 on both resource servers
 
@@ -472,3 +476,4 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 3.8 (F7) | `chat` forwarded whole message objects | Each message rebuilt as `{ role, content }`, anything else refused; `embed` input must be strings |
 | 3.5 (F3) | Redis unreachable: the claim rejected after ~10.5 s (never, on a stalled socket) and the route answered a raw 500 | ioredis settles every claim within ~2 s (`commandTimeout: 2000`, plus `maxRetriesPerRequest: 1` and `connectTimeout: 2000`), covering the offline queue and a stalled socket; the route answers 503 + `Retry-After: 5` |
 | 3.6 (F4) | An `Interaction.find` failure escaped the CSP middleware as a 500 | Both lookups guarded; the static policy stays and the failure is logged |
+| 4.3 (F8) | A paddock gone at consent got M1's "This client is not permitted to sign in yet." | The paddock refusal page with `PREFLIGHT_NO_PADDOCK`'s words; `access_denied` with that description |
