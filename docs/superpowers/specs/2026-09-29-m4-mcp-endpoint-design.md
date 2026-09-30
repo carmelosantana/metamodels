@@ -143,7 +143,7 @@ that fails. On refusal the interaction finishes with `access_denied` and a human
   - setting `OIDC_ISSUER` and `DATA_PLANE_URL` to their https origins;
   - the fact that the console need not be public.
 
-  `scripts/new-stack.sh` writes a `DATA_PLANE_URL` default of `http://localhost:${DATA_PLANE_PORT}`.
+  `scripts/new-stack.sh` writes a `DATA_PLANE_URL` default of `http://127.0.0.1:${DATA_PLANE_PORT}`, the loopback spelling `docker-compose.portainer.yml` uses (the resource is compared exactly, so one spelling per stack).
 
 ### 3.5 D7 — the mint runs in the control plane
 
