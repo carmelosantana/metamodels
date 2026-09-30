@@ -41,7 +41,7 @@ describe('buildCsp', () => {
 
   it('keeps every network egress on-origin', () => {
     const d = parse(buildCsp('abc123', { dev: false }))
-    // next/font/google self-hosts its downloads at build time, so no external font origin.
+    // Fonts are vendored (next/font/local), so no external font origin.
     expect(d['font-src']).toEqual(["'self'"])
     expect(d['connect-src']).toEqual(["'self'"])
     // Data/blob images are needed for inline previews; remote image origins are not.

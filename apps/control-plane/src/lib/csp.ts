@@ -59,7 +59,7 @@ export function buildCsp(nonce: string, { dev, formActionOrigins = [] }: CspOpti
     // injected <style> cannot execute, and `default-src 'self'` still bounds every load.
     ['style-src', ["'self'", "'unsafe-inline'"]],
     ['img-src', ["'self'", 'data:', 'blob:']],
-    // next/font/google downloads and self-hosts at build time: no external font origin.
+    // Fonts are vendored and served by next/font/local from /_next/static: no external font origin.
     ['font-src', ["'self'"]],
     ['connect-src', connectSrc],
     ['worker-src', ["'self'", 'blob:']],
