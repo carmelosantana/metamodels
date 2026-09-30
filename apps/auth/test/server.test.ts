@@ -6,6 +6,7 @@ import { oidcPayload } from '@metamodels/schema'
 import { pgAdapterFactory } from '../src/adapter.js'
 import { startAuthServer } from '../src/server.js'
 import { makeDb } from './helpers/db.js'
+import { quiet } from './helpers/quiet.js'
 
 function testConfig(): AuthConfig {
   return {
@@ -27,16 +28,21 @@ async function close(server: import('node:http').Server): Promise<void> {
   await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
 }
 
+const EPHEMERAL_KEY_WARNING = '[auth] OIDC_ALLOW_EPHEMERAL_KEY: signing with a throwaway key — every token dies on restart. Development only.'
+
 test('serves the provider on the configured port and shuts down cleanly', async () => {
+  const warn = quiet('warn')
   const server = startAuthServer(testConfig(), await makeDb())
   await once(server, 'listening')
   const { port } = server.address() as AddressInfo
   const res = await fetch(`http://127.0.0.1:${port}/healthz`)
   expect(res.status).toBe(200)
+  expect(warn).toHaveBeenCalledWith(EPHEMERAL_KEY_WARNING)
   await close(server)
 }, 20_000)
 
 test('sweeps expired rows at startup, not only after the first hourly interval', async () => {
+  const warn = quiet('warn')
   const db = await makeDb()
   const anHourAgo = new Date(Date.now() - 60 * 60 * 1000)
   const factory = pgAdapterFactory(db, () => anHourAgo)
@@ -49,5 +55,6 @@ test('sweeps expired rows at startup, not only after the first hourly interval',
   const deadline = Date.now() + 5_000
   while ((await ids()).includes('stale') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
   expect(await ids()).toEqual(['live'])
+  expect(warn).toHaveBeenCalledWith(EPHEMERAL_KEY_WARNING)
   await close(server)
 }, 20_000)

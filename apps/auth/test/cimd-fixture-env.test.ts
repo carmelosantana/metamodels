@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { cimdFixtureFromEnv } from '../src/cimd.js'
 import { CIMD_CLIENT_ID, cimdDocument } from './helpers/flow.js'
+import { quiet } from './helpers/quiet.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -27,10 +28,12 @@ describe('cimdFixtureFromEnv (M4 §7: e2e only)', () => {
   })
 
   test('serves each listed document by its client_id', async () => {
+    const warn = quiet('warn')
     const fetch = cimdFixtureFromEnv(fixtureFile([cimdDocument()]), true)!
     const res = await fetch(CIMD_CLIENT_ID, { method: 'GET' } as never)
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ client_id: CIMD_CLIENT_ID })
+    expect(warn).toHaveBeenCalledWith('[auth] E2E_CIMD_DOCUMENTS: serving 1 fixture client document(s). Test stacks only.')
   })
 
   test('a file that is not an array of documents with client_id is refused at boot', () => {

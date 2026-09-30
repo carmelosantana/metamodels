@@ -3,6 +3,7 @@ import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { seal } from '@metamodels/schema/sealed'
+import { quiet } from './helpers/quiet.js'
 import { makeDb, seedFixture, seedOauthKey, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
 
 let db: TestDb
@@ -58,15 +59,18 @@ describe('DrizzleConfigStore — the sealed upstream credential', () => {
   })
 
   test('one it cannot open resolves the paddock with the reason and NO credential, rather than throwing', async () => {
+    const err = quiet('error')
     const db = await makeDb()
     await seedFixture(db, { sealFor: (b) => seal('tok-123', testRing(), b) })
     const p = await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('small')
     expect(p!.upstreamAuthError).toBe('unknown-key')
     expect(p!.flock.upstreamAuth).toBeNull()
     expect(JSON.stringify(p)).not.toContain('sealed:v1:')
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/^\[config\] flock .+: cannot open sealed value: sealed under key .+, which this keyring does not hold$/))
   })
 
   test('an envelope copied onto another flock\'s row will not open there — it resolves as tampered', async () => {
+    const err = quiet('error')
     const db = await makeDb()
     const fx = await seedFixture(db, { sealFor: (b) => seal('tok-123', TEST_RING, b) })
     // A second flock in the same org, whose credential an attacker with DB write replaced with fx's.
@@ -80,6 +84,7 @@ describe('DrizzleConfigStore — the sealed upstream credential', () => {
     const p = await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('other')
     expect(p!.upstreamAuthError).toBe('tampered')
     expect(p!.flock.upstreamAuth).toBeNull()
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/^\[config\] flock .+: cannot open sealed value: envelope under key .+ failed authentication for this flock$/))
   })
 })
 

@@ -4,6 +4,7 @@ import { KeySetUnavailableError } from '@metamodels/schema/access-token'
 import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { authenticateMcp, mcpChallenge } from '../src/mcp/auth.js'
 import { startTestIssuer, type TestIssuer } from './helpers/oauth.js'
+import { quiet } from './helpers/quiet.js'
 import { makeDb, seedFixture, seedOauthKey, TEST_RING, type Fixture, type TestDb } from './helpers/seed.js'
 
 const DP = 'http://dp.test'
@@ -78,6 +79,7 @@ describe('authenticateMcp (M4 §4.2)', () => {
   })
 
   test('a key set that cannot be fetched is 503 with Retry-After: 30, not 401', async () => {
+    const err = quiet('error')
     const out = await authenticateMcp(`Bearer ${good()}`, 'small', {
       dataPlaneUrl: DP, verify: async () => { throw new KeySetUnavailableError('the key set endpoint could not be reached') },
     }, store())
@@ -85,5 +87,6 @@ describe('authenticateMcp (M4 §4.2)', () => {
     if (out.ok) return
     expect(out.res.status).toBe(503)
     expect(out.res.headers.get('retry-after')).toBe('30')
+    expect(err).toHaveBeenCalledWith('[auth] 503 on /mcp, key set unavailable: the key set endpoint could not be reached')
   })
 })

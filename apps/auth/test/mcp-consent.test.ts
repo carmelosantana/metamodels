@@ -9,6 +9,7 @@ import { seedUser, type TestDb } from './helpers/db.js'
 import {
   authorize, CIMD_CLIENT_ID, CookieJar, CIMD_REDIRECT_URI, cimdDocument, DATA_PLANE_URL, opJwks, send, startTestOp, type TestOp,
 } from './helpers/flow.js'
+import { quiet } from './helpers/quiet.js'
 
 const T = 30_000
 const EMAIL = 'member@x.io'
@@ -247,12 +248,14 @@ describe('MCP consent (M4 §4.3)', () => {
   }, T)
 
   test('a mint that fails ends with server_error and no grant, so no grant exists without a key', async () => {
+    const err = quiet('error')
     const cp = fakeControlPlane({ mint: 'error' })
     await setup(cp)
     const back = await decide(await consentPage(), 'approve')
     expect(back.searchParams.get('error')).toBe('server_error')
     expect(await grants()).toEqual([])
     expect(await op!.db.select().from(schema.apiKey)).toEqual([])
+    expect(err).toHaveBeenCalledWith('[auth] recording an MCP approval failed: control plane down')
   }, T)
 
   test('a mint refused after a yes from preflight ends with access_denied and the reason', async () => {
