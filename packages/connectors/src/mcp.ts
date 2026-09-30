@@ -68,3 +68,33 @@ export function toolDefProblems(defs: readonly McpToolDef[]): string[] {
   })
   return problems
 }
+
+/** A `tools/call` result's content blocks (MCP 2026-07-28, server/tools). Only the two M4 returns. */
+export type McpContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string }
+
+export interface McpCallToolResult {
+  content: McpContent[]
+  structuredContent?: Record<string, unknown>
+  /** A tool-level failure: the JSON-RPC call itself still succeeds. */
+  isError?: boolean
+}
+
+export function toolError(text: string): McpCallToolResult {
+  return { content: [{ type: 'text', text }], isError: true }
+}
+
+/** The request a `tools/call` stands for, as the proxy would have received it under `/p/<slug>`. */
+export interface McpPlannedRequest {
+  method: 'GET' | 'POST'
+  path: string
+  body?: unknown
+}
+
+export type McpCallPlan = { ok: true; request: McpPlannedRequest } | { ok: false; error: string }
+
+/** A plain object, or the refusal every breed gives for anything else. */
+export function argsObject(args: unknown): Record<string, unknown> | null {
+  return typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : null
+}

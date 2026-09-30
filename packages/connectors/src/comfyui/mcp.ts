@@ -1,4 +1,4 @@
-import { byToolName, type JsonSchema, type McpToolDef } from '../mcp.js'
+import { argsObject, byToolName, toolError, type JsonSchema, type McpCallPlan, type McpCallToolResult, type McpContent, type McpToolDef } from '../mcp.js'
 import type { ComfyConstraint } from './breed.js'
 import type { ParamSpec, WorkflowTemplate } from './template.js'
 
@@ -97,4 +97,62 @@ export function comfyToMcp(fence: ComfyConstraint): McpToolDef[] {
   const tools = [...comfyToolNames(fence.templates)].map(([name, id]) => runTool(name, byId.get(id)!))
   if (tools.length > 0) tools.push(jobResultTool())
   return tools.sort(byToolName)
+}
+
+/** One image in the scoped result view. `data`/`mimeType` are present only when the data plane attached the bytes. */
+export interface JobResultImage {
+  filename: string
+  subfolder: string
+  type: string
+  data?: string
+  mimeType?: string
+}
+
+/**
+ * Plan a ComfyUI `tools/call`. `run_<tpl>` becomes the template submit the proxy's `handle` receives
+ * (`{ template_id, params }`, inverted through `comfyToolNames`, never by un-sanitising); the
+ * arguments go through untouched, because `reconstructGraph` is what refuses an undeclared param.
+ * `get_job_result` becomes the scoped result route, which re-checks that the job is this key's.
+ */
+export function comfyMcpCall(name: string, args: unknown, fence: ComfyConstraint): McpCallPlan {
+  const names = comfyToolNames(fence.templates)
+  if (name === JOB_RESULT_TOOL) {
+    if (names.size === 0) return { ok: false, error: `unknown tool: ${name}` }
+    const a = argsObject(args)
+    if (!a) return { ok: false, error: 'invalid arguments: expected an object' }
+    if (typeof a.job_id !== 'string' || a.job_id.length === 0) return { ok: false, error: 'invalid arguments: job_id must be a non-empty string' }
+    return { ok: true, request: { method: 'GET', path: `/result/${encodeURIComponent(a.job_id)}` } }
+  }
+  const templateId = names.get(name)
+  if (templateId === undefined) return { ok: false, error: `unknown tool: ${name}` }
+  const a = argsObject(args)
+  if (!a) return { ok: false, error: 'invalid arguments: expected an object' }
+  return { ok: true, request: { method: 'POST', path: '/submit', body: { template_id: templateId, params: a } } }
+}
+
+function reasonOf(body: unknown, status: number): string {
+  const e = (body as { error?: unknown } | null)?.error
+  return typeof e === 'string' && e ? e : `the request failed (${status})`
+}
+
+/** Shape a run's or a result's answer as MCP content. The fence is accepted for the hook contract and unused. */
+export function comfyMcpResult(name: string, result: { status: number; body: unknown }, _fence: ComfyConstraint): McpCallToolResult {
+  if (result.status >= 400) return toolError(reasonOf(result.body, result.status))
+  if (name !== JOB_RESULT_TOOL) {
+    const jobId = (result.body as { job_id?: unknown } | null)?.job_id
+    return typeof jobId === 'string'
+      ? { content: [{ type: 'text', text: `Job ${jobId} started. Call ${JOB_RESULT_TOOL} with this job_id for the output.` }], structuredContent: { job_id: jobId } }
+      : toolError('the job did not start')
+  }
+  const b = result.body as { done?: unknown; images?: unknown } | null
+  const images = (Array.isArray(b?.images) ? b.images : []) as JobResultImage[]
+  const refs = images.map(({ filename, subfolder, type }) => ({ filename, subfolder, type }))
+  if (b?.done !== true) {
+    return { content: [{ type: 'text', text: 'Job still running. Call again later.' }], structuredContent: { done: false, images: refs } }
+  }
+  const content: McpContent[] = [{ type: 'text', text: `Job finished with ${images.length} image${images.length === 1 ? '' : 's'}.` }]
+  for (const img of images) {
+    if (typeof img.data === 'string' && typeof img.mimeType === 'string') content.push({ type: 'image', data: img.data, mimeType: img.mimeType })
+  }
+  return { content, structuredContent: { done: true, images: refs } }
 }

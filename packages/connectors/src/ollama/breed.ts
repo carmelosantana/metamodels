@@ -1,8 +1,8 @@
 import { defineBreed } from '../breed.js'
 import type { Breed, GuardResult, RequestCtx, UpstreamResult, MeterEvent, ModelListResult } from '../breed.js'
-import { ollamaConstraint, routeGroup } from './constraint.js'
+import { ollamaConstraint, ollamaModelAllowed, routeGroup } from './constraint.js'
 import type { OllamaConstraint } from './constraint.js'
-import { ollamaToMcp } from './mcp.js'
+import { ollamaMcpCall, ollamaMcpResult, ollamaToMcp } from './mcp.js'
 import { upstreamAuthHeaders } from '../upstream-auth.js'
 
 // Bound upstream calls so a hung Ollama never ties up the caller indefinitely.
@@ -22,6 +22,8 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
   constraintSchema: ollamaConstraint,
   billingDimensions: ['tokens_in', 'tokens_out'],
   toMcp: ollamaToMcp,
+  mcpCall: ollamaMcpCall,
+  mcpResult: ollamaMcpResult,
 
   guard(ctx: RequestCtx, fence: OllamaConstraint): GuardResult {
     const group = routeGroup(ctx.path)
@@ -38,10 +40,8 @@ export const ollamaBreed: Breed<OllamaConstraint> = defineBreed<OllamaConstraint
     let body = ctx.body
     if (group !== 'read') {
       const model = (body as { model?: unknown } | null)?.model
-      if (fence.allowedModels !== null) {
-        if (typeof model !== 'string' || !fence.allowedModels.includes(model)) {
-          return { ok: false, status: 403, reason: `model not allowed: ${typeof model === 'string' ? model : '(none)'}` }
-        }
+      if (fence.allowedModels !== null && (typeof model !== 'string' || !ollamaModelAllowed(fence, model))) {
+        return { ok: false, status: 403, reason: `model not allowed: ${typeof model === 'string' ? model : '(none)'}` }
       }
       if (ctx.path.startsWith('/v1/') && (body as { stream?: unknown } | null)?.stream === true) {
         const b = body as Record<string, unknown>

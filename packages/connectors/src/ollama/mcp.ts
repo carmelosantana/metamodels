@@ -1,5 +1,5 @@
-import { byToolName, type JsonSchema, type McpToolAnnotations, type McpToolDef } from '../mcp.js'
-import type { OllamaConstraint } from './constraint.js'
+import { argsObject, byToolName, toolError, type JsonSchema, type McpCallPlan, type McpCallToolResult, type McpToolAnnotations, type McpToolDef } from '../mcp.js'
+import { ollamaModelAllowed, type OllamaConstraint } from './constraint.js'
 
 // Inference reads a model and changes nothing on the flock. Hints only — guard() enforces.
 const INFERENCE: Readonly<McpToolAnnotations> = Object.freeze({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false })
@@ -105,4 +105,78 @@ export function ollamaToMcp(fence: OllamaConstraint): McpToolDef[] {
   if (canInfer && routes.has('embed')) tools.push(embedTool(allowed))
   if (routes.has('read')) tools.push(listModelsTool())
   return tools.sort(byToolName)
+}
+
+const invalid = (why: string): McpCallPlan => ({ ok: false, error: `invalid arguments: ${why}` })
+
+function upstreamError(result: { status: number; body: unknown }): string {
+  const e = (result.body as { error?: unknown } | null)?.error
+  return `upstream error (${result.status})${typeof e === 'string' && e ? `: ${e}` : ''}`
+}
+
+/**
+ * Plan an Ollama `tools/call`. Only the fields each tool's inputSchema declares are copied, so a
+ * caller cannot reach `options`, `keep_alive` or `format`; inference is always `stream: false`
+ * (one JSON-RPC response per call). The model is NOT checked here — `guard()` does that, with the
+ * same reason string the proxy returns.
+ */
+export function ollamaMcpCall(name: string, args: unknown, fence: OllamaConstraint): McpCallPlan {
+  if (!ollamaToMcp(fence).some((t) => t.name === name)) return { ok: false, error: `unknown tool: ${name}` }
+  const a = argsObject(args)
+  if (!a) return invalid('expected an object')
+  if (name === 'list_models') return { ok: true, request: { method: 'GET', path: '/api/tags' } }
+  if (typeof a.model !== 'string') return invalid('model must be a string')
+  switch (name) {
+    case 'chat':
+      if (!Array.isArray(a.messages) || a.messages.length === 0) return invalid('messages must be a non-empty array')
+      return { ok: true, request: { method: 'POST', path: '/api/chat', body: { model: a.model, messages: a.messages, stream: false } } }
+    case 'generate':
+      if (typeof a.prompt !== 'string') return invalid('prompt must be a string')
+      if (a.system !== undefined && typeof a.system !== 'string') return invalid('system must be a string')
+      return {
+        ok: true,
+        request: {
+          method: 'POST', path: '/api/generate',
+          body: { model: a.model, prompt: a.prompt, ...(a.system === undefined ? {} : { system: a.system }), stream: false },
+        },
+      }
+    case 'embed':
+      if (!Array.isArray(a.input) || a.input.length === 0) return invalid('input must be a non-empty array')
+      return { ok: true, request: { method: 'POST', path: '/api/embed', body: { model: a.model, input: a.input } } }
+  }
+  return { ok: false, error: `unknown tool: ${name}` }
+}
+
+/**
+ * Shape the pipeline's answer as MCP content. `list_models` keeps only the models this fence allows,
+ * with the same matcher `guard()` enforces (controller ruling S2): the REST `/api/tags` stays
+ * unfiltered, so the narrowing happens here.
+ */
+export function ollamaMcpResult(name: string, result: { status: number; body: unknown }, fence: OllamaConstraint): McpCallToolResult {
+  if (result.status >= 400) return toolError(upstreamError(result))
+  const body = result.body
+  if (typeof body !== 'object' || body === null) return toolError('the upstream answer could not be read')
+  const b = body as Record<string, unknown>
+  switch (name) {
+    case 'chat': {
+      const text = (b.message as { content?: unknown } | undefined)?.content
+      return typeof text === 'string' ? { content: [{ type: 'text', text }], structuredContent: b } : toolError('the upstream answer had no message')
+    }
+    case 'generate':
+      return typeof b.response === 'string'
+        ? { content: [{ type: 'text', text: b.response }], structuredContent: b }
+        : toolError('the upstream answer had no response')
+    case 'embed':
+      return Array.isArray(b.embeddings)
+        ? { content: [{ type: 'text', text: JSON.stringify(b.embeddings) }], structuredContent: { embeddings: b.embeddings } }
+        : toolError('the upstream answer had no embeddings')
+    case 'list_models': {
+      const names = Array.isArray(b.models)
+        ? b.models.map((m) => (m as { name?: unknown } | null)?.name).filter((n): n is string => typeof n === 'string')
+        : []
+      const models = [...new Set(names)].filter((n) => ollamaModelAllowed(fence, n)).sort()
+      return { content: [{ type: 'text', text: models.join('\n') }], structuredContent: { models } }
+    }
+  }
+  return toolError(`unknown tool: ${name}`)
 }
