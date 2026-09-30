@@ -33,14 +33,14 @@ export interface AdminRouteOptions {
  */
 const BEARER = /^Bearer +(.+)$/i
 
-function bearerOf(req: Request): string | null {
+export function bearerOf(req: Request): string | null {
   const h = req.headers.get('authorization')
   if (!h) return null
   const m = BEARER.exec(h)
   return m ? m[1]! : null
 }
 
-function hasSessionCookie(req: Request): boolean {
+export function hasSessionCookie(req: Request): boolean {
   const c = req.headers.get('cookie')
   return !!c && new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=`).test(c)
 }
