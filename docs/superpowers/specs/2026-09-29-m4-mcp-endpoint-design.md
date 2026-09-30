@@ -435,4 +435,6 @@ Found while writing the plan, each checked against `main` at `4d36af2`. The plan
 | 3.4 | `AUTH_BIND`/`DATA_PLANE_BIND` stay | They exist only in `docker-compose.portainer.yml` |
 | 5 | Admin 401 gains `resource_metadata` | Four M2 tests assert the bare challenge and are updated with it |
 | 7 | RFC 1918 CIMD refusal in e2e | Proven by unit test; the e2e records the refusals it can reach. The e2e runs both a modern and a legacy sequence |
+| 3.4 | A CIMD `client_id` on `https://127.0.0.1…` and one on a name resolving to RFC 1918 space must both fail to fetch | The loopback literal is proven by a live fetch; the RFC 1918 name case by the `isSpecialUseIP` table (no offline DNS to fake a resolution) |
+| 3.4 | `allowClient` refuses grants beyond code/refresh | oidc-provider 9.12.2 drops server-unsupported grants from a CIMD document before `allowClient` runs; the refusal is proven with `device_code`, a grant this OP enables |
 
