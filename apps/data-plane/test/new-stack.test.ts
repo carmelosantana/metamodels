@@ -22,22 +22,22 @@ function generate(extra: Record<string, string> = {}): Record<string, string> {
 }
 
 describe('scripts/new-stack.sh', () => {
-  test('writes DATA_PLANE_URL as http://localhost:<DATA_PLANE_PORT>, and the data plane boots on it', () => {
+  test('writes DATA_PLANE_URL as http://127.0.0.1:<DATA_PLANE_PORT>, the Portainer file loopback spelling, and the data plane boots on it', () => {
     const vars = generate()
     expect(vars.DATA_PLANE_PORT).toBe('8787')
-    expect(vars.DATA_PLANE_URL).toBe('http://localhost:8787')
+    expect(vars.DATA_PLANE_URL).toBe('http://127.0.0.1:8787')
     const cfg = loadServerConfig({
       DATABASE_URL: 'postgres://x/y',
       UPSTREAM_AUTH_KEY: vars.UPSTREAM_AUTH_KEY,
       DATA_PLANE_URL: vars.DATA_PLANE_URL,
       OIDC_ISSUER: 'http://127.0.0.1:3100',
     })
-    expect(cfg.dataPlaneUrl).toBe('http://localhost:8787')
+    expect(cfg.dataPlaneUrl).toBe('http://127.0.0.1:8787')
   })
 
   test('keeps the port and the URL together when DATA_PLANE_PORT is set', () => {
     const vars = generate({ DATA_PLANE_PORT: '9787' })
     expect(vars.DATA_PLANE_PORT).toBe('9787')
-    expect(vars.DATA_PLANE_URL).toBe('http://localhost:9787')
+    expect(vars.DATA_PLANE_URL).toBe('http://127.0.0.1:9787')
   })
 })

@@ -58,7 +58,7 @@ OIDC_PREVIOUS_SIGNING_KEYS=
 # Where MCP clients reach the data plane: <DATA_PLANE_URL>/p/<slug>/mcp. Set it to the public
 # https:// origin to serve cloud MCP clients. See "Remote MCP connectors" in docs/DEPLOY.md.
 DATA_PLANE_PORT=${DATA_PLANE_PORT}
-DATA_PLANE_URL=http://localhost:${DATA_PLANE_PORT}
+DATA_PLANE_URL=http://127.0.0.1:${DATA_PLANE_PORT}
 EOF
 )
 
@@ -95,8 +95,8 @@ Store these now — they are not recoverable from the running stack.
   OIDC_SIGNING_KEY    signs every token the sign-in service issues. Rotate it
                       via OIDC_PREVIOUS_SIGNING_KEYS. Replaced outright, issued
                       tokens stop verifying within 10 minutes, or at once if
-                      you restart the control plane after auth runs the new
-                      key. It does not sign anyone out (see "Rotating the
+                      you restart the control plane and the data plane after
+                      auth runs the new key. It does not sign anyone out (see "Rotating the
                       sign-in keys" in docs/DEPLOY.md).
   OIDC_COOKIE_KEYS    signs the sign-in service's cookies. Rotate without
                       signing anyone out by prepending: <new>,<old>
