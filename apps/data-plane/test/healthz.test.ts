@@ -8,6 +8,7 @@ import type { ConfigStore } from '../src/config/config-store.js'
 
 const stubConfig: ConfigStore = {
   resolveKeyByHash: async () => null,
+  resolveKeyById: async () => null,
   getPaddockBySlug: async () => null,
 }
 
