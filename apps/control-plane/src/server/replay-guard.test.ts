@@ -1,5 +1,6 @@
+import Redis from 'ioredis'
 import { describe, expect, test } from 'vitest'
-import { MemoryReplayGuard, RedisReplayGuard } from './replay-guard'
+import { MemoryReplayGuard, REPLAY_REDIS_OPTIONS, RedisReplayGuard } from './replay-guard'
 
 /** Fakes ioredis `SET key value EX ttl NX`: 'OK' when the key was absent or expired, null otherwise. */
 function fakeRedis(now: () => number) {
@@ -25,6 +26,21 @@ describe('RedisReplayGuard', () => {
     expect(await guard.claimOnce('j1', 120)).toBe(false)
     expect(await guard.claimOnce('j2', 120)).toBe(true)
     expect(redis.calls[0]).toEqual(['mm:consent-jti:j1', '1', 'EX', 120, 'NX'])
+  })
+})
+
+describe('RedisReplayGuard with Redis unreachable (follow-up ruling F3)', () => {
+  test('a claim rejects in under 2 s, well inside the OP\'s 5 s call timeout', async () => {
+    // Port 1 on loopback: nothing listens, so every connection is refused at once.
+    const client = new Redis('redis://127.0.0.1:1', REPLAY_REDIS_OPTIONS)
+    client.on('error', () => {})
+    try {
+      const started = Date.now()
+      await expect(new RedisReplayGuard(client).claimOnce('j1', 120)).rejects.toThrow()
+      expect(Date.now() - started).toBeLessThan(2_000)
+    } finally {
+      client.disconnect()
+    }
   })
 })
 

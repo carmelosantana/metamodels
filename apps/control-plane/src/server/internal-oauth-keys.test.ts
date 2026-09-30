@@ -128,6 +128,25 @@ describe('POST /api/internal/v1/oauth-keys', () => {
     expect(await res.json()).toMatchObject({ detail: 'the consent assertion was rejected' })
   })
 
+  test('Redis unreachable: 503 with Retry-After, nothing minted, nothing published (fail closed)', async () => {
+    const { db, userIn } = await world()
+    const u = await userIn()
+    setReplayGuardForTests({ claimOnce: async () => { throw new Error('Reached the max retries per request limit (which is 1).') } })
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const res = await mint(bearer(await tok.mintConsent(claims(u.id))))
+      expect(res.status).toBe(503)
+      expect(res.headers.get('retry-after')).toBe('5')
+      expect(res.headers.get('content-type')).toBe('application/problem+json')
+      expect(await res.json()).toMatchObject({ status: 503, detail: 'the consent assertion cannot be checked right now; retry after the Retry-After interval' })
+      expect(await db.select().from(schema.apiKey)).toEqual([])
+      expect(published).toEqual([])
+      expect(err).toHaveBeenCalledWith('[internal] 503, the consent replay guard is unavailable:', 'Error: Reached the max retries per request limit (which is 1).')
+    } finally {
+      err.mockRestore()
+    }
+  })
+
   test('bearer-only, like the admin API: no bearer is 401, a bearer with a session cookie is 400', async () => {
     const u = await (await world()).userIn()
     expect((await mint({})).status).toBe(401)
@@ -154,6 +173,19 @@ describe('GET /api/internal/v1/oauth-keys/preflight', () => {
       .toEqual({ allowed: false, reason: PREFLIGHT_NO_CAPABILITY })
     expect(await (await preflight(bearer(await tok.mintConsent(claims(member.id, { resource: mcpResource(DP, 'nope') }))))).json())
       .toEqual({ allowed: false, reason: PREFLIGHT_NO_PADDOCK })
+  })
+
+  test('Redis unreachable: 503 with Retry-After, not an answer', async () => {
+    const u = await (await world()).userIn()
+    setReplayGuardForTests({ claimOnce: async () => { throw new Error('connect ECONNREFUSED') } })
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const res = await preflight(bearer(await tok.mintConsent(claims(u.id, { grant_id: undefined }))))
+      expect(res.status).toBe(503)
+      expect(res.headers.get('retry-after')).toBe('5')
+    } finally {
+      err.mockRestore()
+    }
   })
 
   test('refuses an access token presented as an assertion', async () => {
