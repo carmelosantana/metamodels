@@ -423,3 +423,29 @@ describe('tools/call on a ComfyUI paddock (M4 §3.8)', () => {
     expect(upstreamCalls.filter((u) => u.endsWith('/prompt'))).toEqual([])
   })
 })
+
+describe('GET /.well-known/oauth-protected-resource/p/:slug/mcp (M4 §5)', () => {
+  test('is served without auth, naming the OP and the mcp scope', async () => {
+    const res = await app.request(`${DP}/.well-known/oauth-protected-resource/p/small/mcp`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      resource: 'http://dp.test/p/small/mcp',
+      authorization_servers: [op.issuer],
+      scopes_supported: ['mcp'],
+      bearer_methods_supported: ['header'],
+    })
+  })
+
+  test('the challenge on a 401 points at it', async () => {
+    const res = await post('small', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { token: null })
+    const url = /resource_metadata="([^"]+)"/.exec(res.headers.get('www-authenticate') ?? '')?.[1]
+    expect(url).toBe('http://dp.test/.well-known/oauth-protected-resource/p/small/mcp')
+  })
+
+  test('an unknown, inactive or malformed slug is 404', async () => {
+    await db.update(schema.paddock).set({ status: 'disabled' }).where(eq(schema.paddock.id, fx.paddockId))
+    for (const slug of ['small', 'ghost', 'Not_A_Slug']) {
+      expect((await app.request(`${DP}/.well-known/oauth-protected-resource/p/${slug}/mcp`)).status).toBe(404)
+    }
+  })
+})

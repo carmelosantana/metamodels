@@ -1,6 +1,6 @@
 import type { Context, Hono } from 'hono'
 import { toolError, type McpCallToolResult, type McpToolDef, type RequestCtx } from '@metamodels/connectors'
-import { PADDOCK_SLUG_MAX, PADDOCK_SLUG_RE } from '@metamodels/schema'
+import { MCP_SCOPE, mcpResource, PADDOCK_SLUG_MAX, PADDOCK_SLUG_RE, protectedResourceMetadata } from '@metamodels/schema'
 import type { ConfigStore } from '../config/config-store.js'
 import { refusalReason, type Pipeline, type Scope } from '../pipeline.js'
 import { authenticateMcp, type McpAuthDeps } from './auth.js'
@@ -45,6 +45,17 @@ const validSlug = (slug: string) => slug.length <= PADDOCK_SLUG_MAX && PADDOCK_S
  */
 export function registerMcpRoutes(app: Hono, deps: { pipeline: Pipeline; configStore: ConfigStore; mcp?: McpDeps }): void {
   const { pipeline } = deps
+
+  // RFC 9728 §3: served without auth — there is no key to rate-limit on, and the document is static
+  // per slug, read from the (cached) config. An unknown or inactive paddock is 404, as on the endpoint.
+  app.get('/.well-known/oauth-protected-resource/p/:slug/mcp', async (c) => {
+    const slug = c.req.param('slug')
+    const mcp = deps.mcp
+    if (!mcp || !validSlug(slug)) return c.json({ error: 'not found' }, 404)
+    const paddock = await deps.configStore.getPaddockBySlug(slug)
+    if (!paddock || paddock.status !== 'active') return c.json({ error: 'not found' }, 404)
+    return c.json(protectedResourceMetadata(mcpResource(mcp.dataPlaneUrl, slug), mcp.oidcIssuer, [MCP_SCOPE]))
+  })
 
   app.post('/p/:slug/mcp', async (c) => {
     const slug = c.req.param('slug')
