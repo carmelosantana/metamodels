@@ -148,7 +148,7 @@ that fails. On refusal the interaction finishes with `access_denied` and a human
 ### 3.5 D7 — the mint runs in the control plane
 
 The consent screen stays in `auth`, beside login. `keys-service` stays the only writer of keys, so
-org scoping and audit are inherited. *(Amended 2026-09-29: `keys-service` holds no per-org lock and publishes no invalidation; its callers publish (`(app)/keys/actions.ts`, `admin-route.ts`). The internal route therefore calls `publishConfigInvalidation` itself, as those callers do.)*
+org scoping and audit are inherited. *(Amended 2026-09-29: `keys-service` publishes no invalidation; its callers publish (`(app)/keys/actions.ts`, `admin-route.ts`). The internal route therefore calls `publishConfigInvalidation` itself, as those callers do. The new `mintOauthKey` takes the per-org lock, as §3.1's idempotency requires.)*
 
 - **Route.** `POST /api/internal/v1/oauth-keys` is a control-plane Route Handler. It is called by
   the OP over the compose network at `CONTROL_PLANE_INTERNAL_URL`, which defaults to
@@ -250,8 +250,9 @@ mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): M
 - **Ollama.**
   - `chat` plans `POST /api/chat`, `generate` plans `POST /api/generate`, and `embed` plans
     `POST /api/embed`.
-  - Each is planned with `stream: false`, because MCP tool results are one JSON-RPC response. SSE
-    streaming of a single `tools/call` is out of scope.
+  - `chat` and `generate` are planned with `stream: false`, because MCP tool results are one
+    JSON-RPC response. `embed` carries no `stream` field: Ollama's `/api/embed` does not stream.
+    SSE streaming of a single `tools/call` is out of scope.
   - `mcpResult` returns the assistant text, or the embedding array, as `text` content, plus
     `structuredContent`.
 - **ComfyUI.**
@@ -268,9 +269,10 @@ mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): M
 - **Ollama `list_models`.** M3's Ollama `toMcp` also emits `list_models` (`ollama/mcp.ts`); it plans
   the fence-filtered model listing, like the other tools.
 - **Errors.**
-  - A gate refusal (403 fence, 429 rate or quota, 503 upstream credential) becomes
-    `CallToolResult { isError: true }`, carrying the same short reason string the proxy returns.
-    The JSON-RPC transport still succeeds.
+  - A gate refusal (403 fence, 429 rate or quota) becomes `CallToolResult { isError: true }`,
+    carrying the same short reason string the proxy returns. The JSON-RPC transport still succeeds.
+  - An upstream credential error is not a per-call `isError`: it answers HTTP 503 at the paddock
+    gate, before any method is dispatched (§4.2 step 4), because `tools/list` cannot carry `isError`.
   - An unknown tool name gets a JSON-RPC `-32602` error.
 
 ## 4. The endpoint
@@ -424,11 +426,14 @@ Found while writing the plan, each checked against `main` at `4d36af2`. The plan
 | § | Was | Now |
 |---|---|---|
 | 3.1 | `mm_kid` looked up by grant | By grant **and** paddock — one grant can back several paddocks |
-| 3.5 | Mint inherits the org lock and invalidation | `keys-service` has neither; the internal route publishes the invalidation itself |
+| 3.5 | Mint inherits the invalidation | `keys-service` publishes no invalidation; the internal route publishes it itself |
+| 3.5 | Mint inherits the org lock | `mintOauthKey` takes the per-org lock itself (§3.1); only the invalidation is left to the caller |
 | 3.5 | Preflight names a grant | No grant exists at preflight (`interactions.ts:141-153`); preflight carries no `grant_id` |
 | 3.8 | Images returned base64 by the result route | The route returns references; MCP fetches `/view` under an 8 MiB cap |
 | 3.8 | Ollama: chat, generate, embed | Plus M3's `list_models` |
 | 3.8 | — | MCP rate-limits every `tools/call`; the REST result route stays unlimited |
+| 3.8 | 503 upstream credential is a per-call `isError` | HTTP 503 at the paddock gate before dispatch (§4.2 step 4); `tools/list` cannot carry `isError`. 403 fence and 429 rate or quota stay `isError` |
+| 3.8 | Ollama tools all planned with `stream: false` | `chat` and `generate` only; `embed` has no `stream` field (`/api/embed` does not stream) |
 | 3.8 | Unknown tool gets `-32602` | Answered before `mcpCall` runs |
 | 3.8 | `mcpResult(name, result)` | `mcpResult(name, result, fence)` — list_models filters the listing by the fence (REST /api/tags unchanged) |
 | 4.1 | Modern only; 400 for a bad version header | D9 dual-era; exact modern wire rules (`-32020`, `-32022`, 404 `-32601`, 202, Origin 403) |
