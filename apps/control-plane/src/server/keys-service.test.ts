@@ -2,7 +2,10 @@ import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { sharedDb, seedOrg, type TestDb } from '../test/db'
-import { listKeys, createKey, revokeKey, NotFoundError } from './keys-service'
+import {
+  listKeys, createKey, revokeKey, NotFoundError, mintOauthKey, preflightOauthKey, oauthKeyName,
+  OAUTH_KEY_PREFIX, PREFLIGHT_NO_CAPABILITY, PREFLIGHT_NO_PADDOCK,
+} from './keys-service'
 import { DEFAULT_LIMIT, encodeCursor } from './page'
 import { ForbiddenError, type Actor } from '../auth/authorize'
 
@@ -230,5 +233,173 @@ describe('keys-service listKeys pagination', () => {
     const all = await listKeys(db, actor)
     expect(all).toHaveLength(n)
     expect(all.every((k) => k.paddockSlugs.length === 2)).toBe(true)
+  })
+})
+
+const CLIENT = 'https://client.example.test/cimd.json'
+
+/** A real user row: an oauth key's `user_id` is a foreign key, so the actor must exist. */
+async function userIn(db: TestDb, orgId: string, role: Actor['role'] = 'member'): Promise<Actor> {
+  const email = `${role}-${crypto.randomUUID()}@x.io`
+  const [u] = await db.insert(schema.user).values({ orgId, email, passwordHash: 'scrypt$x$y', role }).returning()
+  return { id: u.id, orgId, email, role, credential: `consent:${CLIENT}:grant-1` }
+}
+
+const mintInput = (over: Partial<Parameters<typeof mintOauthKey>[2]> = {}) => ({
+  clientId: CLIENT, clientName: 'Claude', paddockSlug: 'p1', grantId: 'grant-1', ...over,
+})
+
+describe('keys-service mintOauthKey (M4 D1)', () => {
+  test('mints an unpresentable oauth key bound to the grant, the client, the user and one paddock', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    const pid = await paddockIn(db, o.id, 'p1')
+
+    const minted = await mintOauthKey(db, actor, mintInput())
+    expect(minted.outcome).toBe('created')
+    // Nothing that could be presented comes back: no plaintext, no hash.
+    expect(Object.keys(minted).sort()).toEqual(['keyId', 'outcome'])
+
+    const [row] = await db.select().from(schema.apiKey).where(eq(schema.apiKey.id, minted.keyId))
+    expect(row).toMatchObject({
+      orgId: o.id, kind: 'oauth', status: 'active', prefix: OAUTH_KEY_PREFIX,
+      grantId: 'grant-1', oauthClientId: CLIENT, userId: actor.id, expiresAt: null,
+      name: `Claude (MCP) · ${actor.email}`,
+    })
+    expect(row.hash).toMatch(/^[0-9a-f]{64}$/)
+
+    const links = await db.select().from(schema.keyPaddock).where(eq(schema.keyPaddock.keyId, minted.keyId))
+    expect(links.map((l) => l.paddockId)).toEqual([pid])
+
+    const audits = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.create'))
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({
+      target: `key:${minted.keyId}`, detail: { kind: 'oauth', client_id: CLIENT }, changedBy: actor.credential,
+    })
+  })
+
+  test('the same user, client and paddock again rebinds the existing key to the new grant', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    await paddockIn(db, o.id, 'p1')
+    const first = await mintOauthKey(db, actor, mintInput())
+    const second = await mintOauthKey(db, actor, mintInput({ grantId: 'grant-2' }))
+
+    expect(second).toEqual({ keyId: first.keyId, outcome: 'rebound' })
+    const rows = await db.select().from(schema.apiKey)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].grantId).toBe('grant-2')
+    const rebinds = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.rebind'))
+    expect(rebinds).toHaveLength(1)
+    expect(rebinds[0]).toMatchObject({ target: `key:${first.keyId}`, detail: { kind: 'oauth', client_id: CLIENT } })
+  })
+
+  test('another paddock, another client or another user each get a key of their own', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const a = await userIn(db, o.id)
+    const b = await userIn(db, o.id)
+    await paddockIn(db, o.id, 'p1')
+    await paddockIn(db, o.id, 'p2')
+    const base = await mintOauthKey(db, a, mintInput())
+    const others = [
+      await mintOauthKey(db, a, mintInput({ paddockSlug: 'p2' })),
+      await mintOauthKey(db, a, mintInput({ clientId: 'https://other.example.test/cimd.json' })),
+      await mintOauthKey(db, b, mintInput()),
+    ]
+    for (const m of others) {
+      expect(m.outcome).toBe('created')
+      expect(m.keyId).not.toBe(base.keyId)
+    }
+    expect(await db.select().from(schema.apiKey)).toHaveLength(4)
+  })
+
+  test('a revoked key is never rebound: consent after a revoke mints a new one', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    await paddockIn(db, o.id, 'p1')
+    const first = await mintOauthKey(db, actor, mintInput())
+    await revokeKey(db, { ...actor, role: 'admin' }, first.keyId)
+    const again = await mintOauthKey(db, actor, mintInput({ grantId: 'grant-2' }))
+    expect(again.outcome).toBe('created')
+    expect(again.keyId).not.toBe(first.keyId)
+  })
+
+  test('a viewer is refused before anything is written', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const viewer = await userIn(db, o.id, 'viewer')
+    await paddockIn(db, o.id, 'p1')
+    await expect(mintOauthKey(db, viewer, mintInput())).rejects.toThrow(ForbiddenError)
+    expect(await db.select().from(schema.apiKey)).toHaveLength(0)
+    expect(await db.select().from(schema.auditLog)).toHaveLength(0)
+  })
+
+  test('an unknown slug, a disabled paddock and another org\'s paddock are all NotFoundError', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    const disabled = await paddockIn(db, o.id, 'off')
+    await db.update(schema.paddock).set({ status: 'disabled' }).where(eq(schema.paddock.id, disabled))
+    const [other] = await db.insert(schema.org).values({ name: 'other' }).returning()
+    await paddockIn(db, other.id, 'theirs')
+    for (const paddockSlug of ['nope', 'off', 'theirs']) {
+      await expect(mintOauthKey(db, actor, mintInput({ paddockSlug })), paddockSlug).rejects.toThrow(NotFoundError)
+    }
+    expect(await db.select().from(schema.apiKey)).toHaveLength(0)
+  })
+
+  test('the key name is "<client> (MCP) · <email>", cut at 120 characters', () => {
+    expect(oauthKeyName('Claude', 'a@b.io')).toBe('Claude (MCP) · a@b.io')
+    expect(oauthKeyName('x'.repeat(200), 'a@b.io')).toHaveLength(120)
+  })
+})
+
+describe('keys-service preflightOauthKey (M4 D3)', () => {
+  test('a member of the paddock\'s org may approve; nothing is written', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    await paddockIn(db, o.id, 'p1')
+    expect(await preflightOauthKey(db, actor, 'p1')).toEqual({ allowed: true, reason: null })
+    expect(await db.select().from(schema.apiKey)).toHaveLength(0)
+    expect(await db.select().from(schema.auditLog)).toHaveLength(0)
+  })
+
+  test('a viewer is told why, before any button is shown', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    await paddockIn(db, o.id, 'p1')
+    expect(await preflightOauthKey(db, await userIn(db, o.id, 'viewer'), 'p1'))
+      .toEqual({ allowed: false, reason: PREFLIGHT_NO_CAPABILITY })
+  })
+
+  test('an unknown, disabled or foreign paddock, or no slug at all, is one refusal', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    const off = await paddockIn(db, o.id, 'off')
+    await db.update(schema.paddock).set({ status: 'disabled' }).where(eq(schema.paddock.id, off))
+    const [other] = await db.insert(schema.org).values({ name: 'other' }).returning()
+    await paddockIn(db, other.id, 'theirs')
+    for (const slug of ['nope', 'off', 'theirs', null]) {
+      expect(await preflightOauthKey(db, actor, slug), String(slug)).toEqual({ allowed: false, reason: PREFLIGHT_NO_PADDOCK })
+    }
+  })
+})
+
+describe('keys-service listKeys shows each key\'s kind and client', () => {
+  test('a live key and an oauth key side by side', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id, 'admin')
+    const pid = await paddockIn(db, o.id, 'p1')
+    await createKey(db, actor, { name: 'ci', paddockIds: [pid] })
+    await mintOauthKey(db, actor, mintInput())
+    const rows = await listKeys(db, actor)
+    expect(rows.map((r) => [r.kind, r.oauthClientId]).sort()).toEqual([['live', null], ['oauth', CLIENT]])
   })
 })

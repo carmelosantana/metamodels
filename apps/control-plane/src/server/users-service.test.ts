@@ -94,3 +94,59 @@ describe('users-service', () => {
     expect(audits.length).toBe(1)
   })
 })
+
+describe('users-service revokes a user\'s oauth keys when they lose approval rights (M4 D3)', () => {
+  async function oauthKeyFor(db: TestDb, orgId: string, userId: string): Promise<string> {
+    const [f] = await db.insert(schema.flock).values({ orgId, breed: 'ollama', name: 'f', baseUrl: 'http://f' }).returning()
+    const [p] = await db.insert(schema.paddock).values({ orgId, flockId: f.id, slug: `p-${crypto.randomUUID()}`, name: 'p' }).returning()
+    const [k] = await db.insert(schema.apiKey).values({
+      orgId, name: 'k', prefix: 'oauth', hash: crypto.randomUUID(), kind: 'oauth',
+      grantId: 'g', oauthClientId: 'https://c.example.test/cimd.json', userId,
+    }).returning()
+    await db.insert(schema.keyPaddock).values({ keyId: k.id, paddockId: p.id })
+    return k.id
+  }
+  const statusOf = async (db: TestDb, id: string) =>
+    (await db.select({ s: schema.apiKey.status }).from(schema.apiKey).where(eq(schema.apiKey.id, id)))[0]?.s
+
+  test('deactivating a user revokes each of their active oauth keys with one audit row, and nothing else', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
+    const m = await seedUser(db, o.id, 'm@x.io', 'member')
+    const other = await seedUser(db, o.id, 'other@x.io', 'member')
+    const k1 = await oauthKeyFor(db, o.id, m.id)
+    const k2 = await oauthKeyFor(db, o.id, m.id)
+    const theirs = await oauthKeyFor(db, o.id, other.id)
+    const [live] = await db.insert(schema.apiKey).values({ orgId: o.id, name: 'live', prefix: 'mm_live_x', hash: 'h-live' }).returning()
+
+    await setUserStatus(db, actor(a), m.id, 'deactivated', 5, NOW)
+
+    expect(await statusOf(db, k1)).toBe('revoked')
+    expect(await statusOf(db, k2)).toBe('revoked')
+    expect(await statusOf(db, theirs)).toBe('active')
+    expect(await statusOf(db, live.id)).toBe('active')
+    const revokes = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.revoke'))
+    expect(revokes.map((r) => r.target).sort()).toEqual([`key:${k1}`, `key:${k2}`].sort())
+    expect(revokes.every((r) => (r.detail as { reason?: string }).reason === 'user.deactivate')).toBe(true)
+  })
+
+  test('demotion to viewer revokes; demotion to member does not; reactivation restores nothing', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const a = await seedUser(db, o.id, 'admin@x.io', 'admin')
+    const m = await seedUser(db, o.id, 'm@x.io', 'admin')
+    const k = await oauthKeyFor(db, o.id, m.id)
+
+    await changeUserRole(db, actor(a), m.id, 'member')
+    expect(await statusOf(db, k)).toBe('active')
+
+    await changeUserRole(db, actor(a), m.id, 'viewer')
+    expect(await statusOf(db, k)).toBe('revoked')
+    const [row] = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'key.revoke'))
+    expect(row).toMatchObject({ target: `key:${k}`, detail: { kind: 'oauth', reason: 'user.role' } })
+
+    await changeUserRole(db, actor(a), m.id, 'member')
+    expect(await statusOf(db, k)).toBe('revoked')
+  })
+})

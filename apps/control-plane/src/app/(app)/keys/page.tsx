@@ -18,6 +18,7 @@ export default async function KeysPage() {
         id: k.id, name: k.name, prefix: k.prefix, status: k.status,
         expiresAt: k.expiresAt ? k.expiresAt.toISOString() : null,
         paddockSlugs: k.paddockSlugs,
+        kind: k.kind, oauthClientId: k.oauthClientId,
       }))}
     />
   )

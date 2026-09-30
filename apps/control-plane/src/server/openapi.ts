@@ -1,6 +1,6 @@
 import { z } from 'zod/v4'
 import type { z as z3 } from 'zod'
-import { BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
+import { BREED_IDS, CAPABILITIES, KEY_KINDS, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
 import { saveFlockInput, UPSTREAM_AUTH_MESSAGE, UPSTREAM_AUTH_PATTERN } from '../lib/flock-schema'
 import { savePaddockInput } from '../lib/paddock-schema'
 import { saveFenceInput } from '../lib/fence-schema'
@@ -685,8 +685,19 @@ const COMPONENT_SCHEMAS: Record<string, JsonSchema> = {
         description: 'The slugs of the paddocks this key is scoped to, sorted.',
         items: { type: 'string' },
       },
+      kind: {
+        type: 'string',
+        enum: [...KEY_KINDS],
+        description:
+          '`live`: an `mm_live_` key made with `POST /keys`. `oauth`: minted when a user approved an MCP ' +
+          'client for one paddock; it has no secret anyone holds, and it opens only that paddock\'s MCP endpoint.',
+      },
+      oauthClientId: {
+        type: ['string', 'null'],
+        description: 'For an `oauth` key, the approved client\'s Client ID Metadata Document URL; null otherwise.',
+      },
     },
-    required: ['id', 'name', 'prefix', 'status', 'expiresAt', 'createdAt', 'paddockSlugs'],
+    required: ['id', 'name', 'prefix', 'status', 'expiresAt', 'createdAt', 'paddockSlugs', 'kind', 'oauthClientId'],
   },
   CreatedKey: {
     type: 'object',

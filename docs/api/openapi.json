@@ -2453,6 +2453,21 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "live",
+              "oauth"
+            ],
+            "description": "`live`: an `mm_live_` key made with `POST /keys`. `oauth`: minted when a user approved an MCP client for one paddock; it has no secret anyone holds, and it opens only that paddock's MCP endpoint."
+          },
+          "oauthClientId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For an `oauth` key, the approved client's Client ID Metadata Document URL; null otherwise."
           }
         },
         "required": [
@@ -2462,7 +2477,9 @@
           "status",
           "expiresAt",
           "createdAt",
-          "paddockSlugs"
+          "paddockSlugs",
+          "kind",
+          "oauthClientId"
         ]
       },
       "CreatedKey": {

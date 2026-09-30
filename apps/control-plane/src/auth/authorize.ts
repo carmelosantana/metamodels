@@ -4,12 +4,13 @@ export type { Capability }
 export type Role = UserRole
 
 /**
- * Which credential performed a mutation, for `audit_log.changed_by` (spec §4.2). Exactly two
- * forms exist: the console cookie session, and a bearer access token identified by its client
- * and its `jti`. Typed as a closed grammar rather than `string` because this is an audit
- * identity — an arbitrary string here is an audit row nobody can trust.
+ * Which credential performed a mutation, for `audit_log.changed_by`. A closed grammar, not `string`,
+ * because this is an audit identity — an arbitrary string here is an audit row nobody can trust:
+ * - `session`: the console cookie session;
+ * - `token:<client_id>:<jti>`: an admin-API bearer access token;
+ * - `consent:<client_id>:<grant_id>`: the OP reporting that a user approved an MCP client (M4 D7).
  */
-export type Credential = 'session' | `token:${string}:${string}`
+export type Credential = 'session' | `token:${string}:${string}` | `consent:${string}:${string}`
 
 export interface Actor {
   id: string
@@ -23,7 +24,10 @@ export interface Actor {
    * must deny, not inherit full role power (the Portainer impersonation trap C3 exists to avoid).
    */
   grants?: ReadonlySet<Capability>
-  /** Which credential acted, for `audit_log.changed_by`: `session` or `token:<client_id>:<jti>`. */
+  /**
+   * Which credential acted, for `audit_log.changed_by`: `session`, `token:<client_id>:<jti>` or
+   * `consent:<client_id>:<grant_id>`.
+   */
   credential: Credential
 }
 

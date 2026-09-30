@@ -7,6 +7,7 @@ import { isRole } from '../../../auth/authorize'
 import { changeUserRole, setUserStatus } from '../../../server/users-service'
 import { inviteUser, revokeInvite } from '../../../server/invites-service'
 import { getSeatLimit } from '../../../server/seats'
+import { publishConfigInvalidation } from '../../../server/config-publisher'
 
 export async function inviteUserAction(
   _prev: unknown, fd: FormData,
@@ -46,6 +47,7 @@ export async function changeRoleAction(fd: FormData): Promise<{ error?: string }
     const role = String(fd.get('role') ?? '')
     if (!isRole(role)) return { error: 'Invalid role' }
     await changeUserRole(getDb(), actor, String(fd.get('id')), role)
+    await publishConfigInvalidation('user.role')
     revalidatePath('/team')
     return {}
   } catch (e) {
@@ -61,6 +63,7 @@ export async function setStatusAction(fd: FormData): Promise<{ error?: string }>
     const status = String(fd.get('status') ?? '') === 'active' ? 'active' : 'deactivated'
     const seatLimit = await getSeatLimit(db, actor.orgId, Date.now())
     await setUserStatus(db, actor, String(fd.get('id')), status, seatLimit, Date.now())
+    await publishConfigInvalidation(status === 'active' ? 'user.reactivate' : 'user.deactivate')
     revalidatePath('/team')
     return {}
   } catch (e) {
