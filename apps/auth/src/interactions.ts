@@ -1,12 +1,20 @@
+import { randomBytes } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
+import { eq } from 'drizzle-orm'
 import type { Middleware, ParameterizedContext } from 'koa'
 import type Provider from 'oidc-provider'
-import type { Grant, KoaContextWithOIDC } from 'oidc-provider'
+import type { Grant, InteractionResults, KoaContextWithOIDC } from 'oidc-provider'
 import { errors, interactionPolicy } from 'oidc-provider'
+import { parseMcpResource, user } from '@metamodels/schema'
 import { verifyLogin } from './account.js'
+import { isCimdClient } from './cimd.js'
+import type { ConsentApi, ConsentRequest } from './consent-api.js'
 import type { Db } from './db.js'
 import type { LoginThrottle } from './login-throttle.js'
-import { AUTH_CSS, renderLoginPage, renderMessagePage } from './views.js'
+import { findPaddock } from './paddocks.js'
+import {
+  AUTH_CSS, renderConsentPage, renderConsentRefusedPage, renderLoginPage, renderMessagePage, type ConsentView,
+} from './views.js'
 
 type Ctx = ParameterizedContext
 type InteractionDetails = Awaited<ReturnType<Provider['interactionDetails']>>
@@ -15,10 +23,17 @@ export interface InteractionDeps {
   provider: Provider
   db: Db
   throttle: LoginThrottle
-  /** Clients that ARE MetaModels, so consent is implied. Everyone else is refused until M4's consent screen. */
+  /** Clients that ARE MetaModels, so consent is implied. */
   firstPartyClientIds: ReadonlySet<string>
   csp: string
+  /** The control plane's internal oauth-keys routes (M4 D7). */
+  consentApi: ConsentApi
+  /** `DATA_PLANE_URL`, to recognise an MCP resource indicator. */
+  dataPlaneUrl: string
 }
+
+/** What a client that is neither first-party nor a CIMD client asking for one MCP resource is told (M1). */
+const NOT_PERMITTED = 'This client is not permitted to sign in yet.'
 
 /** oidc-provider's route names for the browser half of the device grant: the confirm POST, and resuming after an interaction. */
 const DEVICE_APPROVAL_ROUTES: ReadonlySet<string> = new Set(['code_verification', 'device_resume'])
@@ -65,7 +80,9 @@ export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.Defau
  * grant for the client, and binds the device code to that. The session so points at the newest
  * device grant. An older one is not revoked; it lives on for the refresh tokens issued under it.
  *
- * Every other route (the console's authorization-code flow) keeps the default.
+ * Every other route (the console's authorization-code flow, and MCP clients) keeps the default. An
+ * MCP client's second paddock therefore extends the session's grant; its oauth keys are found per
+ * (grant, paddock), never by the grant alone (`activeOauthKeyForGrant`).
  */
 export async function loadExistingGrant(ctx: KoaContextWithOIDC): Promise<Grant | undefined> {
   const grantId = ctx.oidc.result?.consent?.grantId
@@ -73,7 +90,7 @@ export async function loadExistingGrant(ctx: KoaContextWithOIDC): Promise<Grant 
   return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined
 }
 
-const INTERACTION_PATH = /^\/interaction\/([A-Za-z0-9_-]+)(\/login)?$/
+const INTERACTION_PATH = /^\/interaction\/([A-Za-z0-9_-]+)(\/login|\/consent)?$/
 const MAX_FORM_BYTES = 16 * 1024
 
 function html(ctx: Ctx, status: number, body: string): void {
@@ -112,7 +129,8 @@ export function interactionMiddleware(deps: InteractionDeps): Middleware {
     ctx.set('Cache-Control', 'no-store')
     try {
       if (ctx.method === 'GET' && !match[2]) return await showInteraction(ctx, deps)
-      if (ctx.method === 'POST' && match[2]) return await submitLogin(ctx, deps)
+      if (ctx.method === 'POST' && match[2] === '/login') return await submitLogin(ctx, deps)
+      if (ctx.method === 'POST' && match[2] === '/consent') return await submitConsent(ctx, deps)
       ctx.status = 405
       ctx.set('Allow', match[2] ? 'POST' : 'GET')
     } catch (err) {
@@ -139,19 +157,154 @@ async function showInteraction(ctx: Ctx, deps: InteractionDeps): Promise<void> {
   }
 
   if (prompt.name === 'consent') {
-    if (!deps.firstPartyClientIds.has(String(params.client_id))) {
+    if (deps.firstPartyClientIds.has(String(params.client_id))) {
+      const consent = await consentFor(deps.provider, details)
+      await deps.provider.interactionFinished(ctx.req, ctx.res, { consent }, { mergeWithLastSubmission: true })
+      return
+    }
+    const mcp = await mcpConsent(deps, details)
+    if (!mcp) {
       await deps.provider.interactionFinished(ctx.req, ctx.res, {
-        error: 'access_denied',
-        error_description: 'This client is not permitted to sign in yet.',
+        error: 'access_denied', error_description: NOT_PERMITTED,
       }, { mergeWithLastSubmission: false })
       return
     }
-    const consent = await consentFor(deps.provider, details)
-    await deps.provider.interactionFinished(ctx.req, ctx.res, { consent }, { mergeWithLastSubmission: true })
+    // Asked before the page renders (spec §3.3), so a viewer never sees a button that would fail.
+    const pre = await deps.consentApi.preflight(mcp.request)
+    html(ctx, 200, pre.allowed
+      ? renderConsentPage({ uid, ...mcp.view })
+      : renderConsentRefusedPage({ uid, reason: pre.reason, email: mcp.view.email, switchAccountHref: mcp.view.switchAccountHref }))
     return
   }
 
   html(ctx, 400, renderMessagePage('Unsupported request', `This sign-in step (${prompt.name}) is not supported.`))
+}
+
+interface McpConsent {
+  request: ConsentRequest
+  view: Omit<ConsentView, 'uid'>
+}
+
+/** The one resource an MCP authorization request names, or null for none or several. */
+function singleResource(v: unknown): string | null {
+  if (typeof v === 'string') return v
+  if (Array.isArray(v) && v.length === 1 && typeof v[0] === 'string') return v[0]
+  return null
+}
+
+/**
+ * This same authorization request with `prompt=login consent`: a fresh password prompt, after which
+ * `switchAccountMiddleware` handles the account change on `resume` exactly as for the console, and
+ * the consent screen comes back for the account that signed in. `consent` stays in the prompt so the
+ * screen is shown even when the new account's grant already covers the request.
+ */
+function switchAccountHref(params: Record<string, unknown>): string {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (typeof v === 'string' && k !== 'prompt') q.set(k, v)
+  q.set('prompt', 'login consent')
+  return `/auth?${q}`
+}
+
+/**
+ * The consent context when this interaction is a CIMD client asking for exactly one MCP resource of
+ * an active paddock; null for anything else (which M1's refusal then answers). Everything shown is
+ * re-read here: the client from its document (cached by oidc-provider), the paddock and the user's
+ * email from the database.
+ */
+async function mcpConsent(deps: InteractionDeps, details: InteractionDetails): Promise<McpConsent | null> {
+  const client = await deps.provider.Client.find(String(details.params.client_id)).catch(() => undefined)
+  if (!client || !isCimdClient(client)) return null
+  const resource = singleResource(details.params.resource)
+  const slug = resource === null ? null : parseMcpResource(deps.dataPlaneUrl, resource)
+  if (resource === null || slug === null) return null
+  const paddock = await findPaddock(deps.db, slug)
+  if (!paddock || paddock.status !== 'active') return null
+
+  const accountId = details.session?.accountId
+  if (!accountId) throw new Error('consent prompt reached without an authenticated session')
+  const rows = await deps.db.select({ email: user.email }).from(user).where(eq(user.id, accountId)).limit(1)
+
+  const clientHost = new URL(client.clientId).host
+  const clientName = client.clientName ?? clientHost
+  return {
+    request: { accountId, clientId: client.clientId, clientName, resource },
+    view: {
+      clientName,
+      clientHost,
+      redirectHost: new URL(String(details.params.redirect_uri)).host,
+      paddockName: paddock.name,
+      paddockSlug: paddock.slug,
+      email: rows[0]?.email ?? '',
+      switchAccountHref: switchAccountHref(details.params),
+    },
+  }
+}
+
+/**
+ * Approve, Deny or Close on the consent screen. Approve: mint first, then save the grant, so a grant
+ * never exists without its key (spec §3.5). The grant id is chosen here, before the mint, because the
+ * key is bound to it; an existing session grant keeps its id and gains the resource scope.
+ */
+async function submitConsent(ctx: Ctx, deps: InteractionDeps): Promise<void> {
+  const details = await deps.provider.interactionDetails(ctx.req, ctx.res)
+  if (details.prompt.name !== 'consent') {
+    html(ctx, 400, renderMessagePage('Unsupported request', 'This sign-in step does not take an approval.'))
+    return
+  }
+  const form = await readForm(ctx.req)
+  if (form === null) {
+    html(ctx, 413, renderMessagePage('Request too large', 'The approval form submission was too large.'))
+    return
+  }
+  const fail = (result: InteractionResults) =>
+    deps.provider.interactionFinished(ctx.req, ctx.res, result, { mergeWithLastSubmission: false })
+
+  const mcp = await mcpConsent(deps, details)
+  if (!mcp) return void await fail({ error: 'access_denied', error_description: NOT_PERMITTED })
+
+  const decision = form.get('decision')
+  if (decision !== 'approve') {
+    // Close follows a refusal: tell the client the same reason the user was shown.
+    const pre = decision === 'close' ? await deps.consentApi.preflight(mcp.request) : undefined
+    return void await fail({
+      error: 'access_denied',
+      error_description: pre && !pre.allowed ? pre.reason : 'The request was denied.',
+    })
+  }
+
+  const existing = details.grantId ? await deps.provider.Grant.find(details.grantId) : undefined
+  const grant = existing ?? new deps.provider.Grant({ accountId: mcp.request.accountId, clientId: mcp.request.clientId })
+  if (!existing) grant.jti = randomBytes(16).toString('base64url')
+
+  const minted = await deps.consentApi.mint({ ...mcp.request, grantId: grant.jti })
+  if (!minted.ok) {
+    if (minted.kind === 'error') {
+      // eslint-disable-next-line no-console
+      console.error(`[auth] recording an MCP approval failed: ${minted.detail}`)
+      return void await fail({ error: 'server_error', error_description: 'MetaModels could not record this approval, so nothing was granted. Try again.' })
+    }
+    return void await fail({ error: 'access_denied', error_description: minted.reason })
+  }
+
+  addMissing(grant, details)
+  await grant.save()
+  await deps.provider.interactionFinished(ctx.req, ctx.res, {
+    consent: existing ? {} : { grantId: grant.jti },
+  }, { mergeWithLastSubmission: true })
+}
+
+/** Grant exactly what the request is missing, and nothing more: oidc-provider's reference handler, minus the screen. */
+function addMissing(grant: Grant, details: InteractionDetails): void {
+  const missing = details.prompt.details as {
+    missingOIDCScope?: string[]
+    missingOIDCClaims?: string[]
+    missingResourceScopes?: Record<string, string[]>
+  }
+  if (missing.missingOIDCScope) grant.addOIDCScope(missing.missingOIDCScope.join(' '))
+  if (missing.missingOIDCClaims) grant.addOIDCClaims(missing.missingOIDCClaims)
+  for (const [resource, scopes] of Object.entries(missing.missingResourceScopes ?? {})) {
+    grant.addResourceScope(resource, scopes.join(' '))
+  }
 }
 
 /**
@@ -176,18 +329,7 @@ async function consentFor(provider: Provider, details: InteractionDetails): Prom
 
   const existing = details.grantId ? await provider.Grant.find(details.grantId) : undefined
   const grant = existing ?? new provider.Grant({ accountId, clientId: String(details.params.client_id) })
-
-  const missing = details.prompt.details as {
-    missingOIDCScope?: string[]
-    missingOIDCClaims?: string[]
-    missingResourceScopes?: Record<string, string[]>
-  }
-  if (missing.missingOIDCScope) grant.addOIDCScope(missing.missingOIDCScope.join(' '))
-  if (missing.missingOIDCClaims) grant.addOIDCClaims(missing.missingOIDCClaims)
-  for (const [resource, scopes] of Object.entries(missing.missingResourceScopes ?? {})) {
-    grant.addResourceScope(resource, scopes.join(' '))
-  }
-
+  addMissing(grant, details)
   const grantId = await grant.save()
   // An existing grant is modified in place; only a new one is handed back to the provider.
   return details.grantId ? {} : { grantId }

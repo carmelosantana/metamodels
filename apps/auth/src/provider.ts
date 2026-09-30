@@ -2,6 +2,7 @@ import Provider, { errors, type ClientMetadata, type Configuration } from 'oidc-
 import { CLI_CLIENT_ID, CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { makeFindAccount } from './account.js'
 import { cimdFeature, cimdGateForIssuer, ssrfGuardAvailable } from './cimd.js'
+import { consentAsserter, httpConsentApi, type ConsentApi } from './consent-api.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
 import type { Db } from './db.js'
@@ -68,6 +69,8 @@ export interface ProviderOptions {
   fetch?: Configuration['fetch']
   /** Whether the SSRF guard is installed. Injectable so the boot refusal can be tested. */
   ssrfGuardAvailable?: () => boolean
+  /** The control plane's oauth-keys routes. Defaults to HTTP over `cfg.controlPlaneInternalUrl`; tests inject a fake. */
+  consentApi?: ConsentApi
 }
 
 /** The operator console — a confidential client using the authorization-code flow with PKCE. */
@@ -112,11 +115,18 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     console.warn(`[auth] Client ID Metadata Documents are off: ${cimd.reason}`)
   }
   const refresh = mcpRefreshPolicy(cfg.dataPlaneUrl)
+  const jwks = signingJwks(cfg.signingKeyPem, cfg.allowEphemeralKey, cfg.previousSigningKeyPems)
+  const consentApi = opts.consentApi ?? httpConsentApi({
+    baseUrl: cfg.controlPlaneInternalUrl,
+    // The first key is the one oidc-provider signs with (see `signingJwks`); the control plane
+    // verifies the assertion against the same published JWKS.
+    assert: consentAsserter({ issuer: cfg.issuer, consoleUrl: cfg.consoleUrl, signingJwk: jwks.keys[0]! }),
+  })
   const configuration: Configuration = {
     adapter: pgAdapterFactory(db),
     clients: [consoleClient(cfg), cliClient(), ...(opts.extraClients ?? [])],
     cookies: { keys: cfg.cookieKeys },
-    jwks: signingJwks(cfg.signingKeyPem, cfg.allowEphemeralKey, cfg.previousSigningKeyPems),
+    jwks,
     findAccount: makeFindAccount(db),
     extraTokenClaims: makeExtraTokenClaims(db, cfg.dataPlaneUrl) as NonNullable<Configuration['extraTokenClaims']>,
     // Ruling R4: MCP clients get refresh tokens without offline_access; everyone else keeps the defaults.
@@ -227,10 +237,14 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     provider,
     db,
     throttle: new LoginThrottle(),
-    // Auto-consented without a consent screen (spec A16). Not a grant of the
-    // admin API: that is `resourcesByClient`, where only the CLI is listed (spec A15).
+    // Auto-consented without a consent screen (spec A16). Every other client is refused at
+    // consent, except a CIMD client asking for one MCP resource, which gets the consent screen
+    // (M4 §4.3). Not a grant of the admin API: that is `resourcesByClient`, where only the CLI is
+    // listed (spec A15).
     firstPartyClientIds: new Set([CONSOLE_CLIENT_ID, CLI_CLIENT_ID]),
     csp: authCsp([new URL(cfg.consoleUrl).origin]),
+    consentApi,
+    dataPlaneUrl: cfg.dataPlaneUrl,
   }))
   provider.use(devicePrefillMiddleware())
   provider.use(switchAccountMiddleware())
