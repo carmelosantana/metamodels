@@ -7,15 +7,18 @@ import { mcpResource } from '@metamodels/schema'
 import type { ConsentApi, ConsentRequest, Preflight } from '../src/consent-api.js'
 import { seedUser, type TestDb } from './helpers/db.js'
 import {
-  authorize, CIMD_CLIENT_ID, CIMD_REDIRECT_URI, cimdDocument, DATA_PLANE_URL, opJwks, send, startTestOp, type TestOp,
+  authorize, CIMD_CLIENT_ID, CookieJar, CIMD_REDIRECT_URI, cimdDocument, DATA_PLANE_URL, opJwks, send, startTestOp, type TestOp,
 } from './helpers/flow.js'
 
 const T = 30_000
 const EMAIL = 'member@x.io'
 const PASSWORD = 'hunter2hunter2'
 const RESOURCE = mcpResource(DATA_PLANE_URL, 'small')
+/** A web MCP client (the kind claude.ai is): oidc-provider re-prompts a native client for consent on every request, a web one only when its grant falls short. */
+const WEB_REDIRECT_URI = 'https://mcp-client.example.test/callback'
 let op: TestOp | undefined
-afterEach(async () => { await op?.close(); op = undefined })
+let redirectUri = CIMD_REDIRECT_URI
+afterEach(async () => { await op?.close(); op = undefined; redirectUri = CIMD_REDIRECT_URI })
 
 /**
  * A stand-in for the control plane's internal routes. `mint` writes the key row the control plane
@@ -47,8 +50,10 @@ function fakeControlPlane(opts: { preflight?: Preflight; mint?: 'ok' | 'denied' 
   return { api, calls, held }
 }
 
-async function setup(cp: ReturnType<typeof fakeControlPlane>, role = 'member') {
-  op = await startTestOp({ cimdDocuments: { [CIMD_CLIENT_ID]: cimdDocument() }, providerOptions: { consentApi: cp.api } })
+async function setup(cp: ReturnType<typeof fakeControlPlane>, role = 'member', client: 'native' | 'web' = 'native') {
+  const doc = client === 'web' ? cimdDocument({ application_type: 'web', redirect_uris: [WEB_REDIRECT_URI] }) : cimdDocument()
+  redirectUri = client === 'web' ? WEB_REDIRECT_URI : CIMD_REDIRECT_URI
+  op = await startTestOp({ cimdDocuments: { [CIMD_CLIENT_ID]: doc }, providerOptions: { consentApi: cp.api } })
   cp.held.db = op.db
   const userId = await seedUser(op.db, { email: EMAIL, password: PASSWORD, role })
   const [u] = await op.db.select().from(schema.user).where(eq(schema.user.id, userId))
@@ -60,14 +65,12 @@ async function setup(cp: ReturnType<typeof fakeControlPlane>, role = 'member') {
 /** Sign in as the MCP client's user and stop at the consent screen. */
 async function consentPage() {
   const out = await authorize(op!, {
-    email: EMAIL, password: PASSWORD, clientId: CIMD_CLIENT_ID, redirectUri: CIMD_REDIRECT_URI,
+    email: EMAIL, password: PASSWORD, clientId: CIMD_CLIENT_ID, redirectUri: redirectUri,
     // What a real MCP client sends: no offline_access and no prompt=consent (ruling R4).
     scope: 'openid mcp', extra: { resource: RESOURCE },
   })
   if (out.kind !== 'page') throw new Error(`expected the consent screen, got a redirect to ${out.url.href}`)
-  const uid = /action="\/interaction\/([^/"]+)\/consent"/.exec(out.body)?.[1]
-  if (!uid) throw new Error(`no consent form on the page: ${out.body.slice(0, 400)}`)
-  return { ...out, uid }
+  return { ...out, uid: consentUid(out.body) }
 }
 
 /** Post a decision and follow the redirects back to the client. */
@@ -78,10 +81,23 @@ async function decide(page: Awaited<ReturnType<typeof consentPage>>, decision: '
   for (let hop = 0; hop < 8; hop++) {
     if (res.status < 300 || res.status >= 400) throw new Error(`expected a redirect, got ${res.status}: ${(await res.text()).slice(0, 300)}`)
     const next = new URL(res.headers.get('location')!, op!.issuer)
-    if (next.href.startsWith(CIMD_REDIRECT_URI)) return next
+    if (next.href.startsWith(redirectUri)) return next
     res = await send(page.jar, next.href)
   }
   throw new Error('too many redirects')
+}
+
+/** The same browser (its OP session cookies) authorizing the MCP client again, with no password this time. */
+async function reauthorize(jar: CookieJar) {
+  return authorize(op!, {
+    jar, clientId: CIMD_CLIENT_ID, redirectUri: redirectUri, scope: 'openid mcp', extra: { resource: RESOURCE },
+  })
+}
+
+function consentUid(body: string): string {
+  const uid = /action="\/interaction\/([^/"]+)\/consent"/.exec(body)?.[1]
+  if (!uid) throw new Error(`no consent form on the page: ${body.slice(0, 400)}`)
+  return uid
 }
 
 async function tokenRequest(fields: Record<string, string>) {
@@ -158,6 +174,52 @@ describe('MCP consent (M4 §4.3)', () => {
     const refreshed = await tokenRequest({ grant_type: 'refresh_token', refresh_token: first.json.refresh_token as string })
     expect(refreshed.status).toBe(400)
     expect(refreshed.json.error).toBe('invalid_grant')
+  }, T)
+
+  test('a web client re-authorizing in the same browser after the key is revoked shows the consent screen again; Approve mints onto the grant and the code exchanges', async () => {
+    const cp = fakeControlPlane()
+    await setup(cp, 'member', 'web')
+    const page = await consentPage()
+    const code = (await decide(page, 'approve')).searchParams.get('code')!
+    const first = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: page.verifier })
+    expect(first.status, JSON.stringify(first.json)).toBe(200)
+    // The operator revokes the key on the Keys page; the OP session in this browser still holds the grant.
+    await op!.db.update(schema.apiKey).set({ status: 'revoked' })
+
+    const again = await reauthorize(page.jar)
+    if (again.kind !== 'page') throw new Error(`expected the consent screen, got a redirect to ${again.url.href}`)
+    expect(again.body).toContain('Small models')
+    const back = await decide({ ...again, uid: consentUid(again.body) }, 'approve')
+    const code2 = back.searchParams.get('code')
+    expect(code2, back.href).toBeTruthy()
+    // The session's grant is reused: the second key is minted onto the same grant id.
+    expect(cp.calls.mint).toHaveLength(2)
+    expect(cp.calls.mint[1]!.grantId).toBe(cp.calls.mint[0]!.grantId)
+
+    const token = await tokenRequest({ grant_type: 'authorization_code', code: code2!, redirect_uri: redirectUri, code_verifier: again.verifier })
+    expect(token.status, JSON.stringify(token.json)).toBe(200)
+    const { payload } = await jwtVerify(token.json.access_token as string, await opJwks(op!), {
+      issuer: op!.issuer, audience: RESOURCE, typ: 'at+jwt', algorithms: ['RS256'],
+    })
+    const [active] = await op!.db.select().from(schema.apiKey).where(eq(schema.apiKey.status, 'active'))
+    expect(payload.mm_kid).toBe(active!.id)
+  }, T)
+
+  test('a web client re-authorizing in the same browser while the key is active does not ask again: a code straight back, no second mint', async () => {
+    const cp = fakeControlPlane()
+    await setup(cp, 'member', 'web')
+    const page = await consentPage()
+    const code = (await decide(page, 'approve')).searchParams.get('code')!
+    const first = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: page.verifier })
+    expect(first.status, JSON.stringify(first.json)).toBe(200)
+
+    const again = await reauthorize(page.jar)
+    if (again.kind !== 'redirect') throw new Error(`expected a redirect with a code, got the page ${again.body.slice(0, 200)}`)
+    const code2 = again.url.searchParams.get('code')
+    expect(code2, again.url.href).toBeTruthy()
+    expect(cp.calls.mint).toHaveLength(1)
+    const token = await tokenRequest({ grant_type: 'authorization_code', code: code2!, redirect_uri: redirectUri, code_verifier: again.verifier })
+    expect(token.status, JSON.stringify(token.json)).toBe(200)
   }, T)
 
   test('Deny ends with access_denied, mints nothing and saves no grant', async () => {
