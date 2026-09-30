@@ -40,6 +40,7 @@ unchanged. Key auth is not inherited. D1 is what makes the inheritance hold with
 | D6 | Shared verifier | **`@metamodels/schema/access-token`**, the offline RFC 9068 verifier core, extracted from `admin-token.ts` | ruling |
 | D7 | Where the consent-time mint runs | **Control plane.** The OP calls an internal route with an OP-signed assertion | operator |
 | D8 | `tools/call` dispatch | **The breed plans a synthetic request** that runs the proxy's own gate pipeline | ruling |
+| D9 | Protocol era | **Dual-era**: modern `2026-07-28` plus legacy `2025-11-25`/`2025-06-18`, both stateless (§4.1) | operator |
 
 Each ruling is recorded with its cost-if-wrong in §9.
 
@@ -73,7 +74,7 @@ Keys are org-level and have no owner. So an OAuth grant gets its own key:
   mint another. Otherwise the service creates a new key (audited as `key.create`, detail
   `{kind:'oauth', client_id}`).
 - **The token names the key.** The OP's `extraTokenClaims` adds `mm_kid` to MCP-resource access
-  tokens. It looks up the active oauth key whose `grant_id = token.grantId`. If there is none, the
+  tokens. It looks up the active oauth key whose `grant_id = token.grantId` **and** whose `key_paddock` is the token's paddock (one grant can back several paddocks, `interactions.ts:70-74`). If there is none, the
   key has been revoked and the grant is dead, so it refuses to issue (`invalid_grant`). A revoked key
   therefore stops working at the data plane on the next config invalidation, and cannot be
   refreshed back to life.
@@ -147,8 +148,7 @@ that fails. On refusal the interaction finishes with `access_denied` and a human
 ### 3.5 D7 — the mint runs in the control plane
 
 The consent screen stays in `auth`, beside login. `keys-service` stays the only writer of keys, so
-org scoping, the per-org `FOR UPDATE` lock, audit and `config-publisher` invalidation are all
-inherited.
+org scoping and audit are inherited. *(Amended 2026-09-29: `keys-service` holds no per-org lock and publishes no invalidation; its callers publish (`(app)/keys/actions.ts`, `admin-route.ts`). The internal route therefore calls `publishConfigInvalidation` itself, as those callers do.)*
 
 - **Route.** `POST /api/internal/v1/oauth-keys` is a control-plane Route Handler. It is called by
   the OP over the compose network at `CONTROL_PLANE_INTERNAL_URL`, which defaults to
@@ -260,8 +260,13 @@ mcpResult?(name: string, result: { status: number; body: unknown }): McpCallTool
   - `get_job_result` plans `GET /p/:slug/result/:jobId`. It reuses that route's own-job check,
     which is `job.keyId === resolvedKey.keyId`, so an MCP client sees only its own grant's jobs.
     This is the parent's Stateful Tools pattern: an opaque handle, re-authorized on every call.
-  - Images return as `image` content (base64). The plan sets a per-result byte cap (there is no
-    existing one to reuse); an oversized output returns `isError` naming the cap.
+  - The REST result route returns image *references* only (`comfyui/result.ts`). The MCP result
+    fetches each output via `/view` server-side and returns `image` content (base64), capped at
+    8 MiB per result; an oversized output returns `isError` naming the cap.
+  - Every MCP `tools/call`, `get_job_result` included, is rate-limited; the REST result route is not,
+    and stays unchanged.
+- **Ollama `list_models`.** M3's Ollama `toMcp` also emits `list_models` (`ollama/mcp.ts`); it plans
+  the fence-filtered model listing, like the other tools.
 - **Errors.**
   - A gate refusal (403 fence, 429 rate or quota, 503 upstream credential) becomes
     `CallToolResult { isError: true }`, carrying the same short reason string the proxy returns.
@@ -270,29 +275,37 @@ mcpResult?(name: string, result: { status: number; body: unknown }): McpCallTool
 
 ## 4. The endpoint
 
-### 4.1 Transport
+### 4.1 Transport (amended 2026-09-29: D9 dual-era, exact wire rules)
 
-`POST /p/:slug/mcp` accepts one JSON-RPC 2.0 request per POST, following Streamable HTTP under MCP
-revision `2026-07-28`:
+`POST /p/:slug/mcp`, Streamable HTTP, one JSON-RPC message per POST, answered `application/json`
+(no method streams, so SSE is never used). Stateless in both eras: no `Mcp-Session-Id` is minted,
+and `Mcp-Session-Id` / `Last-Event-ID` are ignored. `GET` and `DELETE` answer 405. The route is
+registered **before** the `ALL /p/:slug/*` catch-all, and a test proves the proxy never sees `/mcp`.
+No SDK: the method set is small.
 
-- It is stateless: no session, no `initialize`, no server-initiated requests.
-- It answers `application/json`. SSE is never needed, because no method streams.
-- `GET` and `DELETE` on the path answer 405.
-- A missing or unsupported `MCP-Protocol-Version` header gets 400.
-- The route is registered **before** the `ALL /p/:slug/*` catch-all, so the proxy never sees
-  `/mcp`. A test proves the proxy's catch-all is unreachable for that path.
+**Common to both eras.** An `Origin` header, when present, must be the `DATA_PLANE_URL` origin, else
+403 (DNS-rebinding rule). A notification answers 202 with no body. Batches are refused (`-32600`).
 
-The methods, all implemented without an SDK (the norm holds: three JSON-RPC methods need no
-dependency):
+**Modern (`2026-07-28`).** `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name` are
+required and must match the body — the header version equals
+`params._meta["io.modelcontextprotocol/protocolVersion"]`, and `=?base64?…?=` values are decoded
+before comparing — else 400 with `-32020` HeaderMismatch. An unsupported version answers 400 with
+`-32022` and `data: {supported, requested}`. An unknown method answers HTTP 404 with `-32601`.
 
 | Method | Result |
 |---|---|
-| `server/discover` | `serverInfo {name:'metamodels', title:<paddock name>, version}`, `capabilities {tools:{}}`, supported protocol versions |
-| `tools/list` | `breed.toMcp(fence)`, already sorted and valid (M3). `cacheScope: 'private'`. No pagination: the lists are small, and a `cursor` is ignored |
+| `server/discover` | `{resultType:'complete', supportedVersions, capabilities:{tools:{}}, _meta:{'io.modelcontextprotocol/serverInfo':{name:'metamodels', version}}, cacheScope:'private'}` |
+| `tools/list` | `breed.toMcp(fence)`, already sorted and valid (M3); `cacheScope: 'private'`; no pagination |
 | `tools/call` | §3.8 |
 
-Any other method gets `-32601`. Batches are refused with `-32600`, since the revision removed
-batching.
+**Legacy (`2025-11-25`, `2025-06-18`).** `initialize` answers `{protocolVersion, capabilities:{tools:{listChanged:false}}, serverInfo}`
+(echoing a supported legacy version, else the newest); `notifications/initialized` answers 202;
+`ping` answers `{}`; `tools/list` and `tools/call` reuse the same handlers with legacy result shapes.
+Era is chosen per request: `initialize`, or a legacy `MCP-Protocol-Version` without modern `_meta`,
+is legacy; everything else is validated as modern.
+
+OAuth (§4.2), the gate pipeline and metering are identical in both eras. `serverInfo.version` is the
+version the stack already exposes, or `'0.0.0'` if it exposes none.
 
 ### 4.2 Authentication at the data plane
 
@@ -315,14 +328,14 @@ Every refused token gets **one fixed 401 body and the bare challenge plus `resou
 
 ### 4.3 The consent screen (auth service)
 
-It is a server-rendered view in `views.ts`, with the same nonce CSP and no remote assets. Client
+It is a server-rendered view in `views.ts`, under the auth service's static CSP (it has no nonce; `views.ts:26-46`) and with no remote assets. Client
 logos are not loaded, because `img-src` stays `'self'`. It shows:
 
 - the client's `client_name` and its **`client_id` host**, set in bold. The host is the identity
   claim a user can check; the name is self-asserted;
 - the redirect host;
 - the paddock name and slug;
-- the signed-in user's email, with the existing switch-account link.
+- the signed-in user's email. *(No switch-account link exists to reuse; `switchAccountMiddleware` handles a different step. The plan decides whether the screen offers one.)*
 
 Approve and Deny post back to the OP. Deny ends the interaction with `access_denied`. If the
 preflight (§3.5) returns `allowed: false`, the screen shows the reason and only a Close button.
@@ -399,3 +412,25 @@ cleaned up afterwards):
 | D8 breed `mcpCall`/`mcpResult` through the proxy pipeline | Enforcement stays in `guard()`; annotations are untrusted | Medium: breed-contract growth; both breeds implement it |
 | Demote-to-viewer revokes oauth keys | Keeps D3 true after the fact | Low: an operator re-consents after re-promotion |
 | `mm_kid` via `extraTokenClaims`, refused when the key is dead | A revoked key must not refresh back to life | Low |
+| Refresh tokens without `offline_access` | oidc-provider issues refresh tokens only for `offline_access`, which it drops unless `prompt=consent`; real MCP clients send neither | Low: `issueRefreshToken` returns true for a CIMD client allowed `refresh_token` whose grant is bound to an MCP resource; every other client keeps the default |
+| Replay guard falls back to memory without `REDIS_URL` | Matches `publishConfigInvalidation`, a no-op without Redis; every compose stack has Redis | Low: per-process only in single-process dev; DEPLOY.md says so |
+
+## 10. Amendments from planning (2026-09-29)
+
+Found while writing the plan, each checked against `main` at `4d36af2`. The plan follows the code.
+
+| § | Was | Now |
+|---|---|---|
+| 3.1 | `mm_kid` looked up by grant | By grant **and** paddock — one grant can back several paddocks |
+| 3.5 | Mint inherits the org lock and invalidation | `keys-service` has neither; the internal route publishes the invalidation itself |
+| 3.5 | Preflight names a grant | No grant exists at preflight (`interactions.ts:141-153`); preflight carries no `grant_id` |
+| 3.8 | Images returned base64 by the result route | The route returns references; MCP fetches `/view` under an 8 MiB cap |
+| 3.8 | Ollama: chat, generate, embed | Plus M3's `list_models` |
+| 3.8 | — | MCP rate-limits every `tools/call`; the REST result route stays unlimited |
+| 3.8 | Unknown tool gets `-32602` | Answered before `mcpCall` runs |
+| 4.1 | Modern only; 400 for a bad version header | D9 dual-era; exact modern wire rules (`-32020`, `-32022`, 404 `-32601`, 202, Origin 403) |
+| 4.3 | Nonce CSP; existing switch-account link | Static auth CSP; no such link exists |
+| 3.4 | `AUTH_BIND`/`DATA_PLANE_BIND` stay | They exist only in `docker-compose.portainer.yml` |
+| 5 | Admin 401 gains `resource_metadata` | Four M2 tests assert the bare challenge and are updated with it |
+| 7 | RFC 1918 CIMD refusal in e2e | Proven by unit test; the e2e records the refusals it can reach. The e2e runs both a modern and a legacy sequence |
+
