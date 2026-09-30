@@ -347,8 +347,12 @@ test('the boundary: bearer only, access tokens only, keys never deleted, the con
   const noAuth = await api('GET', '/flocks')
   record('no Authorization header', noAuth.status)
   expect(noAuth.status).toBe(401)
-  expect(noAuth.headers.get('www-authenticate')).toBe('Bearer')
+  expect(noAuth.headers.get('www-authenticate'))
+    .toBe(`Bearer resource_metadata="${CONSOLE_URL}/.well-known/oauth-protected-resource/api/admin"`)
   expect(noAuth.body).toMatchObject({ type: 'about:blank', status: 401 })
+  const metadata = await fetch(`${CONSOLE_URL}/.well-known/oauth-protected-resource/api/admin`)
+  record('RFC 9728 metadata, no Authorization header', metadata.status)
+  expect(await metadata.json()).toMatchObject({ resource: `${CONSOLE_URL}/api/admin`, authorization_servers: [ISSUER] })
 
   const both = await api('GET', '/flocks', { ...bearer(state.operator), cookie: 'mm_session=x' })
   record('Authorization + Cookie: mm_session=x', both.status)

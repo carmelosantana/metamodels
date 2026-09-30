@@ -1,4 +1,5 @@
 import { ZodError } from 'zod'
+import { adminApiResource, protectedResourceMetadataUrl, requireOrigin } from '@metamodels/schema'
 import { ForbiddenError } from '../auth/authorize'
 import { JWKS_COOLDOWN_MS, KeySetUnavailableError, TokenError } from './admin-token'
 import { CredentialRebindError, NotFoundError } from './flocks-service'
@@ -48,17 +49,33 @@ export function problem(
 }
 
 /**
+ * The admin API's challenge: the scheme plus where to discover its authorization server (RFC 9728
+ * §5.1), and nothing else. `CONSOLE_URL` is read per call, as the rest of the admin path reads it;
+ * without a usable one (a unit test, a misconfigured console) it is the bare scheme, never a
+ * malformed parameter.
+ */
+export function adminChallenge(consoleUrl: string | undefined = process.env.CONSOLE_URL): string {
+  let origin: string
+  try {
+    origin = requireOrigin('CONSOLE_URL', consoleUrl)
+  } catch {
+    return 'Bearer'
+  }
+  return `Bearer resource_metadata="${protectedResourceMetadataUrl(adminApiResource(origin))}"`
+}
+
+/**
  * A 401 carrying the challenge RFC 9110 §15.5.2 makes MANDATORY on every 401 response — an HTTP
  * conformance rule, not an OAuth nicety.
  *
- * The bare scheme and nothing else. RFC 6750 §3 would let us add `error="invalid_token"` versus
- * `error="invalid_request"`, but that would restate in a header precisely the distinction the
- * `TokenError` arm's fixed `detail` refuses to make in the body, reopening the enumeration oracle.
- * Every 401 this API emits is built here, so the challenge cannot be forgotten on a new 401 and a
- * parameter cannot creep in on an old one.
+ * The scheme and `resource_metadata` (M4 §5), and nothing else. RFC 6750 §3 would let us add
+ * `error="invalid_token"` versus `error="invalid_request"`, but that would restate in a header
+ * precisely the distinction the `TokenError` arm's fixed `detail` refuses to make in the body,
+ * reopening the enumeration oracle. Every 401 this API emits is built here, so the challenge cannot be
+ * forgotten on a new 401 and an `error=` parameter cannot creep in on an old one.
  */
 export function unauthorized(detail: string): Response {
-  return problem(401, 'Unauthorized', detail, undefined, { 'www-authenticate': 'Bearer' })
+  return problem(401, 'Unauthorized', detail, undefined, { 'www-authenticate': adminChallenge() })
 }
 
 /**
