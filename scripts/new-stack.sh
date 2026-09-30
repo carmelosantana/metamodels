@@ -3,7 +3,7 @@
 #
 #   ./scripts/new-stack.sh                      # print the block
 #   ./scripts/new-stack.sh --out .env.portainer # also write it to a file (mode 600)
-#   ./scripts/new-stack.sh --domain api.example.com --tag 0.5.0 --email me@example.com
+#   ./scripts/new-stack.sh --domain api.example.com --tag 0.6.0 --email me@example.com
 #   DATA_PLANE_PORT=9787 ./scripts/new-stack.sh # another host port for the data plane (default 8787)
 #
 # Secrets are URL-safe hex on purpose: POSTGRES_PASSWORD is interpolated into DATABASE_URL,
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 DOMAIN='api.metamodels.cc'
-TAG='0.5.0'
+TAG='0.6.0'
 EMAIL='admin@metamodels.cc'
 OUT=''
 DATA_PLANE_PORT="${DATA_PLANE_PORT:-8787}"

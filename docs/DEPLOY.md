@@ -124,7 +124,7 @@ minimal deploy only needs seven secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.5.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.6.0 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
@@ -176,7 +176,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.5.0` | Image tag. The git tag `v0.5.0` publishes images as `0.5.0` — the `v` is stripped |
+| `TAG` | `0.6.0` | Image tag. The git tag `v0.6.0` publishes images as `0.6.0` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -394,9 +394,26 @@ as soon as possible, and losing the in-flight tokens signed with it is the point
 
 ### Upgrading from 0.5.x
 
-Set `DATA_PLANE_URL` if clients reach the data plane anywhere other than the compose default
-(`http://localhost:<DATA_PLANE_PORT>`, or `http://127.0.0.1:<DATA_PLANE_PORT>` on Portainer). The
-migration adds four columns to `api_key`; every existing key becomes kind `live` and keeps working.
+0.6.0 adds a per-paddock MCP endpoint at `<DATA_PLANE_URL>/p/<slug>/mcp`, signed in with OAuth
+through the sign-in service (see [Remote MCP connectors](#remote-mcp-connectors)).
+
+1. **Back up the database** (`pg_dump -Fc`). Migration `0009` only adds columns, but it is the only
+   way back.
+2. **Take the new stack file.** `docker-compose.portainer.yml` passes `DATA_PLANE_URL`,
+   `CONTROL_PLANE_INTERNAL_URL` and `OIDC_INTERNAL_URL` to the services that now need them.
+3. **Set `DATA_PLANE_URL`** if clients reach the data plane anywhere other than the compose default
+   (`http://localhost:<DATA_PLANE_PORT>`, or `http://127.0.0.1:<DATA_PLANE_PORT>` on Portainer). It
+   must be exactly what MCP clients see: tokens are issued for that URL. `auth`, `control-plane`
+   and `data-plane` refuse to start without a usable value.
+4. **Set `TAG` to `0.6.0`** if your stack pins it, and redeploy. `migrate` adds four columns to
+   `api_key`; every existing key becomes kind `live` and keeps working exactly as before.
+
+What changes for operators:
+
+- **Keys page.** Keys minted when a user approves an MCP app show as kind `oauth`, named
+  `<app> (MCP) · <user>`. Revoke one to disconnect that app; it has no secret to reveal.
+- **Team page.** Deactivating a user, or demoting them to `viewer`, revokes the MCP apps they approved.
+- **The admin API's 401** now names its RFC 9728 metadata in `WWW-Authenticate`.
 
 ### Upgrading from 0.4.x
 
