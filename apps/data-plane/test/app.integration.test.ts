@@ -6,6 +6,7 @@ import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
 import { createFakeOllama } from './helpers/fake-ollama.js'
 import { seal, type SealBinding } from '@metamodels/schema/sealed'
+import { quiet } from './helpers/quiet.js'
 import { makeDb, seedFixture, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
 import * as schema from '@metamodels/schema'
 import { hashApiKey } from '@metamodels/schema'
@@ -186,11 +187,13 @@ describe('data-plane /p/:slug — the sealed upstream credential', () => {
   })
 
   test('fails closed with a 503 when the credential cannot be opened, and never calls upstream', async () => {
+    const err = quiet('error')
     const { f, seen, req } = await appWith((b) => seal('upstream-tok', testRing(), b))
     const res = await req(f.keyPlaintext)
     expect(res.status).toBe(503)
     expect(await res.json()).toEqual({ error: 'upstream credential unavailable' })
     expect(seen).toEqual([])
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('cannot open sealed value'))
   })
 
   test('the 503 comes after the key check, so an unauthenticated caller cannot probe for it', async () => {
