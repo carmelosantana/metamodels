@@ -52,15 +52,17 @@ describe('RedisReplayGuard with Redis unreachable (follow-up ruling F3)', () => 
     const { port } = server.address() as { port: number }
     const client = new Redis(`redis://127.0.0.1:${port}`, REPLAY_REDIS_OPTIONS)
     client.on('error', () => {})
+    let sentinel: NodeJS.Timeout | undefined
     try {
       const started = Date.now()
       const outcome = await Promise.race([
         new RedisReplayGuard(client).claimOnce('j1', 120).then(() => 'resolved', () => 'rejected'),
-        new Promise((resolve) => setTimeout(() => resolve('still pending after 5 s'), 5_000)),
+        new Promise((resolve) => { sentinel = setTimeout(() => resolve('still pending after 5 s'), 5_000) }),
       ])
       expect(outcome).toBe('rejected')
       expect(Date.now() - started).toBeLessThan(3_000)
     } finally {
+      clearTimeout(sentinel)
       client.disconnect()
       for (const s of sockets) s.destroy()
       await new Promise((resolve) => server.close(resolve))
