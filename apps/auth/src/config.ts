@@ -1,3 +1,5 @@
+import { requireOrigin } from '@metamodels/schema'
+
 export interface AuthConfig {
   /** Public issuer URL (origin only, no trailing slash). Browsers, clients and token `iss` all see this. */
   issuer: string
@@ -16,6 +18,13 @@ export interface AuthConfig {
   allowEphemeralKey: boolean
   databaseUrl: string
   port: number
+  /**
+   * Public origin of the data plane. Every MCP resource is `${dataPlaneUrl}/p/<slug>/mcp`
+   * (`mcpResource`), so the OP resolves resource indicators against it (M4 D2).
+   */
+  dataPlaneUrl: string
+  /** Where the OP reaches the control plane's internal routes over the compose network (M4 D7). */
+  controlPlaneInternalUrl: string
 }
 
 type Env = Record<string, string | undefined>
@@ -91,5 +100,9 @@ export function loadAuthConfig(env: Env): AuthConfig {
     allowEphemeralKey,
     databaseUrl: required(env, 'DATABASE_URL'),
     port,
+    dataPlaneUrl: requireOrigin('DATA_PLANE_URL', env.DATA_PLANE_URL),
+    controlPlaneInternalUrl: env.CONTROL_PLANE_INTERNAL_URL?.trim()
+      ? requireOrigin('CONTROL_PLANE_INTERNAL_URL', env.CONTROL_PLANE_INTERNAL_URL)
+      : 'http://control-plane:3000',
   }
 }

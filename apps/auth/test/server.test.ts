@@ -18,6 +18,8 @@ function testConfig(): AuthConfig {
     allowEphemeralKey: true,
     databaseUrl: 'unused-db-is-injected',
     port: 0,
+    dataPlaneUrl: 'http://dp.test',
+    controlPlaneInternalUrl: 'http://cp.test',
   }
 }
 

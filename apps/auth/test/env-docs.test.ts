@@ -12,6 +12,7 @@ test('.env.example documents every variable the auth service reads', () => {
     OIDC_COOKIE_KEYS: 'y'.repeat(16),
     OIDC_ALLOW_EPHEMERAL_KEY: 'true',
     DATABASE_URL: 'postgres://x',
+    DATA_PLANE_URL: 'https://dp.example.test',
   }
   const env = new Proxy(valid, {
     get(target, key: string) { seen.add(key); return target[key] },

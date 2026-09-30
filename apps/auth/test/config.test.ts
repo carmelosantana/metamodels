@@ -18,6 +18,7 @@ function env(over: Record<string, string | undefined> = {}): Record<string, stri
     OIDC_COOKIE_KEYS: 'cookie-key-new-0123456789, cookie-key-old-0123456789',
     OIDC_SIGNING_KEY: rsaPemBase64(),
     DATABASE_URL: 'postgres://u:p@db:5432/mm',
+    DATA_PLANE_URL: 'https://dp.example.test',
     ...over,
   }
 }
@@ -33,7 +34,7 @@ describe('loadAuthConfig', () => {
     expect(cfg.port).toBe(3100)
   })
 
-  test.each(['OIDC_ISSUER', 'CONSOLE_URL', 'CONSOLE_CLIENT_SECRET', 'OIDC_COOKIE_KEYS', 'DATABASE_URL'])(
+  test.each(['OIDC_ISSUER', 'CONSOLE_URL', 'CONSOLE_CLIENT_SECRET', 'OIDC_COOKIE_KEYS', 'DATABASE_URL', 'DATA_PLANE_URL'])(
     'names %s when it is missing',
     (name) => {
       expect(() => loadAuthConfig(env({ [name]: undefined }))).toThrow(`${name} is required`)
@@ -87,4 +88,12 @@ describe('loadAuthConfig', () => {
     expect(loadAuthConfig(env({ AUTH_PORT: '4100' })).port).toBe(4100)
     expect(() => loadAuthConfig(env({ AUTH_PORT: 'eighty' }))).toThrow('AUTH_PORT must be a TCP port number')
   })
+})
+
+test('DATA_PLANE_URL is an origin, and CONTROL_PLANE_INTERNAL_URL defaults to the compose service', () => {
+  const cfg = loadAuthConfig(env({ DATA_PLANE_URL: 'https://dp.example.test/' }))
+  expect(cfg.dataPlaneUrl).toBe('https://dp.example.test')
+  expect(cfg.controlPlaneInternalUrl).toBe('http://control-plane:3000')
+  expect(loadAuthConfig(env({ CONTROL_PLANE_INTERNAL_URL: 'http://cp:3000' })).controlPlaneInternalUrl).toBe('http://cp:3000')
+  expect(() => loadAuthConfig(env({ DATA_PLANE_URL: 'https://dp.example.test/p' }))).toThrow('DATA_PLANE_URL must be an origin')
 })
