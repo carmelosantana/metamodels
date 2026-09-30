@@ -2,10 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import { createHash, randomBytes } from 'node:crypto'
 import { createLocalJWKSet, type JSONWebKeySet } from 'jose'
-import type { ClientMetadata } from 'oidc-provider'
+import type { ClientMetadata, Provider } from 'oidc-provider'
 import type { AuthConfig } from '../../src/config.js'
 import { CLI_CLIENT_ID, CONSOLE_CLIENT_ID } from '@metamodels/schema'
-import { createProvider } from '../../src/provider.js'
+import { cimdFixtureFetch } from '../../src/cimd.js'
+import { createProvider, type ProviderOptions } from '../../src/provider.js'
 import { makeDb, type TestDb } from './db.js'
 
 export const CONSOLE_URL = 'http://console.test'
@@ -15,12 +16,58 @@ export const REDIRECT_URI = `${CONSOLE_URL}/auth/callback`
 export interface TestOp {
   issuer: string
   db: TestDb
+  provider: Provider
   close(): Promise<void>
+}
+
+export const DATA_PLANE_URL = 'http://dp.test'
+/** Never fetched from the network: `cimdFixtureFetch` answers for it. */
+export const CIMD_CLIENT_ID = 'https://mcp-client.example.test/client.json'
+/** A native client's loopback redirect (RFC 8252 §7.3). Nothing listens on it: tests stop at the redirect. */
+export const CIMD_REDIRECT_URI = 'http://127.0.0.1:43210/callback'
+
+/** A well-formed public MCP client's Client ID Metadata Document. */
+export function cimdDocument(over: Partial<ClientMetadata> = {}): ClientMetadata {
+  return {
+    client_id: CIMD_CLIENT_ID,
+    client_name: 'Test MCP client',
+    redirect_uris: [CIMD_REDIRECT_URI],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    application_type: 'native',
+    ...over,
+  }
+}
+
+/** The configuration every test OP runs with, on `issuer`. */
+export function authConfig(issuer: string, over: Partial<AuthConfig> = {}): AuthConfig {
+  return {
+    issuer,
+    consoleUrl: CONSOLE_URL,
+    consoleClientSecret: CONSOLE_SECRET,
+    cookieKeys: ['cookie-key-0123456789abcdef'],
+    signingKeyPem: null,
+    previousSigningKeyPems: [],
+    allowEphemeralKey: true,
+    databaseUrl: 'unused-in-tests',
+    port: 0,
+    dataPlaneUrl: DATA_PLANE_URL,
+    controlPlaneInternalUrl: 'http://cp.test',
+    ...over,
+  }
 }
 
 /** A real OP on an ephemeral port, backed by a fresh pglite database. */
 export async function startTestOp(
-  opts: { extraClients?: ClientMetadata[]; signingKeyPem?: string; previousSigningKeyPems?: string[] } = {},
+  opts: {
+    extraClients?: ClientMetadata[]
+    signingKeyPem?: string
+    previousSigningKeyPems?: string[]
+    /** CIMD documents the OP "fetches", by client_id. */
+    cimdDocuments?: Record<string, ClientMetadata>
+    providerOptions?: ProviderOptions
+  } = {},
 ): Promise<TestOp> {
   const db = await makeDb()
   let handler: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => { res.statusCode = 503; res.end() }
@@ -28,21 +75,20 @@ export async function startTestOp(
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   // The issuer must be known before the provider exists, so the port is taken first.
   const issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  const cfg: AuthConfig = {
-    issuer,
-    consoleUrl: CONSOLE_URL,
-    consoleClientSecret: CONSOLE_SECRET,
-    cookieKeys: ['cookie-key-0123456789abcdef'],
+  const cfg = authConfig(issuer, {
     signingKeyPem: opts.signingKeyPem ?? null,
     previousSigningKeyPems: opts.previousSigningKeyPems ?? [],
-    allowEphemeralKey: true,
-    databaseUrl: 'unused-in-tests',
-    port: 0,
-  }
-  handler = createProvider(cfg, db, { extraClients: opts.extraClients }).callback()
+  })
+  const provider = createProvider(cfg, db, {
+    extraClients: opts.extraClients,
+    ...(opts.cimdDocuments ? { fetch: cimdFixtureFetch(opts.cimdDocuments) } : {}),
+    ...opts.providerOptions,
+  })
+  handler = provider.callback()
   return {
     issuer,
     db,
+    provider,
     close: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }),
   }
 }

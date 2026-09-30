@@ -1,6 +1,7 @@
 import Provider, { errors, type ClientMetadata, type Configuration } from 'oidc-provider'
 import { CLI_CLIENT_ID, CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { makeFindAccount } from './account.js'
+import { cimdFeature, cimdGateForIssuer, ssrfGuardAvailable } from './cimd.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
 import type { Db } from './db.js'
@@ -57,6 +58,13 @@ export interface ProviderOptions {
    * prompt), and granted no resource: absent from `resourcesByClient`, they get `invalid_target`.
    */
   extraClients?: readonly ClientMetadata[]
+  /**
+   * Replaces oidc-provider's outbound fetch. Tests and the e2e OP answer CIMD documents through it
+   * (`cimdFixtureFetch`); production leaves it unset.
+   */
+  fetch?: Configuration['fetch']
+  /** Whether the SSRF guard is installed. Injectable so the boot refusal can be tested. */
+  ssrfGuardAvailable?: () => boolean
 }
 
 /** The operator console — a confidential client using the authorization-code flow with PKCE. */
@@ -90,6 +98,16 @@ export function cliClient(): ClientMetadata {
 }
 
 export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = {}): Provider {
+  const cimd = cimdGateForIssuer(cfg.issuer)
+  if (cimd.enabled && !(opts.ssrfGuardAvailable ?? ssrfGuardAvailable)()) {
+    throw new Error(
+      'Client ID Metadata Documents need oidc-provider\'s SSRF guard, and it is not installed (no undici ' +
+      'global dispatcher). Refusing to start rather than fetch client documents unguarded.')
+  }
+  if (!cimd.enabled) {
+    // eslint-disable-next-line no-console
+    console.warn(`[auth] Client ID Metadata Documents are off: ${cimd.reason}`)
+  }
   const configuration: Configuration = {
     adapter: pgAdapterFactory(db),
     clients: [consoleClient(cfg), cliClient(), ...(opts.extraClients ?? [])],
@@ -110,6 +128,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     routes: { code_verification: DEVICE_VERIFICATION_PATH },
     features: {
       devInteractions: { enabled: false },
+      clientIdMetadataDocument: cimd.enabled ? cimdFeature() : { enabled: false },
       resourceIndicators: {
         enabled: true,
         getResourceServerInfo: makeGetResourceServerInfo(resourceServers(cfg.consoleUrl), resourcesByClient(cfg.consoleUrl)),
@@ -160,6 +179,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // consumed one revokes the whole grant, so reuse of a stolen token is detected (spec §4.4).
     // Only the CLI holds refresh tokens: the console's client metadata has no refresh_token grant.
     rotateRefreshToken: true,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
     renderError: (ctx, out) => {
       ctx.type = 'html'
       ctx.body = renderMessagePage('Sign-in error', out.error_description ?? out.error)
