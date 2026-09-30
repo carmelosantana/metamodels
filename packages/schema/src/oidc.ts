@@ -35,6 +35,14 @@ export const MCP_SCOPE = 'mcp'
 export const CONSENT_ASSERTION_TYP = 'mm-consent+jwt'
 
 /**
+ * The consent screen's one refusal for a paddock that is unknown, disabled or in another org. The
+ * control plane's preflight gives it for a foreign paddock and the auth service renders it for one
+ * that vanished before consent: one definition, so the two pages cannot drift apart and tell the
+ * cases apart (M4 F8).
+ */
+export const CONSENT_PADDOCK_REFUSAL = 'This paddock does not exist, is disabled, or is not in your organization.'
+
+/**
  * A paddock's MCP resource indicator (RFC 8707), and therefore the `aud` of every MCP access token
  * for it. MCP clients send the URL they connect to as `resource`, so this IS the endpoint URL.
  * `dataPlaneUrl` is `DATA_PLANE_URL`: a bare origin, configured, never derived.

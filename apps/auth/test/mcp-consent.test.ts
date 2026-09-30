@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { jwtVerify } from 'jose'
 import * as schema from '@metamodels/schema'
-import { mcpResource } from '@metamodels/schema'
+import { CONSENT_PADDOCK_REFUSAL, mcpResource } from '@metamodels/schema'
 import { MINT_DENIED_PADDOCK, type ConsentApi, type ConsentRequest, type Preflight } from '../src/consent-api.js'
 import { seedUser, type TestDb } from './helpers/db.js'
 import {
@@ -298,8 +298,8 @@ describe('MCP consent (M4 §4.3)', () => {
   }, T)
 
   test('a disabled paddock renders byte for byte the page the control plane\'s answer for another org\'s paddock does', async () => {
-    // The preflight's refusal for a paddock outside the user's org, in the words it uses (PREFLIGHT_NO_PADDOCK).
-    const cp = fakeControlPlane({ preflight: { allowed: false, reason: MINT_DENIED_PADDOCK } })
+    // The preflight's refusal for a paddock outside the user's org: the shared words its PREFLIGHT_NO_PADDOCK is.
+    const cp = fakeControlPlane({ preflight: { allowed: false, reason: CONSENT_PADDOCK_REFUSAL } })
     await setup(cp)
     const foreign = await consentPage()
     await op!.db.update(schema.paddock).set({ status: 'disabled' })
