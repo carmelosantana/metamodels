@@ -240,8 +240,9 @@ mcpCall?(name: string, args: unknown, fence: C):
 mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): McpCallToolResult
 ```
 
-- **Dispatch.** The MCP handler builds a `RequestCtx` from the planned request. It then runs the
-  **same pipeline** as `ALL /p/:slug/*`:
+- **Dispatch.** The MCP handler first has the breed plan the call; a call it cannot plan is
+  `isError` (`invalid arguments: …`) and spends no rate-limit or quota budget *(amended 2026-09-30, F6)*.
+  It builds a `RequestCtx` from the planned request, then runs the **same pipeline** as `ALL /p/:slug/*`:
   - rate limit, then quota;
   - `guard(ctx, fence)`, then `handle` or `proxyToUpstream`, then `meter`.
 
@@ -253,6 +254,10 @@ mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): M
   - `chat` and `generate` are planned with `stream: false`, because MCP tool results are one
     JSON-RPC response. `embed` carries no `stream` field: Ollama's `/api/embed` does not stream.
     SSE streaming of a single `tools/call` is out of scope.
+  - Only what each inputSchema declares is forwarded. `chat` rebuilds every message as
+    `{ role, content }` (both strings; `role` is `system`, `user` or `assistant`) and refuses a message
+    carrying any other field; `embed`'s `input` must be strings. Both refusals are `invalid arguments`
+    *(amended 2026-09-30, F7)*.
   - `mcpResult` returns the assistant text, or the embedding array, as `text` content, plus
     `structuredContent`.
 - **ComfyUI.**
@@ -456,4 +461,6 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 4.1 (F1) | `/p/:slug/mcp/` fell through to the proxy catch-all | 404 for every method on `/mcp/` and beneath it; never proxied |
 | 4.1 (F2) | No request body limit on MCP or the proxy | 32 MiB on every `/p/*` body; 413 before authentication for a declared `Content-Length`, as it is read (after authentication) otherwise |
 | 4.2 (F5) | Challenge `Bearer resource_metadata="…"` | `Bearer resource_metadata="…", scope="mcp"` on every MCP 401 |
+| 3.8 (F6) | Rate limit and quota spent before `mcpCall` validated the arguments | Plan first; an unplannable call is `isError` and spends nothing; every call that plans is still limited |
+| 3.8 (F7) | `chat` forwarded whole message objects | Each message rebuilt as `{ role, content }`, anything else refused; `embed` input must be strings |
 

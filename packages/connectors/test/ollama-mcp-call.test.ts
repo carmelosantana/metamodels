@@ -24,6 +24,39 @@ describe('ollamaMcpCall (M4 D8)', () => {
     expect(plan).toEqual({ ok: true, request: { method: 'POST', path: '/api/chat', body: { model: 'llama3.2:1b', messages, stream: false } } })
   })
 
+  test('chat rebuilds each message from role and content alone', () => {
+    const sent = [{ role: 'system', content: 's' }, { role: 'assistant', content: 'a' }, { role: 'user', content: 'u' }]
+    const plan = ollamaMcpCall('chat', { model: 'llama3.2:1b', messages: sent }, fence)
+    expect(plan).toEqual({ ok: true, request: { method: 'POST', path: '/api/chat', body: { model: 'llama3.2:1b', messages: sent, stream: false } } })
+    if (!plan.ok) return
+    const planned = (plan.request.body as { messages: unknown[] }).messages
+    for (const [i, m] of planned.entries()) expect(m, String(i)).not.toBe(sent[i])
+  })
+
+  test('a chat message that is not exactly { role, content } is refused, never forwarded', () => {
+    const cases: Array<[unknown[], string]> = [
+      [[{ role: 'user', content: 'hi', images: ['aGk='] }], 'messages[0] may carry only role and content'],
+      [[{ role: 'user', content: 'hi' }, { role: 'assistant', content: '', tool_calls: [] }], 'messages[1] may carry only role and content'],
+      [[{ role: 'tool', content: 'x' }], 'messages[0].role must be system, user or assistant'],
+      [[{ content: 'x' }], 'messages[0].role must be system, user or assistant'],
+      [[{ role: 'user', content: 42 }], 'messages[0].content must be a string'],
+      [[{ role: 'user' }], 'messages[0].content must be a string'],
+      [['hi'], 'messages[0] must be an object'],
+      [[null], 'messages[0] must be an object'],
+      [[['user', 'hi']], 'messages[0] must be an object'],
+    ]
+    for (const [messages, why] of cases) {
+      expect(ollamaMcpCall('chat', { model: 'm', messages }, open), why).toEqual({ ok: false, error: `invalid arguments: ${why}` })
+    }
+  })
+
+  test('embed input must be strings', () => {
+    for (const input of [[1], ['a', null], [{ text: 'a' }], [['a']]]) {
+      expect(ollamaMcpCall('embed', { model: 'm', input }, open), JSON.stringify(input))
+        .toEqual({ ok: false, error: 'invalid arguments: input must be an array of strings' })
+    }
+  })
+
   test('the model is NOT checked here: guard() is the enforcement point', () => {
     const plan = ollamaMcpCall('chat', { model: 'llama3:70b', messages }, fence)
     expect(plan.ok).toBe(true)

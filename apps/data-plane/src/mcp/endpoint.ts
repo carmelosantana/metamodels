@@ -184,12 +184,14 @@ export function registerMcpRoutes(app: Hono, deps: { pipeline: Pipeline; configS
     const { breed } = scope
     if (!breed.mcpCall || !breed.mcpResult) return toolError('this paddock cannot run tools')
 
-    // Every tools/call, get_job_result included, is rate-limited and quota-checked (spec M4 §1), in either era.
-    const limited = await pipeline.limits(scope)
-    if (limited) return toolError(refusalReason(limited))
-
+    // Plan first: a call the breed cannot plan is isError and spends no rate-limit or quota budget
+    // (follow-up ruling F6). Pure, no I/O, so planning before the gates costs nothing.
     const plan = breed.mcpCall(name, args, fence)
     if (!plan.ok) return toolError(plan.error)
+
+    // Every call that plans, get_job_result included, is rate-limited and quota-checked (spec M4 §3.8), in either era.
+    const limited = await pipeline.limits(scope)
+    if (limited) return toolError(refusalReason(limited))
     const shape = (r: { status: number; body: unknown }) => breed.mcpResult!(name, r, fence)
 
     try {

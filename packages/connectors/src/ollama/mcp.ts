@@ -114,11 +114,35 @@ function upstreamError(result: { status: number; body: unknown }): string {
   return `upstream error (${result.status})${typeof e === 'string' && e ? `: ${e}` : ''}`
 }
 
+const CHAT_ROLES: ReadonlySet<string> = new Set(['system', 'user', 'assistant'])
+
 /**
- * Plan an Ollama `tools/call`. Only the fields each tool's inputSchema declares are copied, so a
- * caller cannot reach `options`, `keep_alive` or `format`; inference is always `stream: false`
- * (one JSON-RPC response per call). The model is NOT checked here — `guard()` does that, with the
- * same reason string the proxy returns.
+ * The chat tool's `messages`, rebuilt message by message from exactly what its inputSchema declares:
+ * `role` (system, user or assistant) and `content`, both strings. A message carrying anything else
+ * (`images`, `tool_calls`, `thinking`…) is refused, not trimmed: the schema says
+ * `additionalProperties: false`, so the caller asked for something this tool does not offer.
+ */
+function chatMessages(v: unknown): Array<{ role: string; content: string }> | string {
+  if (!Array.isArray(v) || v.length === 0) return 'messages must be a non-empty array'
+  const out: Array<{ role: string; content: string }> = []
+  for (const [i, m] of v.entries()) {
+    const o = argsObject(m)
+    if (!o) return `messages[${i}] must be an object`
+    if (Object.keys(o).some((k) => k !== 'role' && k !== 'content')) return `messages[${i}] may carry only role and content`
+    if (typeof o.role !== 'string' || !CHAT_ROLES.has(o.role)) return `messages[${i}].role must be system, user or assistant`
+    if (typeof o.content !== 'string') return `messages[${i}].content must be a string`
+    out.push({ role: o.role, content: o.content })
+  }
+  return out
+}
+
+/**
+ * Plan an Ollama `tools/call`. The request is built only from what each tool's inputSchema declares:
+ * other top-level arguments are dropped, so a caller cannot reach `options`, `keep_alive` or `format`;
+ * each chat message is rebuilt from its `role` and `content`, and one carrying any other field is
+ * refused; `embed`'s `input` must be strings. Anything malformed is `invalid arguments`. Inference is
+ * always `stream: false` (one JSON-RPC response per call). The model is NOT checked here — `guard()`
+ * does that, with the same reason string the proxy returns.
  */
 export function ollamaMcpCall(name: string, args: unknown, fence: OllamaConstraint): McpCallPlan {
   if (!ollamaToMcp(fence).some((t) => t.name === name)) return { ok: false, error: `unknown tool: ${name}` }
@@ -127,9 +151,11 @@ export function ollamaMcpCall(name: string, args: unknown, fence: OllamaConstrai
   if (name === 'list_models') return { ok: true, request: { method: 'GET', path: '/api/tags' } }
   if (typeof a.model !== 'string') return invalid('model must be a string')
   switch (name) {
-    case 'chat':
-      if (!Array.isArray(a.messages) || a.messages.length === 0) return invalid('messages must be a non-empty array')
-      return { ok: true, request: { method: 'POST', path: '/api/chat', body: { model: a.model, messages: a.messages, stream: false } } }
+    case 'chat': {
+      const messages = chatMessages(a.messages)
+      if (typeof messages === 'string') return invalid(messages)
+      return { ok: true, request: { method: 'POST', path: '/api/chat', body: { model: a.model, messages, stream: false } } }
+    }
     case 'generate':
       if (typeof a.prompt !== 'string') return invalid('prompt must be a string')
       if (a.system !== undefined && typeof a.system !== 'string') return invalid('system must be a string')
@@ -142,7 +168,8 @@ export function ollamaMcpCall(name: string, args: unknown, fence: OllamaConstrai
       }
     case 'embed':
       if (!Array.isArray(a.input) || a.input.length === 0) return invalid('input must be a non-empty array')
-      return { ok: true, request: { method: 'POST', path: '/api/embed', body: { model: a.model, input: a.input } } }
+      if (!a.input.every((x) => typeof x === 'string')) return invalid('input must be an array of strings')
+      return { ok: true, request: { method: 'POST', path: '/api/embed', body: { model: a.model, input: [...a.input] } } }
   }
   return { ok: false, error: `unknown tool: ${name}` }
 }
