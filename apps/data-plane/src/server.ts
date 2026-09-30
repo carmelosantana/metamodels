@@ -5,6 +5,7 @@ import postgres from 'postgres'
 import Redis from 'ioredis'
 import * as schema from '@metamodels/schema'
 import { requireOrigin } from '@metamodels/schema'
+import { createAccessTokenVerifier } from '@metamodels/schema/access-token'
 import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
 import { createApp } from './app.js'
 import { buildRegistry } from './breeds.js'
@@ -94,6 +95,13 @@ export function startServer(cfg: ServerConfig): void {
     registry: buildRegistry(),
     jobStore: new PostgresJobStore(db),
     usageReader: new DrizzleUsageReader(db),
+    mcp: {
+      dataPlaneUrl: cfg.dataPlaneUrl,
+      oidcIssuer: cfg.oidcIssuer,
+      // `iss` is the public issuer; the key set is fetched over the deployment's network: the OP's
+      // published `${issuer}/jwks` re-homed onto OIDC_INTERNAL_URL, as the control plane's onOrigin does.
+      verify: createAccessTokenVerifier({ issuer: cfg.oidcIssuer, jwksUrl: `${cfg.oidcInternalUrl}/jwks`, typ: 'at+jwt' }),
+    },
     readiness: async () => {
       await db.execute(sql`select 1`)
       if (redis) await redis.ping()

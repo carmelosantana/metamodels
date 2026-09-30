@@ -16,7 +16,7 @@ export function createFakeOllama(): Hono {
   app.post('/api/chat', async (c) => {
     const body = await c.req.json<{ stream?: boolean }>()
     const finalFrame = { model: 'llama3.2:1b', done: true, done_reason: 'stop', prompt_eval_count: 11, eval_count: 22 }
-    if (body.stream === false) return c.json(finalFrame)
+    if (body.stream === false) return c.json({ ...finalFrame, message: { role: 'assistant', content: 'Hello' } })
     return ndjson([
       { message: { role: 'assistant', content: 'Hel' }, done: false },
       { message: { role: 'assistant', content: 'lo' }, done: false },
@@ -27,7 +27,7 @@ export function createFakeOllama(): Hono {
   app.post('/api/generate', async (c) => {
     const body = await c.req.json<{ stream?: boolean }>()
     const finalFrame = { done: true, response: '', prompt_eval_count: 9, eval_count: 13 }
-    if (body.stream === false) return c.json({ response: 'hi', ...finalFrame })
+    if (body.stream === false) return c.json({ ...finalFrame, response: 'hi' })
     return ndjson([{ response: 'hi', done: false }, finalFrame])
   })
 
