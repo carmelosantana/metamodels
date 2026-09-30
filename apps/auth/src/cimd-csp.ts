@@ -16,6 +16,7 @@ const INTERACTION_PAGE = /^\/(?:interaction|auth)\/([A-Za-z0-9_-]+)/
  * block the hand-back. For an HTML response on an interaction whose client is a CIMD client, this
  * appends that interaction's `redirect_uri` origin — validated by oidc-provider at `/auth`, and
  * re-checked against the client here — to `form-action`. Nothing else changes, on any response.
+ * If either lookup fails, the static policy stays and the failure is logged (follow-up ruling F4).
  */
 export function cimdCspMiddleware(opts: { provider: Provider; consoleOrigin: string }): Middleware {
   return async (ctx, next) => {
@@ -23,14 +24,29 @@ export function cimdCspMiddleware(opts: { provider: Provider; consoleOrigin: str
     if (!ctx.response.is('html')) return
     const match = INTERACTION_PAGE.exec(ctx.path)
     if (!match) return
-    const interaction = await opts.provider.Interaction.find(match[1]!)
-    if (!interaction) return
-    const { client_id: clientId, redirect_uri: redirectUri } = interaction.params as Record<string, unknown>
-    if (typeof clientId !== 'string' || typeof redirectUri !== 'string') return
-    const client = await opts.provider.Client.find(clientId).catch(() => undefined)
-    if (!client || !isCimdClient(client) || !client.redirectUriAllowed(redirectUri)) return
-    const origin = new URL(redirectUri).origin
-    if (origin === 'null') return
-    ctx.set('Content-Security-Policy', authCsp([opts.consoleOrigin, origin]))
+    let origin: string | null
+    try {
+      origin = await cimdRedirectOrigin(opts.provider, match[1]!)
+    } catch (e) {
+      // The page is built and already carries the static policy: a failed lookup (the adapter's
+      // database, a CIMD document refetch) only means form-action is not widened. The hand-back
+      // redirect may then be blocked, which the user can retry; a 500 in place of the page could not be.
+      // eslint-disable-next-line no-console
+      console.warn(`[auth] form-action not widened for ${ctx.path}: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (origin !== null) ctx.set('Content-Security-Policy', authCsp([opts.consoleOrigin, origin]))
   }
+}
+
+/** The validated `redirect_uri` origin of interaction `uid`, when its client is a CIMD client; else null. May throw. */
+async function cimdRedirectOrigin(provider: Provider, uid: string): Promise<string | null> {
+  const interaction = await provider.Interaction.find(uid)
+  if (!interaction) return null
+  const { client_id: clientId, redirect_uri: redirectUri } = interaction.params as Record<string, unknown>
+  if (typeof clientId !== 'string' || typeof redirectUri !== 'string') return null
+  const client = await provider.Client.find(clientId)
+  if (!client || !isCimdClient(client) || !client.redirectUriAllowed(redirectUri)) return null
+  const origin = new URL(redirectUri).origin
+  return origin === 'null' ? null : origin
 }
