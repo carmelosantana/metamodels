@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Browser, type Page } from '@playwright/test'
 import { OPERATOR_EMAIL, OPERATOR_PASSWORD } from './env.js'
 
 /** Sign in as the seeded operator and land on the dashboard. */
@@ -28,4 +28,24 @@ export function watchForViolations(page: Page): string[] {
   })
   page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`))
   return problems
+}
+
+/** Give a seeded user `role` on the console's Team page, as the operator. A no-op when it has it already. */
+export async function ensureRole(browser: Browser, email: string, role: string) {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  try {
+    await login(page)
+    await page.goto('/team')
+    const select = page.getByRole('row').filter({ hasText: email }).getByRole('combobox')
+    if (await select.inputValue() !== role) {
+      await select.selectOption(role)
+      await expect.poll(async () => {
+        await page.reload()
+        return page.getByRole('row').filter({ hasText: email }).getByRole('combobox').inputValue()
+      }).toBe(role)
+    }
+  } finally {
+    await context.close()
+  }
 }

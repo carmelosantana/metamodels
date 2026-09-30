@@ -1,10 +1,8 @@
-import { expect, test, type Browser } from '@playwright/test'
-import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { expect, test } from '@playwright/test'
+import { rmSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { login, watchForViolations } from './helpers/console.js'
+import { adminCli } from './helpers/admin-cli.js'
+import { ensureRole } from './helpers/console.js'
 import { OPERATOR_EMAIL, OPERATOR_PASSWORD, RUN_ID } from './helpers/env.js'
 
 /**
@@ -41,7 +39,6 @@ test.skip(refusal !== null, refusal ?? '')
 test.describe.configure({ mode: 'serial' })
 
 const API = `${CONSOLE_URL}/api/admin/v1`
-const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'cli')
 /** RFC 2606 reserves `.invalid`: the flock's upstream resolves nowhere, on any network. */
 const UNREACHABLE_UPSTREAM = 'http://ollama.invalid:11434'
 
@@ -49,9 +46,6 @@ const FLOCK_NAME = `e2e-admin-flock-${RUN_ID}`
 const PADDOCK_NAME = `e2e-admin-paddock-${RUN_ID}`
 const PADDOCK_SLUG = `e2e-admin-${RUN_ID}`
 const KEY_NAME = `e2e-admin-key-${RUN_ID}`
-
-interface Cli { code: number | null; stdout: string; stderr: string }
-interface Credential { resource: string; scope: string; accessToken: string; refreshToken?: string }
 
 /** Carried between the ordered steps below. */
 const state = {
@@ -63,23 +57,7 @@ const state = {
   paddockId: '',
   keyId: '',
 }
-
-function freshHome(): string {
-  const home = mkdtempSync(path.join(tmpdir(), 'mm-e2e-cli-'))
-  state.homes.push(home)
-  return home
-}
-
-function credentialsFile(home: string): string {
-  return path.join(home, 'metamodels', 'credentials.json')
-}
-
-function credential(home: string): Credential {
-  const store = JSON.parse(readFileSync(credentialsFile(home), 'utf8')) as Record<string, Credential>
-  const cred = store[ISSUER!]
-  if (!cred) throw new Error(`no credential for ${ISSUER} in ${credentialsFile(home)}`)
-  return cred
-}
+const { credentialsFile, credential, cli, cliJson, deviceLogin } = adminCli({ consoleUrl: CONSOLE_URL ?? '', issuer: ISSUER ?? '', homes: state.homes })
 
 /**
  * A JWT's claims. Signature not checked: the admin API is what checks it. This spec reads `jti`,
@@ -93,90 +71,6 @@ function claims(jwt: string): Record<string, unknown> {
 function joseHeader(jwt: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(jwt.split('.')[0], 'base64url').toString('utf8'))
 }
-
-/** The CLI exactly as an operator runs it (`pnpm --filter @metamodels/cli start`), minus pnpm. */
-function startCli(home: string, args: string[]) {
-  const child = spawn(process.execPath, ['--import', './src/ts-resolve.ts', 'src/index.ts', ...args,
-    '--issuer', ISSUER!, ...(args[0] === 'logout' ? [] : ['--console', CONSOLE_URL!])], {
-    cwd: CLI_DIR,
-    env: { ...process.env, XDG_CONFIG_HOME: home },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const out = { stdout: '', stderr: '' }
-  child.stdout.on('data', (b: Buffer) => { out.stdout += b.toString('utf8') })
-  child.stderr.on('data', (b: Buffer) => { out.stderr += b.toString('utf8') })
-  const done = new Promise<Cli>((resolve, reject) => {
-    child.on('error', reject)
-    child.on('close', (code) => resolve({ code, ...out }))
-  })
-  return { out, done }
-}
-
-async function cli(home: string, ...args: string[]): Promise<Cli> {
-  return startCli(home, args).done
-}
-
-/** Runs a CLI command that must succeed and print JSON (or nothing). */
-async function cliJson(home: string, ...args: string[]): Promise<unknown> {
-  const r = await cli(home, ...args)
-  expect(r.code, `mm ${args.join(' ')} failed:\n${r.stderr}`).toBe(0)
-  return r.stdout.trim() === '' ? null : JSON.parse(r.stdout)
-}
-
-/**
- * `mm login`, approved in a fresh browser context the way a person would: open the printed link,
- * check the code, check the requesting machine, Approve, then type the password (every device
- * approval asks for it). No CSP violation or page error is tolerated on any of those pages.
- */
-async function deviceLogin(browser: Browser, scope: string, email: string, password: string): Promise<string> {
-  const home = freshHome()
-  const run = startCli(home, ['login', '--scope', scope])
-
-  let link = ''
-  let userCode = ''
-  await expect.poll(() => {
-    link = /^\s+(https?:\/\/\S+)\s*$/m.exec(run.out.stderr)?.[1] ?? ''
-    userCode = /shows the code\s+(\S+)/.exec(run.out.stderr)?.[1] ?? ''
-    return link !== '' && userCode !== ''
-  }, { message: 'the CLI never printed a verification link' }).toBe(true)
-  expect(new URL(link).origin).toBe(new URL(ISSUER!).origin)
-
-  const context = await browser.newContext()
-  const page = await context.newPage()
-  const problems = watchForViolations(page)
-  try {
-    await page.goto(link)
-    await expect(page.getByRole('heading', { name: 'Connect the MetaModels CLI' })).toBeVisible()
-    await page.getByRole('button', { name: 'Continue' }).click()
-
-    await expect(page.getByRole('heading', { name: 'Approve this sign-in?' })).toBeVisible()
-    await expect(page.locator('p.code')).toHaveText(userCode)
-    // Where the request came from: the requester's address as the OP saw it, and its user agent,
-    // which is the CLI's. The address cannot tell the CLI from this browser: on a compose stack
-    // reached through its published ports, both arrive from the Docker bridge address. So this spec
-    // only asserts that an address is shown, not whose it is.
-    const device = page.locator('p.device')
-    await expect(device).toContainText(/IP address: (?!unknown)\S+/)
-    await expect(device).toContainText(/User agent: metamodels-cli \(/)
-    await page.getByRole('button', { name: 'Approve' }).click()
-
-    await expect(page).toHaveURL(new RegExp(`^${escapeRe(ISSUER!)}/interaction/`))
-    await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(password)
-    await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByRole('heading', { name: 'Signed in' })).toBeVisible()
-    expect(problems).toEqual([])
-  } finally {
-    await context.close()
-  }
-
-  const r = await run.done
-  expect(r.code, `mm login failed:\n${r.stderr}`).toBe(0)
-  expect(JSON.parse(r.stdout)).toMatchObject({ issuer: ISSUER, console: CONSOLE_URL })
-  return home
-}
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 async function api(method: string, route: string, headers: Record<string, string> = {}, body?: unknown) {
   const res = await fetch(`${API}${route}`, {
@@ -315,22 +209,7 @@ test('a read-only token is refused a write, naming the capability it lacks', asy
 
 test('a viewer holding resource.write is still refused: the token never exceeds its user\'s role', async ({ browser }) => {
   // The viewer is seeded like the operator (an admin), then demoted through the console's Team page.
-  const context = await browser.newContext()
-  const page = await context.newPage()
-  try {
-    await login(page)
-    await page.goto('/team')
-    const role = page.getByRole('row').filter({ hasText: VIEWER_EMAIL! }).getByRole('combobox')
-    if (await role.inputValue() !== 'viewer') {
-      await role.selectOption('viewer')
-      await expect.poll(async () => {
-        await page.reload()
-        return page.getByRole('row').filter({ hasText: VIEWER_EMAIL! }).getByRole('combobox').inputValue()
-      }).toBe('viewer')
-    }
-  } finally {
-    await context.close()
-  }
+  await ensureRole(browser, VIEWER_EMAIL!, 'viewer')
 
   state.viewer = await deviceLogin(browser, 'read,resource.write', VIEWER_EMAIL!, VIEWER_PASSWORD!)
   expect(credential(state.viewer).scope.split(' ')).toContain('resource.write')
