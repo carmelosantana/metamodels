@@ -191,6 +191,34 @@ console, so a token that expires in between fails the run instead of passing it.
 `200` both times, the token proves nothing: get a fresh one. A `503` from the second console usually
 means it could not fetch the key set.
 
+### MCP (`specs/mcp.spec.ts`)
+
+The M4 flow with a real browser and a real OP: RFC 9728 discovery from the endpoint's `401`, the
+OP's consent screen for a Client ID Metadata Document client, the token exchange, then
+`server/discover`, `tools/list` and `tools/call` on an Ollama paddock and a ComfyUI paddock (run, then
+`get_job_result`), then the legacy `2025-11-25` sequence (`initialize`, `notifications/initialized`,
+`tools/list`, `tools/call`) on the same paddock and token. The spec runs its own fake upstream (both breeds on one port), creates its
+flocks and paddocks through the admin API, and prints one `[mcp]` line per negative case of the M4
+spec's §7 table. The replayed consent assertion and "mutate is never planned" are unit-level; see
+the commands in the plan's Task 15, Step 12.
+
+The OP must serve the client's metadata document from a fixture, never from the network, so the
+stack is started with the override:
+
+    docker compose -p mm-verify --env-file <file> -f docker-compose.yml -f apps/e2e/compose.mcp.yml up -d
+
+It sets `E2E_CIMD_DOCUMENTS` on the auth service, which refuses it unless `OIDC_ALLOW_EPHEMERAL_KEY`
+is `true`: no deployed stack can load it. Set `E2E_MCP=1` to say the stack was started this way, plus
+the admin spec's four variables, `E2E_PROXY_URL`, and `E2E_UPSTREAM_HOST` (this machine as the
+data-plane container reaches it, e.g. the compose network's gateway). It revokes keys and demotes the
+viewer, so point it at a throwaway stack only.
+
+The client's redirect is a real loopback listener the spec opens on the fixture's `redirect_uri`
+(`http://127.0.0.1:47823/callback`), as a native MCP client does, so that port must be free. The
+browser reaches it through the OP's `303`, a redirect `page.route` would never see. `E2E_PROXY_URL`
+must be exactly the stack's `DATA_PLANE_URL`: the resource each token is bound to is compared as a
+string.
+
 ### A flock's stored credential (`specs/flock-credential.spec.ts`)
 
 The console's Replace, Remove and Test for a flock's upstream credential, which it never shows. The
@@ -247,6 +275,8 @@ still runs.
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | `admin@example.com` / `change-me` | The seeded operator |
 | `E2E_VIEWER_EMAIL` / `E2E_VIEWER_PASSWORD` | *(unset — admin-api spec skips)* | A second seeded user, demoted to `viewer` by `admin-api.spec.ts` |
 | `E2E_UPSTREAM_HOST` | *(unset — flock-credential spec skips)* | This machine as the control-plane container reaches it; the spec's fake upstream listens there |
+| `E2E_MCP` | *(unset — mcp spec skips)* | `1` when the stack was started with `apps/e2e/compose.mcp.yml` |
+| `E2E_CIMD_DOCUMENTS` | *(set by `compose.mcp.yml`, inside the auth container)* | The fixture CIMD documents; refused unless `OIDC_ALLOW_EPHEMERAL_KEY=true` |
 
 `admin-api.spec.ts` ignores the `E2E_BASE_URL` and `E2E_AUTH_URL` defaults above: both must be set
 explicitly or it skips. The CLI it runs accepts plain http only to a loopback host. For a plain-http

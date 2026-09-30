@@ -1,0 +1,11 @@
+# The e2e MCP override (apps/e2e/README.md, "MCP"). Only ever with an explicit throwaway project:
+#   docker compose -p mm-verify --env-file <file> -f docker-compose.yml -f apps/e2e/compose.mcp.yml up -d
+# Paths are relative to the project directory, the repository root.
+services:
+  auth:
+    environment:
+      # The CIMD fixture is refused without this, and a deployed stack hard-wires it to "false".
+      OIDC_ALLOW_EPHEMERAL_KEY: "true"
+      E2E_CIMD_DOCUMENTS: /e2e/mcp-client.json
+    volumes:
+      - ./apps/e2e/fixtures:/e2e:ro
