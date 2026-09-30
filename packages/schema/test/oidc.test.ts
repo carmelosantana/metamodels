@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import {
   adminApiResource, CLI_CLIENT_ID, CONSENT_ASSERTION_TYP, CONSOLE_CLIENT_ID, internalApiAudience, MCP_SCOPE,
-  mcpResource, OPERATOR_SESSION_TTL_MS, parseMcpResource, protectedResourceMetadataUrl, requireOrigin,
+  mcpResource, OPERATOR_SESSION_TTL_MS, parseMcpResource, protectedResourceMetadata, protectedResourceMetadataUrl,
+  requireOrigin,
 } from '../src/oidc.js'
 import { KEY_KINDS, PADDOCK_SLUG_RE } from '../src/enums.js'
 
@@ -97,5 +98,16 @@ describe('requireOrigin', () => {
     for (const v of ['https://a.test/x', 'https://a.test/?q', 'https://a.test/#f', 'ftp://a.test', 'not a url']) {
       expect(() => requireOrigin('X', v), v).toThrow(/^X must be/)
     }
+  })
+})
+
+describe('RFC 9728 metadata (M4 §5)', () => {
+  test('the document names the resource, its one authorization server, its scopes and header bearer only', () => {
+    expect(protectedResourceMetadata('https://dp.example.test/p/small/mcp', 'https://auth.example.test', ['mcp'])).toEqual({
+      resource: 'https://dp.example.test/p/small/mcp',
+      authorization_servers: ['https://auth.example.test'],
+      scopes_supported: ['mcp'],
+      bearer_methods_supported: ['header'],
+    })
   })
 })
