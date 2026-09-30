@@ -8,7 +8,10 @@ import type { Db } from './db.js'
 import { interactionMiddleware, interactionPolicyWithFreshDeviceLogin, loadExistingGrant } from './interactions.js'
 import { signingJwks } from './keys.js'
 import { LoginThrottle } from './login-throttle.js'
-import { accessTokenTtl, makeGetResourceServerInfo, resourcesByClient, resourceServers } from './resources.js'
+import { findPaddock } from './paddocks.js'
+import {
+  accessTokenTtl, makeExtraTokenClaims, makeGetResourceServerInfo, mcpRefreshPolicy, resourcesByClient, resourceServers,
+} from './resources.js'
 import { switchAccountMiddleware } from './switch-account.js'
 import { DEVICE_VERIFICATION_PATH, devicePrefillMiddleware, prefilledUserCode } from './device-middleware.js'
 import { renderDeviceConfirmPage, renderUserCodePage } from './device-views.js'
@@ -108,12 +111,17 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // eslint-disable-next-line no-console
     console.warn(`[auth] Client ID Metadata Documents are off: ${cimd.reason}`)
   }
+  const refresh = mcpRefreshPolicy(cfg.dataPlaneUrl)
   const configuration: Configuration = {
     adapter: pgAdapterFactory(db),
     clients: [consoleClient(cfg), cliClient(), ...(opts.extraClients ?? [])],
     cookies: { keys: cfg.cookieKeys },
     jwks: signingJwks(cfg.signingKeyPem, cfg.allowEphemeralKey, cfg.previousSigningKeyPems),
     findAccount: makeFindAccount(db),
+    extraTokenClaims: makeExtraTokenClaims(db, cfg.dataPlaneUrl) as NonNullable<Configuration['extraTokenClaims']>,
+    // Ruling R4: MCP clients get refresh tokens without offline_access; everyone else keeps the defaults.
+    issueRefreshToken: refresh.issueRefreshToken as NonNullable<Configuration['issueRefreshToken']>,
+    expiresWithSession: refresh.expiresWithSession as NonNullable<Configuration['expiresWithSession']>,
     // OAuth 2.1: PKCE for every client, confidential ones included.
     pkce: { required: () => true },
     interactions: {
@@ -131,7 +139,10 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
       clientIdMetadataDocument: cimd.enabled ? cimdFeature() : { enabled: false },
       resourceIndicators: {
         enabled: true,
-        getResourceServerInfo: makeGetResourceServerInfo(resourceServers(cfg.consoleUrl), resourcesByClient(cfg.consoleUrl)),
+        getResourceServerInfo: makeGetResourceServerInfo(resourceServers(cfg.consoleUrl), resourcesByClient(cfg.consoleUrl), {
+          dataPlaneUrl: cfg.dataPlaneUrl,
+          isActivePaddock: async (slug) => (await findPaddock(db, slug))?.status === 'active',
+        }),
         // Clients must name the resource at the token endpoint as well; an openid-only exchange
         // returns an opaque userinfo token, never a resource-bound JWT.
         useGrantedResource: async () => false,
@@ -177,7 +188,8 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     },
     // Every use of a refresh token issues a new one and consumes its predecessor; presenting a
     // consumed one revokes the whole grant, so reuse of a stolen token is detected (spec §4.4).
-    // Only the CLI holds refresh tokens: the console's client metadata has no refresh_token grant.
+    // The CLI and MCP (CIMD) clients hold refresh tokens; the console's client metadata has no
+    // refresh_token grant.
     rotateRefreshToken: true,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     renderError: (ctx, out) => {
