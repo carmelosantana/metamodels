@@ -3,11 +3,13 @@ import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { mcpResource } from '@metamodels/schema'
 import { ollamaConstraint, ollamaToMcp } from '@metamodels/connectors'
+import { periodBucket } from '@metamodels/schema'
 import { createApp, type AppDeps } from '../src/app.js'
 import { buildRegistry } from '../src/breeds.js'
 import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { InMemoryJobStore } from '../src/jobs/job-store.js'
 import { InMemoryMeterSink } from '../src/meter/meter-sink.js'
+import { DrizzleUsageReader } from '../src/meter/usage-reader.js'
 import { InMemoryRateLimiter } from '../src/ratelimit/rate-limiter.js'
 import { mcpChallenge } from '../src/mcp/auth.js'
 import { MCP_SERVER_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/jsonrpc.js'
@@ -362,6 +364,28 @@ describe('tools/call on an Ollama paddock (M4 §3.8)', () => {
     expect((await call('list_models', {})).body.result).toMatchObject({ content: [{ type: 'text', text: 'rate limit exceeded' }], isError: true })
   })
 
+  test('a call the breed cannot plan is isError and spends no rate-limit budget (fence max 5/60s)', async () => {
+    for (let i = 0; i < 6; i++) {
+      expect((await call('chat', { model: 'llama3.2:1b' })).body.result)
+        .toMatchObject({ content: [{ type: 'text', text: 'invalid arguments: messages must be a non-empty array' }], isError: true })
+    }
+    for (let i = 0; i < 5; i++) expect((await call('list_models', {})).body.result.isError).toBeUndefined()
+    expect((await call('list_models', {})).body.result).toMatchObject({ content: [{ type: 'text', text: 'rate limit exceeded' }], isError: true })
+    expect(upstreamCalls).toHaveLength(5)
+  })
+
+  test('a quota at its cap is isError with the proxy\'s reason, and never reaches upstream', async () => {
+    build({ usageReader: new DrizzleUsageReader(db) })
+    await db.update(schema.fence).set({ quota: [{ dim: 'tokens_out', max: 10, period: 'hour' }] }).where(eq(schema.fence.paddockId, fx.paddockId))
+    await db.insert(schema.usageRollup).values({
+      orgId: fx.orgId, keyId: oauth.keyId, paddockId: fx.paddockId, period: periodBucket(Date.now()), dim: 'tokens_out', value: 10,
+    })
+    const { status, body } = await call('chat', { model: 'llama3.2:1b', messages })
+    expect(status).toBe(200)
+    expect(body.result).toEqual({ resultType: 'complete', content: [{ type: 'text', text: 'quota exceeded' }], isError: true, _meta: SERVER_INFO })
+    expect(upstreamCalls).toEqual([])
+  })
+
   test('an unreachable upstream is isError, and the JSON-RPC call still succeeds', async () => {
     build({ fetchImpl: async () => { throw new TypeError('fetch failed') } })
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -420,6 +444,19 @@ describe('tools/call on a ComfyUI paddock (M4 §3.8)', () => {
     const [p] = await db.select().from(schema.paddock).where(eq(schema.paddock.slug, 'cf'))
     const other = await seedOauthKey(db, fx, { paddockId: p!.id, clientId: 'https://other.example/client.json' })
     expect((await cfCall('get_job_result', { job_id: 'cf-1' }, other)).body.result).toMatchObject({ content: [{ type: 'text', text: 'not found' }], isError: true })
+  })
+
+  test('get_job_result is rate-limited like every call that plans; one without a job_id spends nothing', async () => {
+    const [p] = await db.select().from(schema.paddock).where(eq(schema.paddock.slug, 'cf'))
+    await db.update(schema.fence).set({ rateLimit: { windowSec: 60, max: 2 } }).where(eq(schema.fence.paddockId, p!.id))
+    for (let i = 0; i < 3; i++) {
+      expect((await cfCall('get_job_result', {})).body.result)
+        .toMatchObject({ content: [{ type: 'text', text: 'invalid arguments: job_id must be a non-empty string' }], isError: true })
+    }
+    expect((await cfCall('run_txt2img', { prompt: 'a cat' })).body.result.structuredContent).toEqual({ job_id: 'cf-1' })
+    expect((await cfCall('get_job_result', { job_id: 'cf-1' })).body.result.isError).toBeUndefined()
+    expect((await cfCall('get_job_result', { job_id: 'cf-1' })).body.result)
+      .toMatchObject({ content: [{ type: 'text', text: 'rate limit exceeded' }], isError: true })
   })
 
   test('images over the per-result cap are isError naming the cap', async () => {
