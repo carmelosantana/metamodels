@@ -54,6 +54,8 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER}
       OIDC_INTERNAL_URL: ${OIDC_INTERNAL_URL:-http://auth:3100}
       CONSOLE_URL: ${CONSOLE_URL}
+      # Where MCP clients reach the data plane: the console checks a consent's resource against it.
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://localhost:${DATA_PLANE_PORT:-8787}}
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET}
       # Consumed only by `pnpm seed` (first-run admin); harmlessly unused by `next start`.
       OPERATOR_EMAIL: ${OPERATOR_EMAIL}
@@ -89,6 +91,10 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       OIDC_ISSUER: ${OIDC_ISSUER}
       CONSOLE_URL: ${CONSOLE_URL}
+      # MCP resources are <DATA_PLANE_URL>/p/<slug>/mcp (M4); consent is recorded by the console's
+      # internal route, reached over the compose network.
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://localhost:${DATA_PLANE_PORT:-8787}}
+      CONTROL_PLANE_INTERNAL_URL: ${CONTROL_PLANE_INTERNAL_URL:-http://control-plane:3000}
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET}
       OIDC_COOKIE_KEYS: ${OIDC_COOKIE_KEYS}
       OIDC_SIGNING_KEY: ${OIDC_SIGNING_KEY}
@@ -123,6 +129,11 @@ services:
       UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL}
       PORT: ${PORT}
+      # MCP (M4): the public origin clients connect to, the issuer every access token must carry, and
+      # where to fetch that issuer's keys inside the compose network.
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://localhost:${DATA_PLANE_PORT:-8787}}
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_INTERNAL_URL: ${OIDC_INTERNAL_URL:-http://auth:3100}
     ports:
       # The container side is pinned to 8787: it listens on env.PORT and the healthcheck URL
       # below hardcodes 8787 — change those two together. The host side is free to move.
