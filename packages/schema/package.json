@@ -6,8 +6,10 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./access-token": "./src/access-token.ts",
     "./config": "./src/config.ts",
     "./graph": "./src/graph.ts",
+    "./jws": "./src/jws.ts",
     "./sealed": "./src/sealed.ts",
     "./reseal": "./src/reseal.ts"
   },
@@ -17,6 +19,7 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.12",
     "zod": "^3.23.0"
   },
   "devDependencies": {
