@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { and, asc, eq, gt, inArray } from 'drizzle-orm'
-import { apiKey, generateApiKey, hashApiKey, keyPaddock, paddock } from '@metamodels/schema'
+import { apiKey, CONSENT_PADDOCK_REFUSAL, generateApiKey, hashApiKey, keyPaddock, paddock } from '@metamodels/schema'
 import type { Db } from './db'
 import { authorize, requireCapability, type Actor } from '../auth/authorize'
 import { writeAudit } from './audit'
@@ -247,8 +247,8 @@ export type OauthPreflight = { allowed: true; reason: null } | { allowed: false;
 
 export const PREFLIGHT_NO_CAPABILITY =
   'Your role cannot approve apps. Ask an admin or a member of your organization to connect this one.'
-export const PREFLIGHT_NO_PADDOCK =
-  'This paddock does not exist, is disabled, or is not in your organization.'
+/** Shared with the auth service, which renders it for a paddock gone at consent (M4 F8). */
+export const PREFLIGHT_NO_PADDOCK = CONSENT_PADDOCK_REFUSAL
 
 /**
  * Would `mintOauthKey` succeed for this actor and paddock? Read-only: the consent screen asks before

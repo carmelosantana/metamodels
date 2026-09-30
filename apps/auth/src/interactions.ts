@@ -250,8 +250,9 @@ function switchAccountHref(params: Record<string, unknown>): string {
  *
  * `/auth` already refuses an unknown or disabled paddock (`invalid_target`, `resources.ts`), so
  * `no-paddock` is a paddock disabled or deleted after the request began. It is answered with the
- * words the control plane's preflight gives for a paddock in another org (`MINT_DENIED_PADDOCK`, the
- * twin of `PREFLIGHT_NO_PADDOCK`), on the same refusal page, so the screen cannot tell the two apart.
+ * words the control plane's preflight gives for a paddock in another org (`MINT_DENIED_PADDOCK` and
+ * `PREFLIGHT_NO_PADDOCK` are both the schema's `CONSENT_PADDOCK_REFUSAL`), on the same refusal page,
+ * so the screen cannot tell the two apart.
  */
 async function mcpConsent(deps: InteractionDeps, details: InteractionDetails): Promise<McpConsent> {
   const client = await deps.provider.Client.find(String(details.params.client_id)).catch(() => undefined)

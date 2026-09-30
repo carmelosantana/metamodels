@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
+import { CONSENT_PADDOCK_REFUSAL } from '@metamodels/schema'
 import { sharedDb, seedOrg, type TestDb } from '../test/db'
 import {
   listKeys, createKey, revokeKey, NotFoundError, mintOauthKey, preflightOauthKey, oauthKeyName,
@@ -388,6 +389,13 @@ describe('keys-service preflightOauthKey (M4 D3)', () => {
     for (const slug of ['nope', 'off', 'theirs', null]) {
       expect(await preflightOauthKey(db, actor, slug), String(slug)).toEqual({ allowed: false, reason: PREFLIGHT_NO_PADDOCK })
     }
+  })
+
+  test('the paddock refusal is the shared one the auth service renders for a vanished paddock', async () => {
+    const db = testDb()
+    const o = await seedOrg(db)
+    const actor = await userIn(db, o.id)
+    expect(await preflightOauthKey(db, actor, 'nope')).toEqual({ allowed: false, reason: CONSENT_PADDOCK_REFUSAL })
   })
 })
 

@@ -1,6 +1,6 @@
 import { createPrivateKey, randomUUID } from 'node:crypto'
 import type { JWK } from 'oidc-provider'
-import { CONSENT_ASSERTION_TYP, internalApiAudience } from '@metamodels/schema'
+import { CONSENT_ASSERTION_TYP, CONSENT_PADDOCK_REFUSAL, internalApiAudience } from '@metamodels/schema'
 import { signJwtRs256 } from '@metamodels/schema/jws'
 
 /** Half the 60 s the control plane accepts: room for clock skew between the two services. */
@@ -9,8 +9,8 @@ const CALL_TIMEOUT_MS = 5_000
 
 export const PREFLIGHT_UNAVAILABLE = 'MetaModels could not check this approval right now. Try again in a moment.'
 export const MINT_DENIED_ROLE = 'Your role cannot approve apps.'
-// Retyped across the service boundary: its twin is PREFLIGHT_NO_PADDOCK in control-plane keys-service.ts.
-export const MINT_DENIED_PADDOCK = 'This paddock does not exist, is disabled, or is not in your organization.'
+// Shared with the control plane's PREFLIGHT_NO_PADDOCK, so a vanished and a foreign paddock read the same.
+export const MINT_DENIED_PADDOCK = CONSENT_PADDOCK_REFUSAL
 
 /** What the OP asserts: this user approved this client for this resource (and, on a mint, under this grant). */
 export interface ConsentRequest {
