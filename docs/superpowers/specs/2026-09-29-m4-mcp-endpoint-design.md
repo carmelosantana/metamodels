@@ -200,7 +200,9 @@ The fix is a `cimdCspMiddleware`, on the pattern of PR #20's `switchAccountMiddl
 response is built, on interaction routes whose client is a CIMD client, it rewrites the response's
 CSP to append **that client's validated `redirect_uri` origin** to `form-action`. Every other
 directive, and every other response, keeps the static policy. A test asserts both the widened header
-on a CIMD consent response and the unchanged header everywhere else.
+on a CIMD consent response and the unchanged header everywhere else. If looking up the interaction
+or its client fails, the page keeps the static policy and the failure is logged; it is never turned
+into a 500 *(amended 2026-09-30, F4)*.
 
 ### 3.7 D6 — one offline verifier
 
@@ -469,4 +471,4 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 3.8 (F6) | Rate limit and quota spent before `mcpCall` validated the arguments | Plan first; an unplannable call is `isError` and spends nothing; every call that plans is still limited |
 | 3.8 (F7) | `chat` forwarded whole message objects | Each message rebuilt as `{ role, content }`, anything else refused; `embed` input must be strings |
 | 3.5 (F3) | Redis unreachable: the claim rejected after ~10.5 s (never, on a stalled socket) and the route answered a raw 500 | ioredis settles every claim within ~2 s (`commandTimeout: 2000`, plus `maxRetriesPerRequest: 1` and `connectTimeout: 2000`), covering the offline queue and a stalled socket; the route answers 503 + `Retry-After: 5` |
-
+| 3.6 (F4) | An `Interaction.find` failure escaped the CSP middleware as a 500 | Both lookups guarded; the static policy stays and the failure is logged |
