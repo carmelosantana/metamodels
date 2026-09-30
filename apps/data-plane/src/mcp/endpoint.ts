@@ -1,6 +1,7 @@
 import type { Context, Hono } from 'hono'
 import { toolError, type McpCallToolResult, type McpToolDef, type RequestCtx } from '@metamodels/connectors'
 import { MCP_SCOPE, mcpResource, PADDOCK_SLUG_MAX, PADDOCK_SLUG_RE, protectedResourceMetadata } from '@metamodels/schema'
+import { BodyTooLarge, bodyTooLarge } from '../body-limit.js'
 import type { ConfigStore } from '../config/config-store.js'
 import { refusalReason, type Pipeline, type Scope } from '../pipeline.js'
 import { authenticateMcp, type McpAuthDeps } from './auth.js'
@@ -75,7 +76,8 @@ export function registerMcpRoutes(app: Hono, deps: { pipeline: Pipeline; configS
     let raw: unknown
     try {
       raw = JSON.parse(await c.req.text())
-    } catch {
+    } catch (err) {
+      if (err instanceof BodyTooLarge) return bodyTooLarge(c)
       return json(rpcError(null, JSONRPC_ERRORS.parseError, 'parse error'), 400)
     }
     const msg = parseJsonRpc(raw)

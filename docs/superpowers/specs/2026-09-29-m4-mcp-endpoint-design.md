@@ -285,8 +285,10 @@ and `Mcp-Session-Id` / `Last-Event-ID` are ignored. `GET` and `DELETE` answer 40
 registered **before** the `ALL /p/:slug/*` catch-all, and a test proves the proxy never sees `/mcp`.
 `/p/:slug/mcp/` and every path beneath it answer 404 for every method and are never proxied: the
 resource is compared exactly, so no token names them *(amended 2026-09-30, F1)*. Every `/p/*` request
-body, MCP included, is limited to 32 MiB; a larger one is 413 `{ error: 'request body too large' }`,
-judged before authentication *(amended 2026-09-30, F2)*. No SDK: the method set is small.
+body, MCP included, is limited to 32 MiB; a larger one is 413 `{ error: 'request body too large' }`.
+A declared `Content-Length` over the limit is refused before authentication, the body unread; any
+other body is counted as the handler reads it, after authentication, so nothing is buffered for an
+anonymous caller *(amended 2026-09-30, F2)*. No SDK: the method set is small.
 
 **Common to both eras.** An `Origin` header, when present, must be the `DATA_PLANE_URL` origin, else
 403 (DNS-rebinding rule). A notification answers 202 with no body. Batches are refused (`-32600`).
@@ -450,5 +452,5 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 3.4 | A CIMD `client_id` on `https://127.0.0.1…` and one on a name resolving to RFC 1918 space must both fail to fetch | The loopback literal is proven by a live fetch; the RFC 1918 name case by the `isSpecialUseIP` table (no offline DNS to fake a resolution) |
 | 3.4 | `allowClient` refuses grants beyond code/refresh | oidc-provider 9.12.2 drops server-unsupported grants from a CIMD document before `allowClient` runs; the refusal is proven with `device_code`, a grant this OP enables |
 | 4.1 (F1) | `/p/:slug/mcp/` fell through to the proxy catch-all | 404 for every method on `/mcp/` and beneath it; never proxied |
-| 4.1 (F2) | No request body limit on MCP or the proxy | 32 MiB on every `/p/*` body; 413 before authentication |
+| 4.1 (F2) | No request body limit on MCP or the proxy | 32 MiB on every `/p/*` body; 413 before authentication for a declared `Content-Length`, as it is read (after authentication) otherwise |
 
