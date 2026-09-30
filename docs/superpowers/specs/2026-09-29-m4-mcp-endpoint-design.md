@@ -283,7 +283,10 @@ mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): M
 (no method streams, so SSE is never used). Stateless in both eras: no `Mcp-Session-Id` is minted,
 and `Mcp-Session-Id` / `Last-Event-ID` are ignored. `GET` and `DELETE` answer 405. The route is
 registered **before** the `ALL /p/:slug/*` catch-all, and a test proves the proxy never sees `/mcp`.
-No SDK: the method set is small.
+`/p/:slug/mcp/` and every path beneath it answer 404 for every method and are never proxied: the
+resource is compared exactly, so no token names them *(amended 2026-09-30, F1)*. Every `/p/*` request
+body, MCP included, is limited to 32 MiB; a larger one is 413 `{ error: 'request body too large' }`,
+judged before authentication *(amended 2026-09-30, F2)*. No SDK: the method set is small.
 
 **Common to both eras.** An `Origin` header, when present, must be the `DATA_PLANE_URL` origin, else
 403 (DNS-rebinding rule). A notification answers 202 with no body. Batches are refused (`-32600`).
@@ -418,10 +421,13 @@ cleaned up afterwards):
 | `mm_kid` via `extraTokenClaims`, refused when the key is dead | A revoked key must not refresh back to life | Low |
 | Refresh tokens without `offline_access` | oidc-provider issues refresh tokens only for `offline_access`, which it drops unless `prompt=consent`; real MCP clients send neither | Low: `issueRefreshToken` returns true for a CIMD client allowed `refresh_token` whose grant is bound to an MCP resource; every other client keeps the default |
 | Replay guard falls back to memory without `REDIS_URL` | Matches `publishConfigInvalidation`, a no-op without Redis; every compose stack has Redis | Low: per-process only in single-process dev; DEPLOY.md says so |
+| 32 MiB body limit on every `/p/*` request, MCP included (F2) | A worst-case incompressible 2048² RGBA PNG is 21.34 MiB as base64; MCP's `run_<tpl>` is the same request as `/submit` (D8) | Low: one constant; a larger input image is refused 413 and the limit is raised |
 
 ## 10. Amendments from planning (2026-09-29)
 
 Found while writing the plan, each checked against `main` at `4d36af2`. The plan follows the code.
+Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
+([`2026-09-30-m4-followups.md`](../plans/2026-09-30-m4-followups.md)), checked against `main` at `ae4ac8a` (0.6.0).
 
 | § | Was | Now |
 |---|---|---|
@@ -443,4 +449,6 @@ Found while writing the plan, each checked against `main` at `4d36af2`. The plan
 | 7 | RFC 1918 CIMD refusal in e2e | Proven by unit test; the e2e records the refusals it can reach. The e2e runs both a modern and a legacy sequence |
 | 3.4 | A CIMD `client_id` on `https://127.0.0.1…` and one on a name resolving to RFC 1918 space must both fail to fetch | The loopback literal is proven by a live fetch; the RFC 1918 name case by the `isSpecialUseIP` table (no offline DNS to fake a resolution) |
 | 3.4 | `allowClient` refuses grants beyond code/refresh | oidc-provider 9.12.2 drops server-unsupported grants from a CIMD document before `allowClient` runs; the refusal is proven with `device_code`, a grant this OP enables |
+| 4.1 (F1) | `/p/:slug/mcp/` fell through to the proxy catch-all | 404 for every method on `/mcp/` and beneath it; never proxied |
+| 4.1 (F2) | No request body limit on MCP or the proxy | 32 MiB on every `/p/*` body; 413 before authentication |
 

@@ -219,6 +219,20 @@ describe('modern (2026-07-28): transport rules', () => {
     expect(res.status).toBe(404)
     expect(upstreamCalls).toEqual([])
   })
+
+  test('/mcp/ and anything beneath it is 404 for every method and never reaches the proxy (ruling F1)', async () => {
+    for (const path of ['/p/small/mcp/', '/p/small/mcp/x', '/p/small/mcp//']) {
+      for (const method of ['GET', 'POST', 'DELETE']) {
+        const res = await app.request(`${DP}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${fx.keyPlaintext}`, 'content-type': 'application/json' },
+          ...(method === 'POST' ? { body: JSON.stringify({ model: 'llama3.2:1b', messages }) } : {}),
+        })
+        expect([path, method, res.status]).toEqual([path, method, 404])
+      }
+    }
+    expect(upstreamCalls).toEqual([])
+  })
 })
 
 describe('legacy (2025-11-25, 2025-06-18), stateless (D9)', () => {

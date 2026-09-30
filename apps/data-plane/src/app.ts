@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { RequestCtx } from '@metamodels/connectors'
 import { hashApiKey } from '@metamodels/schema'
@@ -12,7 +13,18 @@ export interface AppDeps extends PipelineDeps {
   readiness?: () => Promise<boolean>
   /** The MCP endpoint (M4). Absent: `/p/:slug/mcp` answers 404, and the proxy still never sees it. */
   mcp?: McpDeps
+  /** The request body limit on every `/p/*` request; defaults to `MAX_REQUEST_BODY_BYTES`. Tests lower it. */
+  maxRequestBodyBytes?: number
 }
+
+/**
+ * The largest request body `/p/*` accepts: 32 MiB, for the streaming proxy and MCP alike (follow-up
+ * ruling F2). The largest legitimate body is a ComfyUI template submit carrying a base64 image
+ * parameter (`/submit`, or `run_<tpl>` over MCP, which plans the same request). A worst-case,
+ * incompressible 2048×2048 RGBA PNG is 16.0 MiB, 21.3 MiB as base64, so 32 MiB leaves 1.5× headroom
+ * for it. MCP gets the same limit because its `run_<tpl>` carries the same payload (spec M4 D8).
+ */
+export const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 
 function extractKey(header: string | undefined, xApiKey: string | undefined): string | null {
   // The scheme is case-insensitive (RFC 9110 §11.1), as in the admin API's bearer match.
@@ -64,6 +76,13 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
       return c.json({ ready: false }, 503)
     }
   })
+
+  // Before any `/p/*` handler, so an oversized body is refused before authentication and before it
+  // is buffered: a declared Content-Length is judged unread, a chunked body as it streams.
+  app.use('/p/*', bodyLimit({
+    maxSize: deps.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES,
+    onError: (c) => c.json({ error: 'request body too large' }, 413),
+  }))
 
   const pipeline = createPipeline(deps)
 

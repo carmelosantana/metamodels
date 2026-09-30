@@ -41,7 +41,7 @@ const validSlug = (slug: string) => slug.length <= PADDOCK_SLUG_MAX && PADDOCK_S
  * alike. Order: malformed slug or MCP not configured → 404; Origin (403) → token (401/503) → body
  * (400) → notification (202) → era validation (400) → then paddock gates (unknown/inactive 404,
  * upstream credential 503) → dispatch. `Mcp-Session-Id` and `Last-Event-ID` are never read and
- * no session id is ever sent. Must be registered before `ALL /p/:slug/*`.
+ * no session id is ever sent. Must be registered before `ALL /p/:slug/*`, and so must the reserved `/p/:slug/mcp/*` (404, ruling F1).
  */
 export function registerMcpRoutes(app: Hono, deps: { pipeline: Pipeline; configStore: ConfigStore; mcp?: McpDeps }): void {
   const { pipeline } = deps
@@ -104,6 +104,10 @@ export function registerMcpRoutes(app: Hono, deps: { pipeline: Pipeline; configS
     c.header('allow', 'POST')
     return c.json({ error: 'method not allowed' }, 405)
   })
+
+  // `/p/:slug/mcp/` and everything beneath it is no endpoint, whatever the method (follow-up ruling F1):
+  // the resource is compared exactly, so no token names it, and the proxy catch-all must never see it.
+  app.all('/p/:slug/mcp/*', (c: Context) => c.json({ error: 'not found' }, 404))
 
   async function dispatch(era: Era, id: JsonRpcId, method: string, params: unknown, scope: Scope, slug: string, mcp: McpDeps): Promise<Answer> {
     const { paddock, breed } = scope
