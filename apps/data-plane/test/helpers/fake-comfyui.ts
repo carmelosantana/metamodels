@@ -1,5 +1,8 @@
 import { Hono } from 'hono'
 
+/** What `GET /view` serves for every image: eight bytes that are the PNG signature. */
+export const FAKE_PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
 /**
  * A Hono app simulating just enough of ComfyUI for the data-plane integration
  * test, exposed as a `fetchImpl`-shaped `request`.
@@ -10,6 +13,7 @@ import { Hono } from 'hono'
  *                           (status.completed, two output images, and
  *                           execution_start→execution_success timestamps) once
  *                           the test flips it complete via `complete(id)`.
+ * - `GET  /view`          → `FAKE_PNG` as image/png, for any filename
  *
  * Completion is controlled by the test through the mutable `completed` set, so a
  * poll before completion and after completion can be exercised deterministically.
@@ -55,6 +59,8 @@ export function createFakeComfyui(): FakeComfyui {
       },
     })
   })
+
+  app.get('/view', () => new Response(FAKE_PNG, { headers: { 'content-type': 'image/png', 'content-length': String(FAKE_PNG.length) } }))
 
   return {
     request: (url, init) => app.request(url, init ?? {}),
