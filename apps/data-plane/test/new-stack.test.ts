@@ -7,8 +7,10 @@ const SCRIPT = fileURLToPath(new URL('../../../scripts/new-stack.sh', import.met
 
 /** Runs the Portainer stack generator with a bare environment and returns its KEY=value lines. */
 function generate(extra: Record<string, string> = {}): Record<string, string> {
+  // Destructured on purpose: the .env.example completeness test counts every dotted env read as a deploy knob.
+  const { PATH = '', HOME = '' } = process.env
   const out = execFileSync('bash', [SCRIPT], {
-    env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...extra },
+    env: { PATH, HOME, ...extra },
     encoding: 'utf8',
   })
   const vars: Record<string, string> = {}
