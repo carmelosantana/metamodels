@@ -8,7 +8,7 @@ import { errors, interactionPolicy } from 'oidc-provider'
 import { parseMcpResource, user } from '@metamodels/schema'
 import { verifyLogin } from './account.js'
 import { isCimdClient } from './cimd.js'
-import type { ConsentApi, ConsentRequest } from './consent-api.js'
+import { MINT_DENIED_PADDOCK, type ConsentApi, type ConsentRequest } from './consent-api.js'
 import type { Db } from './db.js'
 import type { LoginThrottle } from './login-throttle.js'
 import { activeOauthKeyForGrant, findPaddock } from './paddocks.js'
@@ -193,10 +193,14 @@ async function showInteraction(ctx: Ctx, deps: InteractionDeps): Promise<void> {
       return
     }
     const mcp = await mcpConsent(deps, details)
-    if (!mcp) {
+    if (mcp.kind === 'not-mcp') {
       await deps.provider.interactionFinished(ctx.req, ctx.res, {
         error: 'access_denied', error_description: NOT_PERMITTED,
       }, { mergeWithLastSubmission: false })
+      return
+    }
+    if (mcp.kind === 'no-paddock') {
+      html(ctx, 200, renderConsentRefusedPage({ uid, reason: MINT_DENIED_PADDOCK, email: mcp.email, switchAccountHref: mcp.switchAccountHref }))
       return
     }
     // Asked before the page renders (spec §3.3), so a viewer never sees a button that would fail.
@@ -210,10 +214,14 @@ async function showInteraction(ctx: Ctx, deps: InteractionDeps): Promise<void> {
   html(ctx, 400, renderMessagePage('Unsupported request', `This sign-in step (${prompt.name}) is not supported.`))
 }
 
-interface McpConsent {
-  request: ConsentRequest
-  view: Omit<ConsentView, 'uid'>
-}
+/**
+ * What `mcpConsent` found: not an MCP consent at all (M1's refusal answers it); an MCP consent whose
+ * paddock is unknown or disabled; or one to show.
+ */
+type McpConsent =
+  | { kind: 'not-mcp' }
+  | { kind: 'no-paddock'; email: string; switchAccountHref: string }
+  | { kind: 'consent'; request: ConsentRequest; view: Omit<ConsentView, 'uid'> }
 
 /** The one resource an MCP authorization request names, or null for none or several. */
 function singleResource(v: unknown): string | null {
@@ -236,27 +244,35 @@ function switchAccountHref(params: Record<string, unknown>): string {
 }
 
 /**
- * The consent context when this interaction is a CIMD client asking for exactly one MCP resource of
- * an active paddock; null for anything else (which M1's refusal then answers). Everything shown is
- * re-read here: the client from its document (cached by oidc-provider), the paddock and the user's
- * email from the database.
+ * The consent context of this interaction. A CIMD client asking for exactly one MCP resource is an MCP
+ * consent; anything else is `not-mcp`. Everything shown is re-read here: the client from its document
+ * (cached by oidc-provider), the paddock and the user's email from the database.
+ *
+ * `/auth` already refuses an unknown or disabled paddock (`invalid_target`, `resources.ts`), so
+ * `no-paddock` is a paddock disabled or deleted after the request began. It is answered with the
+ * words the control plane's preflight gives for a paddock in another org (`MINT_DENIED_PADDOCK`, the
+ * twin of `PREFLIGHT_NO_PADDOCK`), on the same refusal page, so the screen cannot tell the two apart.
  */
-async function mcpConsent(deps: InteractionDeps, details: InteractionDetails): Promise<McpConsent | null> {
+async function mcpConsent(deps: InteractionDeps, details: InteractionDetails): Promise<McpConsent> {
   const client = await deps.provider.Client.find(String(details.params.client_id)).catch(() => undefined)
-  if (!client || !isCimdClient(client)) return null
+  if (!client || !isCimdClient(client)) return { kind: 'not-mcp' }
   const resource = singleResource(details.params.resource)
   const slug = resource === null ? null : parseMcpResource(deps.dataPlaneUrl, resource)
-  if (resource === null || slug === null) return null
-  const paddock = await findPaddock(deps.db, slug)
-  if (!paddock || paddock.status !== 'active') return null
+  if (resource === null || slug === null) return { kind: 'not-mcp' }
 
   const accountId = details.session?.accountId
   if (!accountId) throw new Error('consent prompt reached without an authenticated session')
   const rows = await deps.db.select({ email: user.email }).from(user).where(eq(user.id, accountId)).limit(1)
+  const email = rows[0]?.email ?? ''
+  const href = switchAccountHref(details.params)
+
+  const paddock = await findPaddock(deps.db, slug)
+  if (!paddock || paddock.status !== 'active') return { kind: 'no-paddock', email, switchAccountHref: href }
 
   const clientHost = new URL(client.clientId).host
   const clientName = client.clientName ?? clientHost
   return {
+    kind: 'consent',
     request: { accountId, clientId: client.clientId, clientName, resource },
     view: {
       clientName,
@@ -264,8 +280,8 @@ async function mcpConsent(deps: InteractionDeps, details: InteractionDetails): P
       redirectHost: new URL(String(details.params.redirect_uri)).host,
       paddockName: paddock.name,
       paddockSlug: paddock.slug,
-      email: rows[0]?.email ?? '',
-      switchAccountHref: switchAccountHref(details.params),
+      email,
+      switchAccountHref: href,
     },
   }
 }
@@ -290,9 +306,17 @@ async function submitConsent(ctx: Ctx, deps: InteractionDeps): Promise<void> {
     deps.provider.interactionFinished(ctx.req, ctx.res, result, { mergeWithLastSubmission: false })
 
   const mcp = await mcpConsent(deps, details)
-  if (!mcp) return void await fail({ error: 'access_denied', error_description: NOT_PERMITTED })
+  if (mcp.kind === 'not-mcp') return void await fail({ error: 'access_denied', error_description: NOT_PERMITTED })
 
   const decision = form.get('decision')
+  if (mcp.kind === 'no-paddock') {
+    // What the same decision gets for another org's paddock: Deny its usual answer; Approve (a screen
+    // shown before the paddock went away) and Close the paddock reason, as the mint's 404 and preflight give it.
+    return void await fail({
+      error: 'access_denied',
+      error_description: decision === 'deny' ? 'The request was denied.' : MINT_DENIED_PADDOCK,
+    })
+  }
   if (decision !== 'approve') {
     // Close follows a refusal: tell the client the same reason the user was shown.
     const pre = decision === 'close' ? await deps.consentApi.preflight(mcp.request) : undefined

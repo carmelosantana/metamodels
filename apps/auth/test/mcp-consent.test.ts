@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm'
 import { jwtVerify } from 'jose'
 import * as schema from '@metamodels/schema'
 import { mcpResource } from '@metamodels/schema'
-import type { ConsentApi, ConsentRequest, Preflight } from '../src/consent-api.js'
+import { MINT_DENIED_PADDOCK, type ConsentApi, type ConsentRequest, type Preflight } from '../src/consent-api.js'
 import { seedUser, type TestDb } from './helpers/db.js'
 import {
   authorize, CIMD_CLIENT_ID, CookieJar, CIMD_REDIRECT_URI, cimdDocument, DATA_PLANE_URL, opJwks, send, startTestOp, type TestOp,
@@ -265,6 +265,46 @@ describe('MCP consent (M4 §4.3)', () => {
     expect(back.searchParams.get('error')).toBe('access_denied')
     expect(back.searchParams.get('error_description')).toBe('Your role cannot approve apps.')
     expect(await grants()).toEqual([])
+  }, T)
+
+  test('a paddock disabled after the screen was shown: reloading it shows the paddock refusal and only Close; Close sends that reason on', async () => {
+    const cp = fakeControlPlane()
+    await setup(cp)
+    const page = await consentPage()
+    await op!.db.update(schema.paddock).set({ status: 'disabled' })
+    const reloaded = await send(page.jar, `${op!.issuer}/interaction/${page.uid}`)
+    const body = await reloaded.text()
+    expect(reloaded.status).toBe(200)
+    expect(body).toContain(MINT_DENIED_PADDOCK)
+    expect(body).toContain(EMAIL)
+    expect(body).not.toContain('value="approve"')
+    const back = await decide(page, 'close')
+    expect(back.searchParams.get('error')).toBe('access_denied')
+    expect(back.searchParams.get('error_description')).toBe(MINT_DENIED_PADDOCK)
+    expect(cp.calls.preflight).toHaveLength(1)
+    expect(cp.calls.mint).toEqual([])
+  }, T)
+
+  test('Approve on a screen whose paddock was disabled since: access_denied with the paddock reason, nothing minted, no grant', async () => {
+    const cp = fakeControlPlane()
+    await setup(cp)
+    const page = await consentPage()
+    await op!.db.update(schema.paddock).set({ status: 'disabled' })
+    const back = await decide(page, 'approve')
+    expect(back.searchParams.get('error')).toBe('access_denied')
+    expect(back.searchParams.get('error_description')).toBe(MINT_DENIED_PADDOCK)
+    expect(cp.calls.mint).toEqual([])
+    expect(await grants()).toEqual([])
+  }, T)
+
+  test('a disabled paddock renders byte for byte the page the control plane\'s answer for another org\'s paddock does', async () => {
+    // The preflight's refusal for a paddock outside the user's org, in the words it uses (PREFLIGHT_NO_PADDOCK).
+    const cp = fakeControlPlane({ preflight: { allowed: false, reason: MINT_DENIED_PADDOCK } })
+    await setup(cp)
+    const foreign = await consentPage()
+    await op!.db.update(schema.paddock).set({ status: 'disabled' })
+    const disabled = await send(foreign.jar, `${op!.issuer}/interaction/${foreign.uid}`)
+    expect(await disabled.text()).toBe(foreign.body)
   }, T)
 
   test('a CIMD client asking for no MCP resource is still refused at consent, as in M1', async () => {
