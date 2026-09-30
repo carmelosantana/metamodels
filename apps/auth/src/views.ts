@@ -113,3 +113,48 @@ export function switchAccountPage(action: string, xsrf: string, then: string): s
 export function renderConsoleSwitchAccountPage(action: string, xsrf: string): string {
   return switchAccountPage(action, xsrf, 'sign in as the account you just entered')
 }
+
+export interface ConsentView {
+  uid: string
+  /** Self-asserted by the client's metadata document. */
+  clientName: string
+  /** The host of the client_id URL: the identity a user can actually check. */
+  clientHost: string
+  redirectHost: string
+  paddockName: string
+  paddockSlug: string
+  email: string
+  /** Restarts this authorization request with `prompt=login consent`, so another account can approve. */
+  switchAccountHref: string
+}
+
+function signedInAs(email: string, switchAccountHref: string): string {
+  return `<p class="device">Signed in as <strong>${escapeHtml(email)}</strong>. <a href="${escapeHtml(switchAccountHref)}">Use another account</a></p>`
+}
+
+/**
+ * The MCP consent screen (M4 §4.3). Same shell and static CSP as every page here, so no script, and
+ * no client logo: `img-src` stays `'self'`. The client's name is its own claim; the bold host is the
+ * part a user can verify, so the page says which is which.
+ */
+export function renderConsentPage(v: ConsentView): string {
+  return page('Approve app', `<h1>Connect an app to MetaModels?</h1>
+<p><strong>${escapeHtml(v.clientName)}</strong> from <strong>${escapeHtml(v.clientHost)}</strong> wants to use the paddock <strong>${escapeHtml(v.paddockName)}</strong> (${escapeHtml(v.paddockSlug)}) as you.</p>
+<p class="device">The app chose its own name. <strong>${escapeHtml(v.clientHost)}</strong> is what identifies it: approve only if you recognize it and you started this connection yourself.</p>
+<p class="device">After you approve, your browser returns to <strong>${escapeHtml(v.redirectHost)}</strong>.</p>
+${signedInAs(v.email, v.switchAccountHref)}
+<form method="post" action="/interaction/${encodeURIComponent(v.uid)}/consent">
+<button autofocus type="submit" name="decision" value="approve">Approve</button>
+<button class="secondary" type="submit" name="decision" value="deny">Deny</button>
+</form>`)
+}
+
+/** Preflight said no (a viewer, or a paddock the user cannot see): the reason, and only Close. */
+export function renderConsentRefusedPage(v: { uid: string; reason: string; email: string; switchAccountHref: string }): string {
+  return page('Cannot approve', `<h1>You cannot approve this app</h1>
+<p class="error" role="alert">${escapeHtml(v.reason)}</p>
+${signedInAs(v.email, v.switchAccountHref)}
+<form method="post" action="/interaction/${encodeURIComponent(v.uid)}/consent">
+<button type="submit" name="decision" value="close">Close</button>
+</form>`)
+}

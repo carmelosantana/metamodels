@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
-  AUTH_CSS, authCsp, escapeHtml, renderConsoleSwitchAccountPage, renderLoginPage, renderLogoutPage,
-  renderMessagePage, switchAccountPage,
+  AUTH_CSS, authCsp, escapeHtml, renderConsentPage, renderConsentRefusedPage, renderConsoleSwitchAccountPage, renderLoginPage,
+  renderLogoutPage, renderMessagePage, switchAccountPage,
 } from '../src/views.js'
 
 function directives(csp: string): Record<string, string[]> {
@@ -111,5 +111,35 @@ describe('CSP compatibility', () => {
     expect(d['frame-ancestors']).toEqual(["'none'"])
     expect(d['base-uri']).toEqual(["'none'"])
     expect(authCsp([])).not.toContain('unsafe-inline')
+  })
+})
+
+describe('the consent screen (M4 §4.3)', () => {
+  const view = {
+    uid: 'uid-1', clientName: 'Claude <script>', clientHost: 'claude.ai', redirectHost: 'claude.ai',
+    paddockName: 'Small models', paddockSlug: 'small', email: 'm@x.io', switchAccountHref: '/auth?a=1&prompt=login+consent',
+  }
+
+  test('names the client, sets its client_id host in bold, and shows the redirect host, paddock and user', () => {
+    const html = renderConsentPage(view)
+    expect(html).toContain('Claude &lt;script&gt;')
+    expect(html).toContain('<strong>claude.ai</strong>')
+    expect(html).toContain('Small models')
+    expect(html).toContain('(small)')
+    expect(html).toContain('m@x.io')
+    expect(html).toContain('href="/auth?a=1&amp;prompt=login+consent"')
+    expect(html).toContain('action="/interaction/uid-1/consent"')
+    expect(html).toContain('value="approve"')
+    expect(html).toContain('value="deny"')
+    expect(html).not.toContain('<script')
+    expect(html).not.toMatch(/<img/)
+  })
+
+  test('the refusal shows the reason and only a Close button', () => {
+    const html = renderConsentRefusedPage({ uid: 'uid-1', reason: 'Your role cannot approve apps.', email: 'v@x.io', switchAccountHref: '/auth?x=1' })
+    expect(html).toContain('Your role cannot approve apps.')
+    expect(html).toContain('value="close"')
+    expect(html).not.toContain('value="approve"')
+    expect(html.match(/<button/g)).toHaveLength(1)
   })
 })
