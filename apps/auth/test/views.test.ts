@@ -135,6 +135,12 @@ describe('the consent screen (M4 §4.3)', () => {
     expect(html).not.toMatch(/<img/)
   })
 
+  test('focus starts on Deny, never on Approve: Enter on arrival must not grant access', () => {
+    const html = renderConsentPage(view)
+    expect(html).toContain('<button class="secondary" autofocus type="submit" name="decision" value="deny">Deny</button>')
+    expect(html).toContain('<button type="submit" name="decision" value="approve">Approve</button>')
+  })
+
   test('the refusal shows the reason and only a Close button', () => {
     const html = renderConsentRefusedPage({ uid: 'uid-1', reason: 'Your role cannot approve apps.', email: 'v@x.io', switchAccountHref: '/auth?x=1' })
     expect(html).toContain('Your role cannot approve apps.')

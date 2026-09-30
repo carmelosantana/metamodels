@@ -144,8 +144,8 @@ export function renderConsentPage(v: ConsentView): string {
 <p class="device">After you approve, your browser returns to <strong>${escapeHtml(v.redirectHost)}</strong>.</p>
 ${signedInAs(v.email, v.switchAccountHref)}
 <form method="post" action="/interaction/${encodeURIComponent(v.uid)}/consent">
-<button autofocus type="submit" name="decision" value="approve">Approve</button>
-<button class="secondary" type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="approve">Approve</button>
+<button class="secondary" autofocus type="submit" name="decision" value="deny">Deny</button>
 </form>`)
 }
 
