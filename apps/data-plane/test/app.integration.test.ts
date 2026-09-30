@@ -108,9 +108,10 @@ describe('data-plane /p/:slug', () => {
   })
 
   // An expired key is a key that existed; an unknown one never did. Telling them apart over the
-  // wire grades a `mm_live_` guess, so both answer identically. A REVOKED key already collapsed
-  // into the unknown body (`resolveKeyByHash` returns null for any non-active status) — expiry
-  // was the one arm still leaking.
+  // wire grades a `mm_live_` guess, so both answer identically. `resolveKeyByHash` returns null for
+  // a revoked or an expired key alike (ruling F9), so the store never tells them apart; the
+  // caller's own `expiresAt` check covers only a key `CachingConfigStore` still holds after it
+  // expired, and must refuse in the same bytes.
   test('an expired key is byte-identical to an unknown key, end to end', async () => {
     const expiredPlaintext = await seedExpiredKey()
     const [unknown, expired] = await Promise.all([
