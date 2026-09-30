@@ -11,9 +11,14 @@ export interface McpAuthDeps {
   verify: AccessTokenVerifier
 }
 
-/** RFC 9728 §5.1: the bare scheme plus where to discover the authorization server. Nothing else. */
+/**
+ * The challenge on every MCP 401: the scheme, where to discover the authorization server (RFC 9728
+ * §5.1), and the scope to ask for (MCP 2026-07-28 authorization, "Scope Selection Strategy": servers
+ * SHOULD include `scope`, and clients use it first). Nothing else: an `error=` parameter would grade
+ * the refusals the fixed 401 body refuses to grade.
+ */
 export function mcpChallenge(slug: string, dataPlaneUrl: string): string {
-  return `Bearer resource_metadata="${protectedResourceMetadataUrl(mcpResource(dataPlaneUrl, slug))}"`
+  return `Bearer resource_metadata="${protectedResourceMetadataUrl(mcpResource(dataPlaneUrl, slug))}", scope="${MCP_SCOPE}"`
 }
 
 const MISSING = 'missing access token'

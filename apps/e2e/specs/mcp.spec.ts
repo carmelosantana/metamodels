@@ -124,6 +124,7 @@ async function discover(slug: string) {
   record(`no token on ${slug}`, `${res.status} ${challenge}`)
   expect(res.status).toBe(401)
   const metadataUrl = /resource_metadata="([^"]+)"/.exec(challenge)?.[1]
+  expect(/scope="([^"]+)"/.exec(challenge)?.[1]).toBe('mcp')
   expect(metadataUrl).toBe(`${DATA_PLANE}/.well-known/oauth-protected-resource/p/${slug}/mcp`)
   const metadata = await (await fetch(metadataUrl!)).json() as { resource: string; authorization_servers: string[] }
   expect(metadata).toMatchObject({ resource: resourceOf(slug), authorization_servers: [ISSUER] })
