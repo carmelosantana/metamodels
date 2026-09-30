@@ -1,13 +1,13 @@
 import { z } from 'zod'
-import { PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
+import { PADDOCK_SLUG_MAX, PADDOCK_SLUG_RE, PADDOCK_STATUS, PADDOCK_THEMES } from '@metamodels/schema'
 
 // Public /p/:slug handle: lowercase letters, digits, hyphens; no leading/trailing hyphen.
 const slug = z
   .string()
   .trim()
   .min(1)
-  .max(64)
-  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'slug must be lowercase letters, digits, and hyphens')
+  .max(PADDOCK_SLUG_MAX)
+  .regex(PADDOCK_SLUG_RE, 'slug must be lowercase letters, digits, and hyphens')
 
 export const savePaddockInput = z.object({
   id: z.string().uuid().optional(),

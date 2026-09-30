@@ -107,8 +107,26 @@ export const apiKey = pgTable('api_key', {
   status: text('status').notNull().default('active'),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
   overrides: jsonb('overrides'),
+  /**
+   * `live`: a consumer `mm_live_` key, presented to the proxy. `oauth`: minted when a user approves an
+   * MCP client (M4 D1), bound to that OP grant and never presentable — its hash is of random bytes
+   * nobody kept. The data plane resolves each kind through a different path, so neither can stand in
+   * for the other.
+   */
+  kind: text('kind').notNull().default('live'),
+  /** The OP grant an oauth key is bound to; the OP names the key in every token it issues under it. */
+  grantId: text('grant_id'),
+  /** The CIMD `client_id` (an https URL) that was approved. */
+  oauthClientId: text('oauth_client_id'),
+  /** Who approved it. Revoked with them: deactivation and demotion to viewer revoke their oauth keys. */
+  userId: uuid('user_id').references(() => user.id, { onDelete: 'cascade' }),
   createdAt: createdAt(),
-})
+}, (t) => [
+  check('api_key_kind', sql`${t.kind} IN ('live', 'oauth')`),
+  check('api_key_oauth_binding', sql`(${t.kind} = 'oauth' AND ${t.grantId} IS NOT NULL AND ${t.oauthClientId} IS NOT NULL AND ${t.userId} IS NOT NULL) OR (${t.kind} = 'live' AND ${t.grantId} IS NULL AND ${t.oauthClientId} IS NULL AND ${t.userId} IS NULL)`),
+  // The OP looks a key up by its grant on every MCP token it issues (`extraTokenClaims`).
+  index('api_key_grant_id').on(t.grantId),
+])
 
 export const keyPaddock = pgTable('key_paddock', {
   id: id(),

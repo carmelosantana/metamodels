@@ -118,3 +118,64 @@ describe('schema', () => {
     expect(u2.status).toBe('deactivated')
   })
 })
+
+describe('api_key kinds (M4 D1)', () => {
+  async function seeded() {
+    const db = await freshMigratedDb()
+    const [o] = await db.insert(schema.org).values({ name: 'o' }).returning()
+    const [u] = await db.insert(schema.user).values({
+      orgId: o.id, email: 'member@x.io', passwordHash: 'scrypt$aa$bb', role: 'member',
+    }).returning()
+    return { db, o, u }
+  }
+  const oauthKey = (orgId: string, userId: string | null, over: Record<string, unknown> = {}) => ({
+    orgId, name: 'Client (MCP) · member@x.io', prefix: 'oauth', hash: `h-${crypto.randomUUID()}`,
+    kind: 'oauth', grantId: 'grant-1', oauthClientId: 'https://client.example.test/cimd.json', userId,
+    ...over,
+  })
+
+  test('an insert that names no kind is a live key with no OAuth binding', async () => {
+    const { db, o } = await seeded()
+    const [k] = await db.insert(schema.apiKey).values({
+      orgId: o.id, name: 'k', prefix: 'mm_live_x', hash: 'h-live',
+    }).returning()
+    expect(k).toMatchObject({ kind: 'live', grantId: null, oauthClientId: null, userId: null })
+  })
+
+  test('an oauth key carries its grant, its client and its user', async () => {
+    const { db, o, u } = await seeded()
+    const [k] = await db.insert(schema.apiKey).values(oauthKey(o.id, u.id)).returning()
+    expect(k).toMatchObject({
+      kind: 'oauth', grantId: 'grant-1', oauthClientId: 'https://client.example.test/cimd.json', userId: u.id,
+    })
+  })
+
+  test('an oauth key missing any one binding column is refused', async () => {
+    const { db, o, u } = await seeded()
+    for (const missing of ['grantId', 'oauthClientId', 'userId']) {
+      await expect(db.insert(schema.apiKey).values(oauthKey(o.id, u.id, { [missing]: null })), missing)
+        .rejects.toThrow()
+    }
+  })
+
+  test('a live key carrying any binding column is refused', async () => {
+    const { db, o, u } = await seeded()
+    for (const [col, value] of [['grantId', 'g'], ['oauthClientId', 'https://c.test/x'], ['userId', u.id]] as const) {
+      await expect(db.insert(schema.apiKey).values({
+        orgId: o.id, name: 'k', prefix: 'mm_live_x', hash: `h-${col}`, [col]: value,
+      }), col).rejects.toThrow()
+    }
+  })
+
+  test('kind is live or oauth and nothing else', async () => {
+    const { db, o, u } = await seeded()
+    await expect(db.insert(schema.apiKey).values(oauthKey(o.id, u.id, { kind: 'session' }))).rejects.toThrow()
+  })
+
+  test('deleting the user deletes their oauth keys', async () => {
+    const { db, o, u } = await seeded()
+    await db.insert(schema.apiKey).values(oauthKey(o.id, u.id))
+    await db.delete(schema.user).where(eq(schema.user.id, u.id))
+    expect(await db.select().from(schema.apiKey).where(eq(schema.apiKey.orgId, o.id))).toEqual([])
+  })
+})
