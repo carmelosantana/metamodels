@@ -336,7 +336,7 @@ Whether the OP becomes publicly reachable is still M4's decision.
 | **M1** | Auth foundation | `auth` service (oidc-provider, Postgres adapter, `findAccount`, login view, first-party auto-consent, resource indicators + the JWT access-token contract); console cut over to relying party — password login leaves the console, `session.ts` stays as the RP session |
 | **M2** | Admin API | `/api/admin/*` Route Handlers, scopes ∩ role, audit `changed_by`, key-delete semantics, device grant for the admin CLI, OpenAPI from Zod, bind/exposure decision. *Non-interactive/CI auth explicitly deferred (M2 spec §2.4, D5); users, invites and licence not exposed in v1 (M2 spec §2.7, D11)* |
 | **M3** | Breed prep | `toMcp` return typed as `McpToolDef[]`; both breeds implement |
-| **M4** | MCP endpoint | `/p/<slug>/mcp`, Streamable HTTP, RFC 9728 on both resource servers, CIMD, consent screen |
+| **M4** | MCP endpoint | `/p/<slug>/mcp`, Streamable HTTP, RFC 9728 on both resource servers, CIMD, consent screen — designed in [2026-09-29-m4-mcp-endpoint-design.md](2026-09-29-m4-mcp-endpoint-design.md), which settles C5 against §2.4 as full OAuth (its §2) |
 
 M1 is load-bearing — M2 and M4 both authenticate against it. M3 is independent of M1/M2 and may run
 in parallel if capacity allows.
