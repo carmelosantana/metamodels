@@ -2,6 +2,7 @@ import Provider, { errors, type ClientMetadata, type Configuration } from 'oidc-
 import { CLI_CLIENT_ID, CONSOLE_CLIENT_ID, OPERATOR_SESSION_TTL_MS } from '@metamodels/schema'
 import { makeFindAccount } from './account.js'
 import { cimdFeature, cimdGateForIssuer, ssrfGuardAvailable } from './cimd.js'
+import { cimdCspMiddleware } from './cimd-csp.js'
 import { consentAsserter, httpConsentApi, type ConsentApi } from './consent-api.js'
 import { pgAdapterFactory } from './adapter.js'
 import type { AuthConfig } from './config.js'
@@ -233,6 +234,9 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
   // Deployed behind a TLS-terminating proxy or tunnel: trust X-Forwarded-Proto/For so issued URLs
   // and cookie `secure` flags are right (oidc-provider docs, "Trusting TLS offloading proxies").
   provider.proxy = true
+  const consoleOrigin = new URL(cfg.consoleUrl).origin
+  // First, so it wraps everything below and sees each response last.
+  provider.use(cimdCspMiddleware({ provider, consoleOrigin }))
   provider.use(interactionMiddleware({
     provider,
     db,
@@ -242,7 +246,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     // (M4 §4.3). Not a grant of the admin API: that is `resourcesByClient`, where only the CLI is
     // listed (spec A15).
     firstPartyClientIds: new Set([CONSOLE_CLIENT_ID, CLI_CLIENT_ID]),
-    csp: authCsp([new URL(cfg.consoleUrl).origin]),
+    csp: authCsp([consoleOrigin]),
     consentApi,
     dataPlaneUrl: cfg.dataPlaneUrl,
   }))
