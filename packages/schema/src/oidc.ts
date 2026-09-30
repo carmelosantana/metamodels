@@ -88,3 +88,16 @@ export function requireOrigin(name: string, value: string | undefined): string {
   if (u.pathname !== '/' || u.search || u.hash) throw new Error(`${name} must be an origin (no path, query or fragment)`)
   return u.origin
 }
+
+/**
+ * An RFC 9728 protected-resource metadata document. Both resource servers build theirs here, from the
+ * same resource helpers as the OP's resource map, so the issuer, resource and scopes cannot drift.
+ */
+export function protectedResourceMetadata(resource: string, issuer: string, scopes: readonly string[]) {
+  return {
+    resource,
+    authorization_servers: [issuer],
+    scopes_supported: [...scopes],
+    bearer_methods_supported: ['header'],
+  }
+}
