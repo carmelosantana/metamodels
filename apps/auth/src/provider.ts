@@ -137,7 +137,7 @@ export function createProvider(cfg: AuthConfig, db: Db, opts: ProviderOptions = 
     pkce: { required: () => true },
     interactions: {
       url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
-      policy: interactionPolicyWithFreshDeviceLogin(),
+      policy: interactionPolicyWithFreshDeviceLogin({ db, dataPlaneUrl: cfg.dataPlaneUrl }),
     },
     // A new grant for every device approval; the console keeps the default (see loadExistingGrant).
     loadExistingGrant,

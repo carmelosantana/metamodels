@@ -11,7 +11,7 @@ import { isCimdClient } from './cimd.js'
 import type { ConsentApi, ConsentRequest } from './consent-api.js'
 import type { Db } from './db.js'
 import type { LoginThrottle } from './login-throttle.js'
-import { findPaddock } from './paddocks.js'
+import { activeOauthKeyForGrant, findPaddock } from './paddocks.js'
 import {
   AUTH_CSS, renderConsentPage, renderConsentRefusedPage, renderLoginPage, renderMessagePage, type ConsentView,
 } from './views.js'
@@ -38,10 +38,17 @@ const NOT_PERMITTED = 'This client is not permitted to sign in yet.'
 /** oidc-provider's route names for the browser half of the device grant: the confirm POST, and resuming after an interaction. */
 const DEVICE_APPROVAL_ROUTES: ReadonlySet<string> = new Set(['code_verification', 'device_resume'])
 
+/** What the MCP consent check reads: the database (read-only) and `DATA_PLANE_URL`. */
+export interface McpKeyCheckDeps {
+  db: Db
+  dataPlaneUrl: string
+}
+
 /**
- * oidc-provider's default interaction policy plus one login check: approving a device requires a
- * password typed in THIS interaction (RFC 8628 §5.4, remote phishing). An existing OP session does
- * not count, however recent.
+ * oidc-provider's default interaction policy plus two checks.
+ *
+ * Login: approving a device requires a password typed in THIS interaction (RFC 8628 §5.4, remote
+ * phishing). An existing OP session does not count, however recent.
  *
  * `ctx.oidc.result` is the result of the interaction being resumed, and exists only on a resume
  * route. On the confirm POST (`code_verification`) there is none, so the login prompt always
@@ -52,8 +59,16 @@ const DEVICE_APPROVAL_ROUTES: ReadonlySet<string> = new Set(['code_verification'
  *
  * Every other route (the console's authorization-code flow) skips the check, so its login
  * behaves as before.
+ *
+ * Consent (`mcp`, when given): a CIMD client asking for one MCP resource is asked again when the
+ * grant it starts from has no active oauth key for that paddock. The browser session's grant keeps
+ * its `mcp` scope after the key behind it is revoked (on the Keys page, by a role change, or by a
+ * second approval rebinding the key to another grant), so oidc-provider's own scope checks would not
+ * prompt, no key would be minted, and the code exchange would fail `invalid_grant`
+ * (`makeExtraTokenClaims`) until the OP session ended. The consent screen's Approve mints a key onto
+ * that same grant (`submitConsent`). The lookup only reads.
  */
-export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.DefaultPolicy {
+export function interactionPolicyWithFreshDeviceLogin(mcp?: McpKeyCheckDeps): interactionPolicy.DefaultPolicy {
   const { Check, base } = interactionPolicy
   const policy = base()
   policy.get('login')!.checks.add(new Check(
@@ -63,6 +78,21 @@ export function interactionPolicyWithFreshDeviceLogin(): interactionPolicy.Defau
       ? Check.REQUEST_PROMPT
       : Check.NO_NEED_TO_PROMPT,
   ))
+  if (mcp) {
+    policy.get('consent')!.checks.add(new Check(
+      'mcp_key_missing',
+      'the grant has no active key for this paddock',
+      async (ctx) => {
+        if (!isCimdClient(ctx.oidc.client)) return Check.NO_NEED_TO_PROMPT
+        const resource = singleResource(ctx.oidc.params?.resource)
+        const slug = resource === null ? null : parseMcpResource(mcp.dataPlaneUrl, resource)
+        if (slug === null) return Check.NO_NEED_TO_PROMPT
+        const grantId = ctx.oidc.grant?.jti
+        if (!grantId) return Check.REQUEST_PROMPT
+        return (await activeOauthKeyForGrant(mcp.db, grantId, slug)) ? Check.NO_NEED_TO_PROMPT : Check.REQUEST_PROMPT
+      },
+    ))
+  }
   return policy
 }
 

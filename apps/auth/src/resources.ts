@@ -94,7 +94,9 @@ export function makeGetResourceServerInfo(
  * oidc-provider's `extraTokenClaims`. For an MCP access token it adds `mm_kid`, the oauth key the data
  * plane meters and scopes the caller by. It runs every time such a token is issued, first issue and
  * every refresh alike, so a key revoked on the Keys page (or by a user losing their role) makes the
- * grant unable to mint another: `invalid_grant`, and the client must ask the user again.
+ * grant unable to mint another: `invalid_grant`, and the client must ask the user again. Asking again
+ * shows the consent screen even in a browser whose session still holds the grant (the `mcp_key_missing`
+ * check in `interactionPolicyWithFreshDeviceLogin`), and Approve mints a new key onto that grant.
  */
 export function makeExtraTokenClaims(db: Db, dataPlaneUrl: string) {
   return async (_ctx: unknown, token: unknown): Promise<{ mm_kid: string } | undefined> => {
