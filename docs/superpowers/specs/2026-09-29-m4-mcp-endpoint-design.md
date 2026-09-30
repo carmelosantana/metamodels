@@ -300,9 +300,11 @@ before comparing — else 400 with `-32020` HeaderMismatch. An unsupported versi
 
 **Legacy (`2025-11-25`, `2025-06-18`).** `initialize` answers `{protocolVersion, capabilities:{tools:{listChanged:false}}, serverInfo}`
 (echoing a supported legacy version, else the newest); `notifications/initialized` answers 202;
-`ping` answers `{}`; `tools/list` and `tools/call` reuse the same handlers with legacy result shapes.
+`ping` answers `{}` (legacy only — the modern revision removed it, so modern `ping` gets 404 `-32601`); `tools/list` and `tools/call` reuse the same handlers with legacy result shapes.
 Era is chosen per request: `initialize`, or a legacy `MCP-Protocol-Version` without modern `_meta`,
 is legacy; everything else is validated as modern.
+
+Every modern result carries `resultType` and `_meta['io.modelcontextprotocol/serverInfo']`; `server/discover` and `tools/list` also carry the required caching hints `ttlMs: 0` and `cacheScope: 'private'` (the schema's `CacheableResult` makes `ttlMs` required; `0` because a fence edit must show on the next list).
 
 OAuth (§4.2), the gate pipeline and metering are identical in both eras. `serverInfo.version` is the
 version the stack already exposes, or `'0.0.0'` if it exposes none.
