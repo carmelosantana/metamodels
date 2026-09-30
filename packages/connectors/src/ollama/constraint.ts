@@ -7,6 +7,11 @@ export const ollamaConstraint = z.object({
 
 export type OllamaConstraint = z.infer<typeof ollamaConstraint>
 
+/** Whether this fence allows a model by name: `null` allows every model, a list only its exact names. */
+export function ollamaModelAllowed(fence: OllamaConstraint, model: string): boolean {
+  return fence.allowedModels === null || fence.allowedModels.includes(model)
+}
+
 export type OllamaRouteGroup = 'chat' | 'generate' | 'embed' | 'read' | 'mutate' | 'unknown'
 
 export function routeGroup(path: string): OllamaRouteGroup {

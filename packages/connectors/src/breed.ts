@@ -1,6 +1,6 @@
 import type { ZodTypeAny } from 'zod'
 import type { MeterDim, RouteClass } from '@metamodels/schema'
-import type { McpToolDef } from './mcp.js'
+import type { McpCallPlan, McpCallToolResult, McpToolDef } from './mcp.js'
 
 export interface RouteSpec {
   method: string
@@ -110,6 +110,17 @@ export interface Breed<C = unknown> {
    * name, valid per `toolDefProblems`, and never a tool for a `mutate` route.
    */
   toMcp?(fence: C): McpToolDef[]
+  /**
+   * Translate one `tools/call` into the request the proxy would have received (spec M4 D8). Pure, no
+   * I/O. It plans; it never enforces — the data plane runs the plan through the same rate limit,
+   * quota, `guard()` / `handle` and meter as `ALL /p/:slug/*`. Never plans a `mutate` route.
+   */
+  mcpCall?(name: string, args: unknown, fence: C): McpCallPlan
+  /**
+   * Shape the pipeline's answer to a planned request as MCP content. Never throws. The fence lets a
+   * breed narrow what the answer shows (Ollama's `list_models` keeps only the fence's models).
+   */
+  mcpResult?(name: string, result: { status: number; body: unknown }, fence: C): McpCallToolResult
   handle?(ctx: RequestCtx, fence: C, io: BreedIO): Promise<BreedHandleResult>
 }
 

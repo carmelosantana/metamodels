@@ -1,6 +1,7 @@
 export { comfyuiBreed, comfyuiConstraint } from './breed.js'
 export type { ComfyConstraint } from './breed.js'
-export { comfyToMcp, comfyToolName, comfyToolNames, JOB_RESULT_TOOL } from './mcp.js'
+export { comfyMcpCall, comfyMcpResult, comfyToMcp, comfyToolName, comfyToolNames, JOB_RESULT_TOOL } from './mcp.js'
+export type { JobResultImage } from './mcp.js'
 export { reconstructGraph } from './template.js'
 export type { ParamSpec, WorkflowTemplate } from './template.js'
 export { parseHistory } from './result.js'
