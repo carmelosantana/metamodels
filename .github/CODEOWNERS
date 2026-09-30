@@ -3,3 +3,4 @@
 # The lockfile and root build config gate every dependency and CI entrypoint.
 /pnpm-lock.yaml     @carmelosantana
 /package.json       @carmelosantana
+/pnpm-workspace.yaml @carmelosantana
