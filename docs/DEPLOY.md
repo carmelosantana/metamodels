@@ -269,11 +269,11 @@ Keep at least one active admin — deactivating the last one locks everybody out
      10 more minutes.
 
   Replacing `OIDC_SIGNING_KEY` on its own, with `OIDC_PREVIOUS_SIGNING_KEYS` left empty, is the
-  *deliberate* way to invalidate issued tokens. The console refuses them once its cached copy of the
-  keys expires, within 10 minutes, or at once if you restart the control-plane container after the
-  sign-in service is running with the new key, as
-  [Forcing everyone to sign in again](#forcing-everyone-to-sign-in-again) describes for a leaked
-  key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
+  *deliberate* way to invalidate issued tokens. The console, and the data plane for MCP access
+  tokens, refuse them once their cached copies of the keys expire, within 10 minutes, or at once if
+  you restart the control-plane and data-plane containers after the sign-in service is running with
+  the new key, as [Forcing everyone to sign in again](#forcing-everyone-to-sign-in-again) describes
+  for a leaked key. Either way it does **not** sign anyone out: console sessions are HMAC-signed with
   `SESSION_SECRET`, and sign-in service sessions are database rows behind cookies signed with
   `OIDC_COOKIE_KEYS`; neither depends on this key.
 - **`CONSOLE_CLIENT_SECRET`** — both services read the same stack variable, so change it and
@@ -355,8 +355,9 @@ and `mm` CLI sign-ins.
    end **access tokens** already issued: those are signed JWTs that the console checks by itself
    and that are never stored, so each one keeps working until it expires, one hour after it was
    issued at most. To end them sooner, replace `OIDC_SIGNING_KEY` outright, as the next paragraph
-   describes: the console then refuses them once its cached copy of the sign-in service's keys
-   expires, within 10 minutes, or at once if you also restart the control-plane container.
+   describes: the console and the data plane then refuse them once their cached copies of the
+   sign-in service's keys expire, within 10 minutes, or at once if you also restart the
+   control-plane and data-plane containers.
 
 If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
 
@@ -370,13 +371,19 @@ If the leak may have included `OIDC_SIGNING_KEY`, **replace it outright**:
    admin API access tokens signed with the leaked key, including any forged with it. A restart
    drops the copy, so the leaked key stops verifying at once. Without the restart it stops within
    10 minutes.
+4. **Restart the data-plane container too**, for example `docker compose restart data-plane`, with
+   the same timing rule as step 3. The data plane keeps its own in-memory copy of the published
+   keys, for up to 10 minutes, to verify MCP access tokens. Until that copy expires it still accepts
+   MCP tokens signed with the leaked key, including forged ones. A restart drops it at once.
 
-Steps 2 and 3 together cover every place that verifies these tokens. The restart covers the
-control-plane process, which holds two copies of the keys, both in memory: the admin API's, which
-checks the access tokens clients present, and the console sign-in's, which checks only the ID token
-the console receives straight from the sign-in service when someone signs in. The data plane
-verifies no token from the sign-in service at all: it authenticates API keys. The sign-in service
-reads its keys when it starts (step 2).
+Steps 2 to 4 together cover every place that verifies these tokens. The control-plane restart covers
+three copies of the keys, all in that process's memory: the admin API's, which checks the access
+tokens clients present; the console sign-in's, which checks only the ID token the console receives
+straight from the sign-in service when someone signs in; and the one that checks the sign-in
+service's assertion when it records an approved MCP app. The data-plane restart covers its copy,
+which checks the MCP access tokens clients present at `/p/<slug>/mcp`; API keys on the proxy are
+not tokens from the sign-in service and are unaffected. The sign-in service reads its keys when it
+starts (step 2).
 
 Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-the-sign-in-keys)
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
