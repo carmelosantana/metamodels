@@ -215,7 +215,9 @@ redirect-URI error.
 Each paddock is an MCP server at `<DATA_PLANE_URL>/p/<slug>/mcp`. An MCP client finds the sign-in
 service from the endpoint's `401` (RFC 9728 metadata), identifies itself with a Client ID Metadata
 Document, and a signed-in `member` or `admin` approves it on a consent screen. The approval appears
-on the Keys page as a key of kind **MCP app**; revoking it there disconnects the app.
+on the Keys page as a key of kind **MCP app**; revoking it there disconnects the app. Signing out of the
+browser does not: the app's refresh token is not bound to the sign-in session, so revoke its key on
+the Keys page to cut it off.
 
 Nothing here is public by default. With the defaults, MCP works for clients on the same machine
 (Claude Code, VS Code): the endpoint and the sign-in service are both on loopback. For a cloud
