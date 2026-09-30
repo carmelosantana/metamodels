@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
-import { bodyLimit } from 'hono/body-limit'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { RequestCtx } from '@metamodels/connectors'
 import { hashApiKey } from '@metamodels/schema'
+import { BodyTooLarge, bodyTooLarge, limitRequestBody } from './body-limit.js'
 import type { ResolvedKey } from './config/types.js'
 import { registerMcpRoutes, type McpDeps } from './mcp/endpoint.js'
 import { createPipeline, type PipelineDeps, type Refusal } from './pipeline.js'
@@ -77,12 +77,10 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     }
   })
 
-  // Before any `/p/*` handler, so an oversized body is refused before authentication and before it
-  // is buffered: a declared Content-Length is judged unread, a chunked body as it streams.
-  app.use('/p/*', bodyLimit({
-    maxSize: deps.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES,
-    onError: (c) => c.json({ error: 'request body too large' }, 413),
-  }))
+  // Before any `/p/*` handler. A declared Content-Length over the limit is 413 before authentication,
+  // the body unread; any other body is counted as the handler reads it, after authentication, and the
+  // read that crosses the limit is 413. Nothing is buffered for an anonymous caller.
+  app.use('/p/*', limitRequestBody(deps.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES))
 
   const pipeline = createPipeline(deps)
 
@@ -131,9 +129,12 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     const contentType = c.req.header('content-type') ?? ''
     let body: unknown
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
-      body = contentType.includes('application/json')
-        ? await c.req.json().catch(() => undefined)
-        : await c.req.text().catch(() => undefined)
+      try {
+        body = contentType.includes('application/json') ? await c.req.json() : await c.req.text()
+      } catch (err) {
+        if (err instanceof BodyTooLarge) return bodyTooLarge(c)
+        body = undefined
+      }
     }
     const ctx: RequestCtx = {
       method: c.req.method,
