@@ -1,3 +1,4 @@
+import { createServer, type Socket } from 'node:net'
 import Redis from 'ioredis'
 import { describe, expect, test } from 'vitest'
 import { MemoryReplayGuard, REPLAY_REDIS_OPTIONS, RedisReplayGuard } from './replay-guard'
@@ -40,6 +41,29 @@ describe('RedisReplayGuard with Redis unreachable (follow-up ruling F3)', () => 
       expect(Date.now() - started).toBeLessThan(2_000)
     } finally {
       client.disconnect()
+    }
+  })
+
+  test('a claim against a host that accepts and never answers settles in about commandTimeout, not never', async () => {
+    // A stalled but open socket: the connection succeeds, the ready check and the claim sit unanswered.
+    const sockets = new Set<Socket>()
+    const server = createServer((s) => { sockets.add(s); s.on('error', () => {}) })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as { port: number }
+    const client = new Redis(`redis://127.0.0.1:${port}`, REPLAY_REDIS_OPTIONS)
+    client.on('error', () => {})
+    try {
+      const started = Date.now()
+      const outcome = await Promise.race([
+        new RedisReplayGuard(client).claimOnce('j1', 120).then(() => 'resolved', () => 'rejected'),
+        new Promise((resolve) => setTimeout(() => resolve('still pending after 5 s'), 5_000)),
+      ])
+      expect(outcome).toBe('rejected')
+      expect(Date.now() - started).toBeLessThan(3_000)
+    } finally {
+      client.disconnect()
+      for (const s of sockets) s.destroy()
+      await new Promise((resolve) => server.close(resolve))
     }
   })
 })
