@@ -10,6 +10,7 @@ interface Entry<T> { value: T; expiresAt: number }
  */
 export class CachingConfigStore implements ConfigStore {
   private readonly keyCache = new Map<string, Entry<ResolvedKey | null>>()
+  private readonly keyByIdCache = new Map<string, Entry<ResolvedKey | null>>()
   private readonly paddockCache = new Map<string, Entry<ResolvedPaddock | null>>()
   private readonly ttlMs: number
   private readonly maxEntries: number
@@ -49,6 +50,14 @@ export class CachingConfigStore implements ConfigStore {
     return value
   }
 
+  async resolveKeyById(id: string): Promise<ResolvedKey | null> {
+    const cached = this.keyByIdCache.get(id)
+    if (this.fresh(cached)) return cached.value
+    const value = await this.inner.resolveKeyById(id)
+    this.setBounded(this.keyByIdCache, id, { value, expiresAt: this.now() + this.ttlMs })
+    return value
+  }
+
   async getPaddockBySlug(slug: string): Promise<ResolvedPaddock | null> {
     const cached = this.paddockCache.get(slug)
     if (this.fresh(cached)) return cached.value
@@ -60,6 +69,8 @@ export class CachingConfigStore implements ConfigStore {
   /** Flush the entire config cache. Called by the invalidation subscriber on any config write. */
   invalidateAll(): void {
     this.keyCache.clear()
+    // A key revoked on the Keys page publishes an invalidation (M4 Task 3): the next MCP request refuses it.
+    this.keyByIdCache.clear()
     this.paddockCache.clear()
   }
 }

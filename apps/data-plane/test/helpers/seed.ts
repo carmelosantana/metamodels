@@ -55,3 +55,25 @@ export async function seedFixture(
   await db.insert(schema.keyPaddock).values({ keyId: key.id, paddockId: paddock.id })
   return { orgId: org.id, flockId: flock.id, paddockId: paddock.id, keyId: key.id, keyPlaintext, keyHash, slug: 'small' }
 }
+
+/**
+ * An oauth key as the control plane's `mintOauthKey` writes it (M4 D1): bound to a grant, a client and
+ * the user who approved it, scoped to the fixture's paddock (or `paddockId`). Its hash is of random bytes nobody kept.
+ */
+export async function seedOauthKey(
+  db: TestDb,
+  fx: Fixture,
+  opts: { clientId?: string; grantId?: string; status?: string; paddockId?: string } = {},
+): Promise<{ keyId: string; hash: string; clientId: string; userId: string }> {
+  const clientId = opts.clientId ?? 'https://mcp-client.example.test/client.json'
+  const [u] = await db.insert(schema.user).values({
+    orgId: fx.orgId, email: `approver-${randomUUID()}@x.io`, passwordHash: 'unused', role: 'member',
+  }).returning()
+  const hash = randomBytes(32).toString('hex')
+  const [key] = await db.insert(schema.apiKey).values({
+    orgId: fx.orgId, name: 'Test MCP client (MCP)', prefix: 'oauth', hash, status: opts.status ?? 'active',
+    kind: 'oauth', grantId: opts.grantId ?? randomUUID(), oauthClientId: clientId, userId: u.id,
+  }).returning()
+  await db.insert(schema.keyPaddock).values({ keyId: key.id, paddockId: opts.paddockId ?? fx.paddockId })
+  return { keyId: key.id, hash, clientId, userId: u.id }
+}

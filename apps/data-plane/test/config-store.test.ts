@@ -3,7 +3,7 @@ import { DrizzleConfigStore } from '../src/config/config-store.js'
 import { eq } from 'drizzle-orm'
 import * as schema from '@metamodels/schema'
 import { seal } from '@metamodels/schema/sealed'
-import { makeDb, seedFixture, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
+import { makeDb, seedFixture, seedOauthKey, TEST_RING, testRing, type Fixture, type TestDb } from './helpers/seed.js'
 
 let db: TestDb
 let fx: Fixture
@@ -80,5 +80,42 @@ describe('DrizzleConfigStore — the sealed upstream credential', () => {
     const p = await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('other')
     expect(p!.upstreamAuthError).toBe('tampered')
     expect(p!.flock.upstreamAuth).toBeNull()
+  })
+})
+
+describe('the two key paths (M4 §2)', () => {
+  test('resolveKeyById answers an active oauth key, with its client id and paddocks', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const oauth = await seedOauthKey(db, fx, { clientId: 'https://c.example/client.json' })
+    const store = new DrizzleConfigStore(db, TEST_RING)
+    expect(await store.resolveKeyById(oauth.keyId)).toMatchObject({
+      keyId: oauth.keyId, orgId: fx.orgId, status: 'active', paddockSlugs: ['small'], oauthClientId: 'https://c.example/client.json',
+    })
+  })
+
+  test('resolveKeyById never answers a live key, a revoked key or a non-uuid', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const oauth = await seedOauthKey(db, fx, { status: 'revoked' })
+    const store = new DrizzleConfigStore(db, TEST_RING)
+    expect(await store.resolveKeyById(fx.keyId)).toBeNull()
+    expect(await store.resolveKeyById(oauth.keyId)).toBeNull()
+    expect(await store.resolveKeyById('not-a-uuid')).toBeNull()
+  })
+
+  test('resolveKeyByHash never answers an oauth key, even given its hash', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const oauth = await seedOauthKey(db, fx)
+    const store = new DrizzleConfigStore(db, TEST_RING)
+    expect(await store.resolveKeyByHash(oauth.hash)).toBeNull()
+    expect((await store.resolveKeyByHash(fx.keyHash))?.keyId).toBe(fx.keyId)
+  })
+
+  test('a paddock carries its display name', async () => {
+    const db = await makeDb()
+    await seedFixture(db)
+    expect((await new DrizzleConfigStore(db, TEST_RING).getPaddockBySlug('small'))?.name).toBe('Small models')
   })
 })

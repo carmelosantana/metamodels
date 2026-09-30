@@ -32,6 +32,9 @@ describe.skipIf(!REDIS_URL)('config invalidation pub/sub (real Redis)', () => {
         innerCalls++
         return null
       },
+      async resolveKeyById() {
+        return null
+      },
       async getPaddockBySlug() {
         return null
       },

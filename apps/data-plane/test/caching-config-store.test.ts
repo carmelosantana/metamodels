@@ -8,7 +8,7 @@ function fakeKey(id: string): ResolvedKey {
 }
 function fakePaddock(slug: string): ResolvedPaddock {
   return {
-    paddockId: 'p', orgId: 'o', slug, status: 'active', breedId: 'ollama',
+    paddockId: 'p', orgId: 'o', slug, name: 'Small', status: 'active', breedId: 'ollama',
     flock: { baseUrl: 'http://f', upstreamAuth: null, tlsTrust: false },
     fence: { constraintJson: {}, rateLimit: null, quota: null },
   }
@@ -20,10 +20,22 @@ class CountingInner implements ConfigStore {
   key: ResolvedKey | null = fakeKey('k1')
   paddock: ResolvedPaddock | null = fakePaddock('small')
   async resolveKeyByHash(): Promise<ResolvedKey | null> { this.keyCalls++; return this.key }
+  async resolveKeyById(): Promise<ResolvedKey | null> { this.keyCalls++; return this.key }
   async getPaddockBySlug(): Promise<ResolvedPaddock | null> { this.paddockCalls++; return this.paddock }
 }
 
 describe('CachingConfigStore', () => {
+  test('an oauth key by id is cached, and invalidateAll evicts it', async () => {
+    const inner = new CountingInner()
+    const c = new CachingConfigStore(inner)
+    await c.resolveKeyById('k1')
+    await c.resolveKeyById('k1')
+    expect(inner.keyCalls).toBe(1)
+    c.invalidateAll()
+    await c.resolveKeyById('k1')
+    expect(inner.keyCalls).toBe(2)
+  })
+
   test('memoizes a key hit — inner hit once for repeated reads', async () => {
     const inner = new CountingInner()
     const c = new CachingConfigStore(inner)
@@ -86,6 +98,7 @@ describe('CachingConfigStore', () => {
       this.hashCalls.set(hash, (this.hashCalls.get(hash) ?? 0) + 1)
       return fakeKey(hash)
     }
+    async resolveKeyById(): Promise<ResolvedKey | null> { return null }
     async getPaddockBySlug(slug: string): Promise<ResolvedPaddock | null> {
       return fakePaddock(slug)
     }

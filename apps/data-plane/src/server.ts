@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import Redis from 'ioredis'
 import * as schema from '@metamodels/schema'
+import { requireOrigin } from '@metamodels/schema'
 import { loadSealKeyring, type SealKeyring } from '@metamodels/schema/sealed'
 import { createApp } from './app.js'
 import { buildRegistry } from './breeds.js'
@@ -22,6 +23,12 @@ export interface ServerConfig {
   redisUrl?: string
   port: number
   sealKeys: SealKeyring
+  /** `DATA_PLANE_URL`: this service's public origin, the base of every MCP resource (M4 D2). */
+  dataPlaneUrl: string
+  /** `OIDC_ISSUER`: the `iss` every MCP access token must carry. */
+  oidcIssuer: string
+  /** Where to fetch the OP's JWKS from inside the deployment. Defaults to the issuer. */
+  oidcInternalUrl: string
 }
 
 export function loadServerConfig(env: Record<string, string | undefined>): ServerConfig {
@@ -29,9 +36,18 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
   if (!databaseUrl) throw new Error('DATABASE_URL is required')
   const port = env.PORT ? Number(env.PORT) : 8787
   if (Number.isNaN(port)) throw new Error('PORT must be a number')
+  const oidcIssuer = requireOrigin('OIDC_ISSUER', env.OIDC_ISSUER)
   // Required at boot even with no credential stored yet: a missing key should stop the deploy, not
   // surface later as one paddock's 503.
-  return { databaseUrl, redisUrl: env.REDIS_URL, port, sealKeys: loadSealKeyring(env) }
+  return {
+    databaseUrl,
+    redisUrl: env.REDIS_URL,
+    port,
+    sealKeys: loadSealKeyring(env),
+    dataPlaneUrl: requireOrigin('DATA_PLANE_URL', env.DATA_PLANE_URL),
+    oidcIssuer,
+    oidcInternalUrl: env.OIDC_INTERNAL_URL ? requireOrigin('OIDC_INTERNAL_URL', env.OIDC_INTERNAL_URL) : oidcIssuer,
+  }
 }
 
 export function startServer(cfg: ServerConfig): void {

@@ -15,12 +15,16 @@ export interface ResolvedKey {
   expiresAt: Date | null
   paddockSlugs: string[]
   overrides: KeyOverrides | null
+  /** For an oauth key (M4 D1): the CIMD `client_id` it was approved for. Absent for a live key. */
+  oauthClientId?: string
 }
 
 export interface ResolvedPaddock {
   paddockId: string
   orgId: string
   slug: string
+  /** The display name: the MCP `serverInfo.title`. */
+  name: string
   status: string
   breedId: string
   /** `upstreamAuth` is the OPENED credential, plaintext — held in memory only, never stored as such. */
