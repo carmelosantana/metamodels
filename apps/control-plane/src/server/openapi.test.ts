@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { getTableColumns } from 'drizzle-orm'
 import {
-  BREED_IDS, CAPABILITIES, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES,
+  BREED_IDS, CAPABILITIES, KEY_KINDS, KEY_STATUS, METER_DIMS, PADDOCK_STATUS, PADDOCK_THEMES,
   fence, paddock,
 } from '@metamodels/schema'
 import { GENERATED_REQUEST_SCHEMAS, buildOpenApiDocument, REQUEST_BODY_MIRRORS } from './openapi'
@@ -150,6 +150,7 @@ describe('buildOpenApiDocument', () => {
     // publishing the old name silently.
     expect(doc.components.schemas.ForbiddenProblem?.properties?.capability?.enum).toEqual([...CAPABILITIES])
     expect(doc.components.schemas.KeySummary?.properties?.status?.enum).toEqual([...KEY_STATUS])
+    expect(doc.components.schemas.KeySummary?.properties?.kind?.enum).toEqual([...KEY_KINDS])
     expect(doc.components.schemas.Paddock?.properties?.status?.enum).toEqual([...PADDOCK_STATUS])
     expect(doc.components.schemas.Paddock?.properties?.theme?.enum).toEqual([...PADDOCK_THEMES])
     expect(doc.components.schemas.Flock?.properties?.breed?.enum).toEqual([...BREED_IDS])

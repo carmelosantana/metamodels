@@ -13,6 +13,13 @@ interface PaddockOpt { id: string; name: string; slug: string }
 interface KeyRow {
   id: string; name: string; prefix: string; status: string
   expiresAt: string | null; paddockSlugs: string[]
+  kind: string; oauthClientId: string | null
+}
+
+/** An oauth key has no prefix worth showing: the approved client's host identifies it instead. */
+function identity(k: KeyRow): string {
+  if (k.kind !== 'oauth' || !k.oauthClientId) return `${k.prefix}…`
+  try { return new URL(k.oauthClientId).host } catch { return k.oauthClientId }
 }
 
 export function KeysClient(
@@ -50,11 +57,12 @@ export function KeysClient(
         </div>
       )}
 
-      <DataTable headers={['Name', 'Prefix', 'Paddocks', 'Status', 'Expires', '']}>
+      <DataTable headers={['Name', 'Kind', 'Key / client', 'Paddocks', 'Status', 'Expires', '']}>
         {keys.map((k) => (
           <tr key={k.id} className="border-b border-[var(--color-divider)]">
             <td className="px-3 py-2 text-[var(--color-text)]">{k.name}</td>
-            <td className="px-3 py-2 font-mono text-xs text-[var(--color-muted)]">{k.prefix}…</td>
+            <td className="px-3 py-2 text-xs text-[var(--color-muted)]">{k.kind === 'oauth' ? 'MCP app' : 'API key'}</td>
+            <td className="px-3 py-2 font-mono text-xs text-[var(--color-muted)]">{identity(k)}</td>
             <td className="px-3 py-2 text-xs text-[var(--color-muted)]">{k.paddockSlugs.join(', ') || '—'}</td>
             <td className="px-3 py-2"><StatusPill ok={k.status === 'active'} /></td>
             <td className="px-3 py-2 text-xs text-[var(--color-muted)]">{k.expiresAt ? k.expiresAt.slice(0, 10) : '—'}</td>
@@ -69,7 +77,7 @@ export function KeysClient(
           </tr>
         ))}
         {keys.length === 0 && (
-          <tr><td colSpan={6} className="px-3 py-8 text-center text-[var(--color-muted)]">No keys yet. Mint one to give a consumer access.</td></tr>
+          <tr><td colSpan={7} className="px-3 py-8 text-center text-[var(--color-muted)]">No keys yet. Mint one to give a consumer access.</td></tr>
         )}
       </DataTable>
 

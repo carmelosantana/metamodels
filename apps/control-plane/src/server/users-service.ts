@@ -6,6 +6,7 @@ import { writeAudit } from './audit'
 import { NotFoundError } from './flocks-service'
 import { countActiveUsers, countPendingInvites } from './seats'
 import { acquireOrgLock } from './org-lock'
+import { revokeOauthKeysForUser } from './keys-service'
 
 export { NotFoundError }
 
@@ -69,6 +70,8 @@ export async function changeUserRole(db: Db, actor: Actor, userId: string, role:
       action: 'user.role',
       target: `user:${userId}`, detail: { role },
     })
+    // D3 after the fact: a viewer cannot approve apps, so it keeps none it approved before.
+    if (role === 'viewer') await revokeOauthKeysForUser(tx, actor, userId, 'user.role')
   })
 }
 
@@ -103,5 +106,6 @@ export async function setUserStatus(
       action: status === 'active' ? 'user.reactivate' : 'user.deactivate',
       target: `user:${userId}`,
     })
+    if (status === 'deactivated') await revokeOauthKeysForUser(tx, actor, userId, 'user.deactivate')
   })
 }
