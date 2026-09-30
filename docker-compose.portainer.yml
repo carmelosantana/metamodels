@@ -90,6 +90,7 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${AUTH_HOST_PORT:-3100}}
       OIDC_INTERNAL_URL: http://auth:3100
       CONSOLE_URL: ${CONSOLE_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT:-3200}}
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://127.0.0.1:${DATA_PLANE_PORT:-8787}}
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?set CONSOLE_CLIENT_SECRET — run scripts/new-stack.sh}
       OPERATOR_EMAIL: ${OPERATOR_EMAIL:-admin@metamodels.cc}
       OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?set OPERATOR_PASSWORD — run scripts/new-stack.sh}
@@ -122,6 +123,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-metamodels}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-metamodels}}
       OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${AUTH_HOST_PORT:-3100}}
       CONSOLE_URL: ${CONSOLE_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT:-3200}}
+      # MCP resources are <DATA_PLANE_URL>/p/<slug>/mcp; consent is recorded over the compose network.
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://127.0.0.1:${DATA_PLANE_PORT:-8787}}
+      CONTROL_PLANE_INTERNAL_URL: http://control-plane:3000
       CONSOLE_CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?set CONSOLE_CLIENT_SECRET — run scripts/new-stack.sh}
       OIDC_COOKIE_KEYS: ${OIDC_COOKIE_KEYS:?set OIDC_COOKIE_KEYS — run scripts/new-stack.sh}
       OIDC_SIGNING_KEY: ${OIDC_SIGNING_KEY:?set OIDC_SIGNING_KEY — run scripts/new-stack.sh}
@@ -155,6 +159,11 @@ services:
       UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       PORT: 8787
+      # MCP: the public origin clients connect to, the issuer every access token must carry, and
+      # where to fetch that issuer's keys inside the compose network.
+      DATA_PLANE_URL: ${DATA_PLANE_URL:-http://127.0.0.1:${DATA_PLANE_PORT:-8787}}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${AUTH_HOST_PORT:-3100}}
+      OIDC_INTERNAL_URL: http://auth:3100
     ports:
       - "${DATA_PLANE_BIND:-0.0.0.0}:${DATA_PLANE_PORT:-8787}:8787"
     # Lets a flock's base_url reach Ollama/ComfyUI running on this host:
