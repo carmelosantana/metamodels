@@ -4,6 +4,7 @@
 #   ./scripts/new-stack.sh                      # print the block
 #   ./scripts/new-stack.sh --out .env.portainer # also write it to a file (mode 600)
 #   ./scripts/new-stack.sh --domain api.example.com --tag 0.5.0 --email me@example.com
+#   DATA_PLANE_PORT=9787 ./scripts/new-stack.sh # another host port for the data plane (default 8787)
 #
 # Secrets are URL-safe hex on purpose: POSTGRES_PASSWORD is interpolated into DATABASE_URL,
 # so a password containing :/@?# would produce a malformed connection string.
@@ -13,6 +14,7 @@ DOMAIN='api.metamodels.cc'
 TAG='0.5.0'
 EMAIL='admin@metamodels.cc'
 OUT=''
+DATA_PLANE_PORT="${DATA_PLANE_PORT:-8787}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -20,7 +22,7 @@ while [ $# -gt 0 ]; do
     --tag)    TAG="${2:?--tag needs a value}";       shift 2 ;;
     --email)  EMAIL="${2:?--email needs a value}";   shift 2 ;;
     --out)    OUT="${2:?--out needs a path}";        shift 2 ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -53,6 +55,10 @@ OIDC_COOKIE_KEYS=$(gen)
 OIDC_SIGNING_KEY=$(genkey)
 # Empty until you rotate OIDC_SIGNING_KEY: the retired key, published for verification only.
 OIDC_PREVIOUS_SIGNING_KEYS=
+# Where MCP clients reach the data plane: <DATA_PLANE_URL>/p/<slug>/mcp. Set it to the public
+# https:// origin to serve cloud MCP clients. See "Remote MCP connectors" in docs/DEPLOY.md.
+DATA_PLANE_PORT=${DATA_PLANE_PORT}
+DATA_PLANE_URL=http://localhost:${DATA_PLANE_PORT}
 EOF
 )
 
