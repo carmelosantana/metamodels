@@ -10,6 +10,12 @@ import { replayGuard } from './replay-guard'
 /** Twice the longest assertion life: a `jti` is remembered for as long as it could still verify. */
 export const REPLAY_WINDOW_SECONDS = 120
 
+/**
+ * How long the OP should wait before trying again when the replay guard cannot answer. The guard's
+ * ioredis reconnect backoff reaches 2 s at most (`REPLAY_REDIS_OPTIONS`), so 5 s spans a few attempts.
+ */
+export const REPLAY_GUARD_RETRY_AFTER_SECONDS = '5'
+
 /** One body for every refused assertion, whatever the reason, like the admin API's fixed 401. */
 function refused(): Response {
   return problem(401, 'Unauthorized', 'the consent assertion was rejected', undefined, { 'www-authenticate': 'Bearer' })
@@ -49,7 +55,23 @@ export function withConsentAssertion(
       }
       throw e
     }
-    if (!(await (await replayGuard()).claimOnce(claims.jti, REPLAY_WINDOW_SECONDS))) {
+    // Fail closed (follow-up ruling F3): a jti that cannot be claimed is never honoured, and Redis being
+    // unreachable is the service's fault, not the assertion's, so it is a 503 the OP may retry, not a 401.
+    let first: boolean
+    try {
+      first = await (await replayGuard()).claimOnce(claims.jti, REPLAY_WINDOW_SECONDS)
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[internal] 503, the consent replay guard is unavailable:', e instanceof Error ? `${e.name}: ${e.message}` : String(e))
+      return problem(
+        503,
+        'Service Unavailable',
+        'the consent assertion cannot be checked right now; retry after the Retry-After interval',
+        undefined,
+        { 'retry-after': REPLAY_GUARD_RETRY_AFTER_SECONDS },
+      )
+    }
+    if (!first) {
       // eslint-disable-next-line no-console
       console.warn('[internal] consent assertion refused: jti replayed')
       return refused()

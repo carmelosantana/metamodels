@@ -160,7 +160,9 @@ org scoping and audit are inherited. *(Amended 2026-09-29: `keys-service` publis
   - `sub` (user id), `client_id`, `client_name`, `resource` and `grant_id`.
 
   The control plane verifies it with the shared verifier (D6) against the JWKS it already trusts,
-  with `typ` and `aud` fixed. It rejects a replayed `jti` using a short-TTL Redis `SET NX`.
+  with `typ` and `aud` fixed. It rejects a replayed `jti` using a short-TTL Redis `SET NX`. If Redis
+  cannot answer, the route fails closed: a 503 problem with `Retry-After: 5`, never a mint, and the
+  client gives up within about a second rather than after ioredis's default ~10 s *(amended 2026-09-30, F3)*.
 - **The route re-derives everything.**
   - It loads the actor from `sub` (`loadActiveActor`, so an inactive user or an unknown role is
     refused).
@@ -431,6 +433,7 @@ cleaned up afterwards):
 | Replay guard falls back to memory without `REDIS_URL` | Matches `publishConfigInvalidation`, a no-op without Redis; every compose stack has Redis | Low: per-process only in single-process dev; DEPLOY.md says so |
 | 32 MiB body limit on every `/p/*` request, MCP included (F2) | A worst-case incompressible 2048² RGBA PNG is 21.34 MiB as base64; MCP's `run_<tpl>` is the same request as `/submit` (D8) | Low: one constant; a larger input image is refused 413 and the limit is raised |
 | `scope="mcp"` on every MCP 401, no `insufficient_scope` 403 (F5) | MCP 2026-07-28 SHOULDs `scope` in the 401 challenge; every MCP token carries exactly `mcp`, and a token without it stays a collapsed 401 | Low: a second scope would add the 403 arm; the admin API's challenge is not governed by the MCP spec and is unchanged |
+| Replay guard fails closed with 503 when Redis is unreachable (F3) | An unclaimable `jti` must not be honoured; the fault is the service's, not the assertion's | Low: an approval during a Redis outage fails with `server_error`, and the user retries |
 
 ## 10. Amendments from planning (2026-09-29)
 
@@ -463,4 +466,5 @@ Rows marked **F1**–**F8** were added on 2026-09-30 by the M4 follow-ups plan
 | 4.2 (F5) | Challenge `Bearer resource_metadata="…"` | `Bearer resource_metadata="…", scope="mcp"` on every MCP 401 |
 | 3.8 (F6) | Rate limit and quota spent before `mcpCall` validated the arguments | Plan first; an unplannable call is `isError` and spends nothing; every call that plans is still limited |
 | 3.8 (F7) | `chat` forwarded whole message objects | Each message rebuilt as `{ role, content }`, anything else refused; `embed` input must be strings |
+| 3.5 (F3) | Redis unreachable: the claim rejected after ~10.5 s and the route answered a raw 500 | ioredis fails fast (`maxRetriesPerRequest: 1`, `connectTimeout: 2000`); the route answers 503 + `Retry-After: 5` |
 
