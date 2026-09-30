@@ -1,16 +1,19 @@
 import './globals.css'
 import type { ReactNode } from 'react'
-import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
+import localFont from 'next/font/local'
 
-const ibmPlexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+// Vendored (fonts/SOURCES.md, ruling F10): the build fetches nothing, so a Google Fonts hiccup cannot fail it.
+// Same families, weights and CSS variables as the next/font/google setup this replaced.
+const ibmPlexSans = localFont({
+  src: [{ path: './fonts/IBMPlexSans[wdth,wght].ttf', weight: '400 600', style: 'normal' }],
   variable: '--font-ibm-plex-sans',
 })
 
-const ibmPlexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500'],
+const ibmPlexMono = localFont({
+  src: [
+    { path: './fonts/IBMPlexMono-Regular.ttf', weight: '400', style: 'normal' },
+    { path: './fonts/IBMPlexMono-Medium.ttf', weight: '500', style: 'normal' },
+  ],
   variable: '--font-ibm-plex-mono',
 })
 
