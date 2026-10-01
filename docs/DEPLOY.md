@@ -124,7 +124,7 @@ minimal deploy only needs seven secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.6.0 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.6.1 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
@@ -176,7 +176,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.6.0` | Image tag. The git tag `v0.6.0` publishes images as `0.6.0` — the `v` is stripped |
+| `TAG` | `0.6.1` | Image tag. The git tag `v0.6.1` publishes images as `0.6.1` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -391,6 +391,20 @@ Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-th
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
 publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
 as soon as possible, and losing the in-flight tokens signed with it is the point.
+
+### Upgrading from 0.6.0
+
+0.6.1 is a patch release: no migration, no new variables, and the stack file is unchanged apart
+from its default `TAG`. Set `TAG` to `0.6.1` if your stack pins it, and redeploy.
+
+What changes for operators:
+
+- **MCP endpoint.** Request bodies over 32 MiB get a 413, paths under `/p/<slug>/mcp/` get a 404
+  instead of being proxied, and the 401 challenge names `scope="mcp"`.
+- **Expired keys** are refused in the same single lookup as unknown or revoked ones.
+- **Consent.** If Redis is unreachable, approving an MCP app fails within about 2 seconds with a
+  503 and `Retry-After`, instead of a 500 after the sign-in service had already given up.
+- **Console fonts** ship inside the image, so the build no longer fetches Google Fonts.
 
 ### Upgrading from 0.5.x
 
