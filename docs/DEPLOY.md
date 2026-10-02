@@ -40,8 +40,8 @@ Migrations run automatically via the `migrate` service before the apps start; it
 | `OIDC_ALLOW_EPHEMERAL_KEY` | auth | Local development and CI only: with no `OIDC_SIGNING_KEY`, mint a throwaway key at boot. Never in production. |
 | `AUTH_PORT` | auth | Listen port inside the container. Compose pins it to `3100`; move `AUTH_HOST_PORT` instead. |
 | `LICENSE_KEY_SECRET` | control-plane | ≥16 chars, high-entropy. Encrypts the stored Lemon Squeezy license key at rest — losing/rotating it makes an existing entitlement undecryptable (re-activate the license). |
-| `UPSTREAM_AUTH_KEY` | migrate, control-plane, data-plane | Base64 of **exactly** 32 random bytes: `openssl rand -base64 32`. Encrypts each flock's upstream credential at rest; all three services must hold the same value, and each exits with status 1 at start-up without a valid one. Rotate it through `UPSTREAM_AUTH_PREVIOUS_KEYS` — see [Rotating the upstream credential key](#rotating-the-upstream-credential-key). The `.env.example` value is for local use and CI only. |
-| `UPSTREAM_AUTH_PREVIOUS_KEYS` | migrate, control-plane, data-plane | Optional. Comma-separated retired keys, same format. They only open credentials, never seal them, and `migrate` re-seals whatever they open under `UPSTREAM_AUTH_KEY`. Usually empty. |
+| `UPSTREAM_AUTH_KEY` | migrate, control-plane, data-plane, scheduler | Base64 of **exactly** 32 random bytes: `openssl rand -base64 32`. Encrypts each flock's upstream credential at rest; all four services must hold the same value, and each exits with status 1 at start-up without a valid one. Rotate it through `UPSTREAM_AUTH_PREVIOUS_KEYS` — see [Rotating the upstream credential key](#rotating-the-upstream-credential-key). The `.env.example` value is for local use and CI only. |
+| `UPSTREAM_AUTH_PREVIOUS_KEYS` | migrate, control-plane, data-plane, scheduler | Optional. Comma-separated retired keys, same format. They only open credentials, never seal them, and `migrate` re-seals whatever they open under `UPSTREAM_AUTH_KEY`. Usually empty. |
 | `OPERATOR_EMAIL` / `OPERATOR_PASSWORD` | control-plane seed | The first admin created by `pnpm seed`. There is no password-change screen yet; see [Retiring the seeded admin](#retiring-the-seeded-admin). |
 | `WORKER_NAME` | worker | Optional consumer name; defaults to `worker-<pid>`. |
 | `CONTROL_PLANE_PORT` | compose | Host port for the UI. Default `3000`. |
@@ -75,7 +75,7 @@ Re-validation is best-effort on login + on-demand from *Settings → Upgrade*; a
 
 ### License re-validation scheduler
 
-The `scheduler` service re-validates every org's Lemon Squeezy entitlement on a timer, so a license can lapse (or a remote change take effect) without waiting for an operator to log in — the 7-day offline grace covers the gap between passes. Cadence is `SCHEDULER_INTERVAL_MS` (default 12h = `43200000`). It needs `DATABASE_URL` + `LICENSE_KEY_SECRET`, runs a pass on startup then every interval, and isolates each org (one failure never aborts the pass). Run exactly one scheduler instance (it has no leader election).
+The `scheduler` service re-validates every org's Lemon Squeezy entitlement on a timer, so a license can lapse (or a remote change take effect) without waiting for an operator to log in — the 7-day offline grace covers the gap between passes. Cadence is `SCHEDULER_INTERVAL_MS` (default 12h = `43200000`). It needs `DATABASE_URL` + `LICENSE_KEY_SECRET`, runs a pass on startup then every interval, and isolates each org (one failure never aborts the pass). It also probes every flock's health with its stored credential, on its own cadence `FLOCK_HEALTH_INTERVAL_MS` (default 5 min = `300000`), and records the result the Dashboard and the Flocks page show; for that it needs `UPSTREAM_AUTH_KEY` (and `UPSTREAM_AUTH_PREVIOUS_KEYS` during a rotation). **Test connection** on a saved flock records its result too, and changing a flock's breed, address, TLS setting or credential resets it to unknown until the next probe. Run exactly one scheduler instance (it has no leader election).
 
 ## Running the integration tests
 
@@ -193,6 +193,7 @@ Everything else defaults:
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | `websecure` / `letsencrypt` | Match your Traefik's names |
 | `WORKER_NAME` | `worker-1` | Consumer name |
 | `SCHEDULER_INTERVAL_MS` | `43200000` (12h) | License re-validation cadence |
+| `FLOCK_HEALTH_INTERVAL_MS` | `300000` (5 min) | Flock health probe cadence |
 
 ### The two planes are not equally public
 
