@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { DEFAULT_HEALTH_INTERVAL_MS, DEFAULT_INTERVAL_MS, resolveIntervalMs } from './scheduler'
+import { DEFAULT_HEALTH_INTERVAL_MS, DEFAULT_INTERVAL_MS, healthPassEnabled, resolveIntervalMs } from './scheduler'
 
 describe('resolveIntervalMs', () => {
   test('defaults to 12h when unset', () => {
@@ -26,5 +26,15 @@ describe('flock health cadence', () => {
     expect(resolveIntervalMs(undefined, DEFAULT_HEALTH_INTERVAL_MS)).toBe(300_000)
     expect(resolveIntervalMs('0', DEFAULT_HEALTH_INTERVAL_MS)).toBe(300_000)
     expect(resolveIntervalMs('60000', DEFAULT_HEALTH_INTERVAL_MS)).toBe(60_000)
+  })
+})
+
+// An operator who bumps TAG on a pre-0.6.2 stack file gives the scheduler no UPSTREAM_AUTH_KEY. The
+// license pass must keep running; only the health pass, which needs the key, stands down.
+describe('healthPassEnabled', () => {
+  test('on when UPSTREAM_AUTH_KEY is set, off (not a crash) when it is missing or blank', () => {
+    expect(healthPassEnabled({ UPSTREAM_AUTH_KEY: 'k' })).toBe(true)
+    expect(healthPassEnabled({})).toBe(false)
+    expect(healthPassEnabled({ UPSTREAM_AUTH_KEY: '' })).toBe(false)
   })
 })

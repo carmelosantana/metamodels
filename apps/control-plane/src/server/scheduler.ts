@@ -11,3 +11,12 @@ export function resolveIntervalMs(raw: string | undefined, fallback = DEFAULT_IN
   if (!Number.isInteger(n) || n <= 0) return fallback
   return n
 }
+
+/**
+ * Whether the flock health pass can run: it opens each flock's stored credential, so it needs
+ * UPSTREAM_AUTH_KEY. A stack file from before 0.6.2 does not give the scheduler one; that must cost
+ * flock health, not the license pass, so a missing key turns the health pass off instead of crashing.
+ */
+export function healthPassEnabled(env: Record<string, string | undefined>): boolean {
+  return Boolean(env.UPSTREAM_AUTH_KEY)
+}
