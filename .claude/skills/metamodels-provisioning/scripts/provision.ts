@@ -130,6 +130,9 @@ async function listAll(mm: Mm, group: string, extra: string[]): Promise<Row[]> {
 
 const json = (body: unknown) => ['--data', JSON.stringify(body)]
 
+/** Whether `row` already holds every field of `body`: then a replace would only add an audit entry. */
+const holds = (row: Row, body: Record<string, unknown>) => Object.entries(body).every(([k, v]) => row[k] === v)
+
 export interface Provisioned {
   flock: Row
   paddock: Row
@@ -144,7 +147,7 @@ export async function provision(o: Options, mm: Mm): Promise<Provisioned> {
   // URL stays put; the API answers 409 otherwise, and that error is shown as is.
   const flockBody = { breed: 'ollama', name: o.flockName, baseUrl: o.ollamaUrl, tlsTrust: false }
   const existingFlock = (await listAll(mm, 'flocks', x)).find((f) => f.name === o.flockName)
-  const flock = (existingFlock
+  const flock = existingFlock && holds(existingFlock, flockBody) ? existingFlock : (existingFlock
     ? await call(mm, ['flocks', 'replace', existingFlock.id, ...json(flockBody), ...x])
     : await call(mm, ['flocks', 'create', ...json(flockBody), ...x])).body as Row
 
@@ -154,7 +157,7 @@ export async function provision(o: Options, mm: Mm): Promise<Provisioned> {
   if (existingPaddock && existingPaddock.flockId !== flock.id) {
     throw new Error(`the slug ${o.slug} already publishes another flock (${String(existingPaddock.flockId)}); pick another --slug`)
   }
-  const paddock = (existingPaddock
+  const paddock = existingPaddock && holds(existingPaddock, paddockBody) ? existingPaddock : (existingPaddock
     ? await call(mm, ['paddocks', 'replace', existingPaddock.id, ...json(paddockBody), ...x])
     : await call(mm, ['paddocks', 'create', ...json({ ...paddockBody, status: 'active' }), ...x])).body as Row
 

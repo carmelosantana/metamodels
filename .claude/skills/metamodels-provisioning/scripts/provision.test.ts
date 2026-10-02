@@ -107,6 +107,14 @@ describe('provision', () => {
     expect(f.calls.filter((c) => c[0] === 'keys' && c[1] === 'create')).toHaveLength(1)
   })
 
+  test('an unchanged flock or paddock is left alone, so a re-run adds no audit entry for them', async () => {
+    const f = fakeMm()
+    await provision(OPTS, f.mm)
+    f.calls.length = 0
+    await provision(OPTS, f.mm)
+    expect(f.calls.map((c) => c.slice(0, 2).join(' ')).filter((c) => c.endsWith('replace') || c.endsWith('create'))).toEqual([])
+  })
+
   test('--rotate-key revokes the active key of that name and mints a fresh one', async () => {
     const f = fakeMm()
     const first = await provision(OPTS, f.mm)
