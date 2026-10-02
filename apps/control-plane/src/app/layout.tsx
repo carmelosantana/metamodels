@@ -15,6 +15,8 @@ const ibmPlexMono = localFont({
     { path: './fonts/IBMPlexMono-Medium.ttf', weight: '500', style: 'normal' },
   ],
   variable: '--font-ibm-plex-mono',
+  // Not preloaded (Kanboard #4721): two ~135 KB TTFs on every page, for a face only some pages use.
+  preload: false,
 })
 
 export const metadata = { title: 'MetaModels', description: 'Operator console' }
