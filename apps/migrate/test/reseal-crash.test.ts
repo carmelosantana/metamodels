@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { loadSealKeyring, openSealed, seal, type SealBinding } from '@metamodels/schema/sealed'
 import { runMigrations } from '../src/index'
 
@@ -36,14 +36,18 @@ function foldersUpTo(lastIdx: number): string {
 describe.skipIf(!PG_TEST_URL)('the upgrade seal pass, killed part-way on real Postgres (Kanboard #4560)', () => {
   let admin: postgres.Sql
   const opened: { name: string; sql: postgres.Sql }[] = []
-  beforeAll(() => { admin = postgres(PG_TEST_URL!, { max: 1, onnotice: () => {} }) })
+  beforeAll(() => {
+    admin = postgres(PG_TEST_URL!, { max: 1, onnotice: () => {} })
+    // runMigrations' own client logs Postgres's notices (an existing drizzle schema on a re-run).
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
   afterEach(async () => {
     for (const { name, sql } of opened.splice(0)) {
       await sql.end()
       await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`)
     }
   })
-  afterAll(async () => { await admin?.end() })
+  afterAll(async () => { vi.restoreAllMocks(); await admin?.end() })
 
   const oldKey = key()
   const curKey = key()
