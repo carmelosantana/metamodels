@@ -135,6 +135,28 @@ describe('request body limit on /p/* (follow-up ruling F2)', () => {
     expect(await res.json()).toEqual({ error: 'request body too large' })
   })
 
+  // Kanboard #4719: the proxy limits (step 3) before it reads the body (step 4), on purpose. An
+  // oversized body spends the caller's own slot; the other order would let a key that is already
+  // limited make the proxy read up to the body limit on every refused request. Both halves pinned.
+  test('a streamed oversize body with a valid key spends a rate-limit slot before its 413', async () => {
+    const app = appWith({ maxRequestBodyBytes: LIMIT })
+    for (let i = 0; i < 5; i++) {
+      const res = await app.request(`${DP}/p/small/api/chat`, streamed(streamOf(chatBodyOf(LIMIT * 8)).stream, { authorization: `Bearer ${fx.keyPlaintext}` }))
+      expect(res.status).toBe(413)
+    }
+    expect((await proxyChat(app, chatBody('hi'))).status).toBe(429)
+    expect(upstreamCalls).toEqual([])
+  })
+
+  test('a rate-limited key is refused 429 before its body is read', async () => {
+    const app = appWith({ maxRequestBodyBytes: LIMIT })
+    for (let i = 0; i < 5; i++) expect((await proxyChat(app, chatBody('hi'))).status).toBe(200)
+    const src = streamOf(chatBodyOf(LIMIT * 8))
+    const res = await app.request(`${DP}/p/small/api/chat`, streamed(src.stream, { authorization: `Bearer ${fx.keyPlaintext}` }))
+    expect(res.status).toBe(429)
+    expect(src.pulled()).toBeLessThan(LIMIT)
+  })
+
   test('a streamed body at exactly the limit passes', async () => {
     const app = appWith({ maxRequestBodyBytes: LIMIT })
     const res = await app.request(`${DP}/p/small/api/chat`, streamed(streamOf(chatBodyOf(LIMIT)).stream, { authorization: `Bearer ${fx.keyPlaintext}` }))
