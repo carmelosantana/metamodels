@@ -1,5 +1,5 @@
-import { beforeAll, describe, expect, test } from 'vitest'
-import { DrizzleConfigStore } from '../src/config/config-store.js'
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { DrizzleConfigStore, keyExpired } from '../src/config/config-store.js'
 import { eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/pglite'
 import * as schema from '@metamodels/schema'
@@ -169,5 +169,32 @@ describe('an expired key costs what an unknown key costs (Kanboard #4558, follow
       expect(await store.resolveKeyById(id), id).toBeNull()
       expect(log, id).toHaveLength(1)
     }
+  })
+})
+
+// Kanboard #4720: one rule on every side. A key is expired *at* its expires_at, in the store's
+// lookup and in the callers' cached-key check alike, so the 1 ms at the boundary is never split.
+describe('a key is expired at its expires_at instant (Kanboard #4720)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  test('keyExpired: null never expires; the instant itself and later are expired; a millisecond before is not', () => {
+    const at = new Date('2026-10-02T12:00:00.000Z')
+    expect(keyExpired(null, at.getTime())).toBe(false)
+    expect(keyExpired(at, at.getTime() - 1)).toBe(false)
+    expect(keyExpired(at, at.getTime())).toBe(true)
+    expect(keyExpired(at, at.getTime() + 1)).toBe(true)
+  })
+
+  test('the store refuses a key at exactly its expires_at, and resolves it a millisecond before', async () => {
+    const db = await makeDb()
+    const fx = await seedFixture(db)
+    const at = new Date(Date.now() + 60_000)
+    await db.update(schema.apiKey).set({ expiresAt: at }).where(eq(schema.apiKey.id, fx.keyId))
+    const store = new DrizzleConfigStore(db, TEST_RING)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(at.getTime() - 1)
+    expect((await store.resolveKeyByHash(fx.keyHash))?.keyId).toBe(fx.keyId)
+    vi.setSystemTime(at)
+    expect(await store.resolveKeyByHash(fx.keyHash)).toBeNull()
   })
 })
