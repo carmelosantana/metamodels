@@ -1,7 +1,7 @@
 import { BreedRegistry, comfyuiBreed, ollamaBreed, upstreamAuthHeaders, type FlockRef, type ModelListResult } from '@metamodels/connectors'
 import type { Db } from './db'
 import type { Actor } from '../auth/authorize'
-import { getFlockConnection, NotFoundError } from './flocks-service'
+import { getFlockConnection, listFlockConnectionsForProbe, NotFoundError, recordFlockHealth, type FlockConnection } from './flocks-service'
 import { flockConnectionInput, UPSTREAM_AUTH_PATTERN } from '../lib/flock-schema'
 import { uuidSchema } from './path-id'
 
@@ -47,10 +47,47 @@ export async function testStoredFlockConnection(
     if (e instanceof NotFoundError) return { ok: false, detail: 'flock not found' }
     throw e
   }
+  const r = await probeConnection(registry, f)
+  await recordFlockHealth(db, actor.orgId, flockId, r.ok)
+  return r
+}
+
+/**
+ * One health probe of a stored connection. A credential no held key opens, or one that is not a
+ * legal bearer token, is unhealthy without calling the flock: the data plane cannot use it either.
+ */
+async function probeConnection(registry: BreedRegistry, f: FlockConnection): Promise<{ ok: boolean; detail?: string }> {
   // Fail closed, as `listFlockModels` does: probing without it would report the upstream's 401.
   if (f.upstreamAuthError) return { ok: false, detail: 'upstream credential unavailable' }
   return callWithStoredToken(f, (detail) => ({ ok: false, detail }), () =>
     registry.get(f.breed).health({ baseUrl: f.baseUrl, upstreamAuth: f.upstreamAuth, tlsTrust: f.tlsTrust }))
+}
+
+/**
+ * The scheduler's health pass: probes every flock with what is stored and records each result, so
+ * the Dashboard and the Flocks page show it without anyone pressing Test. One flock failing to
+ * probe or record does not stop the pass.
+ */
+export async function probeAllFlocks(
+  registry: BreedRegistry,
+  db: Db,
+): Promise<{ total: number; ok: number; failed: number }> {
+  const flocks = await listFlockConnectionsForProbe(db)
+  let ok = 0
+  let failed = 0
+  for (const { orgId, flockId, conn } of flocks) {
+    try {
+      const r = await probeConnection(registry, conn)
+      await recordFlockHealth(db, orgId, flockId, r.ok)
+      if (r.ok) ok++
+      else failed++
+    } catch (err) {
+      failed++
+      // eslint-disable-next-line no-console
+      console.error(`health probe failed for flock ${flockId}`, err)
+    }
+  }
+  return { total: flocks.length, ok, failed }
 }
 
 export async function listFlockModels(

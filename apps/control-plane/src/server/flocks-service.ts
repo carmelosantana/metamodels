@@ -100,14 +100,45 @@ export async function getFlockConnection(db: Db, actor: Actor, id: string): Prom
     .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId))).limit(1)
   const row = rows[0]
   if (!row) throw new NotFoundError(`flock ${id}`)
+  return openConnection(row, actor.orgId, id)
+}
+
+type ConnectionRow = { breed: string; baseUrl: string; tlsTrust: boolean; enc: string | null }
+
+function openConnection(row: ConnectionRow, orgId: string, flockId: string): FlockConnection {
   const conn = { breed: row.breed, baseUrl: row.baseUrl, tlsTrust: row.tlsTrust }
   if (row.enc === null) return { ...conn, upstreamAuth: null }
   try {
-    return { ...conn, upstreamAuth: openSealed(row.enc, upstreamAuthKeys(), { orgId: actor.orgId, flockId: id }) }
+    return { ...conn, upstreamAuth: openSealed(row.enc, upstreamAuthKeys(), { orgId, flockId }) }
   } catch (e) {
     if (!(e instanceof UnsealError)) throw e
     return { ...conn, upstreamAuth: null, upstreamAuthError: e.reason }
   }
+}
+
+/**
+ * Every flock in every org, opened for the scheduler's health pass. A system read with no actor,
+ * like the license pass's `listEntitledOrgIds`: it runs in the scheduler process, never on a
+ * request, and what it opens goes only to each flock's own base URL.
+ */
+export async function listFlockConnectionsForProbe(
+  db: Db,
+): Promise<Array<{ orgId: string; flockId: string; conn: FlockConnection }>> {
+  const rows = await db
+    .select({ id: flock.id, orgId: flock.orgId, breed: flock.breed, baseUrl: flock.baseUrl, tlsTrust: flock.tlsTrust, enc: flock.upstreamAuthEnc })
+    .from(flock)
+    .orderBy(asc(flock.id))
+  return rows.map((r) => ({ orgId: r.orgId, flockId: r.id, conn: openConnection(r, r.orgId, r.id) }))
+}
+
+/**
+ * Records a probe's outcome. `health_ok` is an observation the server makes, not a change anyone
+ * asked for, so it is not audited: a pass every few minutes would bury the audit log in rows that
+ * say nothing about who changed what. Org-scoped all the same, so a mistaken id cannot touch
+ * another org's flock.
+ */
+export async function recordFlockHealth(db: Db, orgId: string, flockId: string, ok: boolean): Promise<void> {
+  await db.update(flock).set({ healthOk: ok }).where(and(eq(flock.id, flockId), eq(flock.orgId, orgId)))
 }
 
 export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<FlockView> {
@@ -137,6 +168,15 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
     tlsTrust: data.tlsTrust,
     ...credential,
   }
+  // A recorded probe result describes one connection. When the update changes it — breed, address,
+  // TLS setting or credential — the result no longer applies and goes back to unknown until the next
+  // probe. A rename keeps it. The CASE reads the row as it was before this UPDATE.
+  const health = {
+    healthOk: data.upstreamAuth !== undefined
+      ? null
+      : sql<boolean | null>`CASE WHEN ${flock.breed} = ${data.breed} AND ${flock.baseUrl} = ${data.baseUrl}
+          AND ${flock.tlsTrust} = ${data.tlsTrust} THEN ${flock.healthOk} ELSE NULL END`,
+  }
   // Whether the credential changed is worth an audit trail; its value never is, sealed or not.
   const credentialAudit = data.upstreamAuth === undefined
     ? {}
@@ -159,7 +199,7 @@ export async function saveFlock(db: Db, actor: Actor, input: unknown): Promise<F
       }
       const [updated] = await tx
         .update(flock)
-        .set(values)
+        .set({ ...values, ...health })
         .where(and(eq(flock.id, id), eq(flock.orgId, actor.orgId)))
         .returning(flockView)
       if (!updated) throw new NotFoundError(`flock ${id}`)
