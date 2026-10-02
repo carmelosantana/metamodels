@@ -11,11 +11,11 @@ export interface ResealReport {
   /** Rows this keyring cannot open — never an id's secret, only which flock needs re-entering. */
   unreadable: { id: string; name: string; reason: UnsealReason }[]
   /**
-   * The post-reseal table rewrite. `not-needed` when nothing was re-encrypted. A failure is
-   * reported rather than thrown: the reseal has already committed, and a re-run would find nothing
-   * to re-encrypt and skip the rewrite, so the caller must say how to run it by hand.
+   * The table rewrite that follows every pass. A failure is reported rather than thrown: the reseal
+   * has already committed, and the next pass retries the rewrite, so the caller says so and how to
+   * run it by hand meanwhile.
    */
-  vacuum: 'done' | 'not-needed' | { failed: string }
+  vacuum: 'done' | { failed: string }
 }
 
 export interface ResealOptions {
@@ -42,7 +42,7 @@ export async function resealUpstreamAuth(
   ring: SealKeyring,
   opts: ResealOptions = {},
 ): Promise<ResealReport> {
-  const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' }
+  const report: ResealReport = { sealed: 0, resealed: 0, unreadable: [], vacuum: 'done' }
   await db.transaction(async (tx) => {
     const rows = await tx
       .select({ id: flock.id, orgId: flock.orgId, name: flock.name, value: flock.upstreamAuthEnc })
@@ -89,13 +89,14 @@ export async function resealUpstreamAuth(
   // rewrites the table without them. It cannot run in a transaction and takes an exclusive lock,
   // which is harmless here because nothing else runs until `migrate` exits. It cannot reach the WAL
   // or existing backups; docs/DEPLOY.md says what to do about those.
-  if (report.sealed > 0 || report.resealed > 0) {
-    try {
-      await (opts.vacuum ?? ((d) => d.execute(sql.raw(VACUUM_FLOCK_SQL))))(db)
-      report.vacuum = 'done'
-    } catch (e) {
-      report.vacuum = { failed: e instanceof Error ? e.message : String(e) }
-    }
+  //
+  // On every pass, not only one that re-encrypted something: a rewrite that was killed or failed
+  // after an earlier pass's reseal committed leaves those row versions behind, and the pass that
+  // follows finds nothing to re-encrypt. The table holds one row per flock, so this costs nothing.
+  try {
+    await (opts.vacuum ?? ((d) => d.execute(sql.raw(VACUUM_FLOCK_SQL))))(db)
+  } catch (e) {
+    report.vacuum = { failed: e instanceof Error ? e.message : String(e) }
   }
   return report
 }

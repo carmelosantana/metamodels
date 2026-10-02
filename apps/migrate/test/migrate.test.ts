@@ -13,7 +13,7 @@ describe('loadDatabaseUrl', () => {
 
 describe('describeReseal', () => {
   test('is quiet about nothing and says what it sealed', () => {
-    expect(describeReseal({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' })).toEqual({ info: [], warn: [] })
+    expect(describeReseal({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'done' })).toEqual({ info: [], warn: [] })
     expect(describeReseal({ sealed: 2, resealed: 1, unreadable: [], vacuum: 'done' }).info)
       .toEqual(['metamodels: sealed 2 plaintext upstream credential(s); re-sealed 1 under the current key'])
   })
@@ -22,7 +22,7 @@ describe('describeReseal', () => {
     const { warn } = describeReseal({
       sealed: 0, resealed: 0,
       unreadable: [{ id: 'f-1', name: 'gpu box', reason: 'unknown-key' }],
-      vacuum: 'not-needed',
+      vacuum: 'done',
     })
     expect(warn.join('\n')).toMatch(/f-1/)
     expect(warn.join('\n')).toMatch(/gpu box/)
@@ -37,12 +37,13 @@ describe('describeReseal — a failed VACUUM', () => {
     expect(warn).toHaveLength(1)
     expect(warn[0]).toContain(`psql "$DATABASE_URL" -c 'VACUUM FULL "flock"'`)
     expect(warn[0]).toContain('lock timeout')
+    expect(warn[0]).toContain('the next deploy retries it')
   })
 })
 
 describe('describeReseal — recovery advice depends on why a row will not open', () => {
   const one = (reason: 'unknown-key' | 'tampered' | 'malformed') =>
-    describeReseal({ sealed: 0, resealed: 0, unreadable: [{ id: 'f-1', name: 'n', reason }], vacuum: 'not-needed' }).warn.join('\n')
+    describeReseal({ sealed: 0, resealed: 0, unreadable: [{ id: 'f-1', name: 'n', reason }], vacuum: 'done' }).warn.join('\n')
 
   test('unknown-key: the key that sealed it may still exist, so offer both remedies', () => {
     expect(one('unknown-key')).toMatch(/UPSTREAM_AUTH_PREVIOUS_KEYS/)

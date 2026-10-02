@@ -86,13 +86,15 @@ describe('migration 0008 + resealUpstreamAuth — the upgrade path', () => {
     expect(await filenode()).not.toBe(before)
   })
 
-  test('a pass with no plaintext to seal does not rewrite the table', async () => {
+  // A rewrite killed after an earlier pass's reseal committed is finished by the next pass, which
+  // has nothing left to seal: without this, the plaintext row versions would stay on disk for good.
+  test('a pass with no plaintext to seal still rewrites the table', async () => {
     const { db } = await migratedDb()
     const filenode = async () =>
       ((await db.execute(sql`select pg_relation_filenode('flock') as n`)).rows[0] as { n: number }).n
     const before = await filenode()
     await resealUpstreamAuth(db, ring(key()))
-    expect(await filenode()).toBe(before)
+    expect(await filenode()).not.toBe(before)
   })
 })
 
@@ -115,12 +117,25 @@ describe('resealUpstreamAuth', () => {
     expect(openSealed(row.upstreamAuthEnc!, r, bindOf(row))).toBe('tok')
   })
 
+  // A rewrite killed after the reseal committed leaves the old row versions on disk, and the next
+  // run finds nothing to re-encrypt. So every run rewrites the table: it is tiny, and nothing else
+  // is running while `migrate` does.
+  test('rewrites the table on every run, even with nothing to re-encrypt', async () => {
+    const { db, orgId } = await migratedDb()
+    const r = ring(key())
+    await addFlock(db, orgId, 'a', (b) => seal('tok', r, b))
+    let rewrites = 0
+    const report = await resealUpstreamAuth(db, r, { vacuum: async () => { rewrites++ } })
+    expect(report).toMatchObject({ sealed: 0, resealed: 0, vacuum: 'done' })
+    expect(rewrites).toBe(1)
+  })
+
   test('is idempotent: rows already under the current key and null rows are left alone', async () => {
     const { db, orgId } = await migratedDb()
     const r = ring(key())
     const a = await addFlock(db, orgId, 'a', (b) => seal('tok', r, b))
     await addFlock(db, orgId, 'b', null)
-    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'not-needed' })
+    expect(await resealUpstreamAuth(db, r)).toEqual({ sealed: 0, resealed: 0, unreadable: [], vacuum: 'done' })
     const rows = await db.select().from(flock)
     expect(rows.map((x) => x.upstreamAuthEnc).sort()).toEqual([a.upstreamAuthEnc, null].sort())
   })
@@ -130,7 +145,7 @@ describe('resealUpstreamAuth', () => {
     const f = await addFlock(db, orgId, 'restored', (b) => seal('tok', ring(key()), b))
     const r = ring(key())
     const report = await resealUpstreamAuth(db, r)
-    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: f.id, name: 'restored', reason: 'unknown-key' }], vacuum: 'not-needed' })
+    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: f.id, name: 'restored', reason: 'unknown-key' }], vacuum: 'done' })
     const [row] = await db.select().from(flock).where(eq(flock.id, f.id))
     expect(row.upstreamAuthEnc).toBe(f.upstreamAuthEnc)
   })
@@ -178,6 +193,6 @@ describe('resealUpstreamAuth', () => {
     const b = await addFlock(db, orgId, 'b', null)
     await db.update(flock).set({ upstreamAuthEnc: a.upstreamAuthEnc }).where(eq(flock.id, b.id))
     const report = await resealUpstreamAuth(db, r)
-    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: b.id, name: 'b', reason: 'tampered' }], vacuum: 'not-needed' })
+    expect(report).toEqual({ sealed: 0, resealed: 0, unreadable: [{ id: b.id, name: 'b', reason: 'tampered' }], vacuum: 'done' })
   })
 })
