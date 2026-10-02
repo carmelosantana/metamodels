@@ -123,7 +123,8 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     const gate = await pipeline.paddockScope(auth.key, slug)
     if (!gate.ok) return reply(c, gate.refusal)
 
-    // 3. Rate limit, then quota.
+    // 3. Rate limit, then quota. Before the body is read, on purpose (spec M4 §4.1, Kanboard #4719): an
+    //    oversized body spends the caller's own slot, and a limited key never makes us read its body.
     const limited = await pipeline.limits(gate.scope)
     if (limited) return reply(c, limited)
 
