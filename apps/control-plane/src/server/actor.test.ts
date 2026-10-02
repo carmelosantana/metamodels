@@ -1,13 +1,15 @@
 import { describe, expect, test } from 'vitest'
 import * as schema from '@metamodels/schema'
-import { freshDb, seedOrg } from '../test/db'
+import { sharedDb, seedOrg } from '../test/db'
 import { loadActiveActor } from './actor'
 
-async function withUser(overrides: Partial<{ status: string; role: string }> = {}) {
-  const db = await freshDb()
+const testDb = sharedDb()
+
+async function withUser(overrides: Partial<{ status: string; role: string; email: string }> = {}) {
+  const db = testDb()
   const org = await seedOrg(db)
   const [u] = await db.insert(schema.user).values({
-    orgId: org.id, email: 'op@x.io', passwordHash: 'unused', role: overrides.role ?? 'member', status: overrides.status ?? 'active',
+    orgId: org.id, email: overrides.email ?? 'op@x.io', passwordHash: 'unused', role: overrides.role ?? 'member', status: overrides.status ?? 'active',
   }).returning()
   return { db, u, org }
 }
@@ -23,7 +25,7 @@ describe('loadActiveActor', () => {
   test('refuses a deactivated user or an unknown role', async () => {
     const off = await withUser({ status: 'deactivated' })
     expect(await loadActiveActor(off.db, off.u.id, 'session')).toBeNull()
-    const odd = await withUser({ role: 'owner' })
+    const odd = await withUser({ role: 'owner', email: 'odd@x.io' })
     expect(await loadActiveActor(odd.db, odd.u.id, 'session')).toBeNull()
   })
 
