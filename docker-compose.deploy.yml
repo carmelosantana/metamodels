@@ -59,6 +59,9 @@ services:
       NODE_ENV: production
     ports:
       - "${CONTROL_PLANE_PORT:-3000}:3000"
+    # Health probes must see flocks the way the data plane does, including Ollama/ComfyUI on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +163,14 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       LICENSE_KEY_SECRET: ${LICENSE_KEY_SECRET}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-43200000}
+      # The flock health pass (5 min default) probes each flock with its stored credential, so it
+      # needs the key that opens it.
+      FLOCK_HEALTH_INTERVAL_MS: ${FLOCK_HEALTH_INTERVAL_MS:-300000}
+      UPSTREAM_AUTH_KEY: ${UPSTREAM_AUTH_KEY:?set UPSTREAM_AUTH_KEY — openssl rand -base64 32}
+      UPSTREAM_AUTH_PREVIOUS_KEYS: ${UPSTREAM_AUTH_PREVIOUS_KEYS:-}
+    # Health probes must see flocks the way the data plane does, including Ollama/ComfyUI on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
