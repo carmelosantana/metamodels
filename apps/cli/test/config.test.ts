@@ -42,7 +42,7 @@ describe('plain http', () => {
     }
   })
   test('is refused to any other host, naming the opt-in', () => {
-    for (const url of ['http://auth.lan.test:3100', 'http://192.168.1.140', 'http://localhost.lan.test', 'http://[::2]', 'http://128.0.0.1']) {
+    for (const url of ['http://auth.lan.test:3100', 'http://192.168.0.10', 'http://localhost.lan.test', 'http://[::2]', 'http://128.0.0.1']) {
       expect(() => resolveIssuer(url, {}), url).toThrow(OPT_IN)
       expect(() => resolveConsoleUrl(url, {}), url).toThrow(OPT_IN)
     }
@@ -51,7 +51,7 @@ describe('plain http', () => {
   })
   test('is allowed to any host with the opt-in', () => {
     expect(resolveIssuer('http://auth.lan.test:3100', {}, true)).toBe('http://auth.lan.test:3100')
-    expect(resolveConsoleUrl('http://192.168.1.140', {}, true)).toBe('http://192.168.1.140')
+    expect(resolveConsoleUrl('http://192.168.0.10', {}, true)).toBe('http://192.168.0.10')
   })
   test('the opt-in is the flag, or METAMODELS_ALLOW_INSECURE_HTTP=1', () => {
     expect(insecureHttpAllowed(true, {})).toBe(true)
