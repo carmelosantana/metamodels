@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { DEFAULT_INTERVAL_MS, resolveIntervalMs } from './scheduler'
+import { DEFAULT_HEALTH_INTERVAL_MS, DEFAULT_INTERVAL_MS, resolveIntervalMs } from './scheduler'
 
 describe('resolveIntervalMs', () => {
   test('defaults to 12h when unset', () => {
@@ -17,5 +17,14 @@ describe('resolveIntervalMs', () => {
     expect(resolveIntervalMs('0')).toBe(DEFAULT_INTERVAL_MS)
     expect(resolveIntervalMs('-5')).toBe(DEFAULT_INTERVAL_MS)
     expect(resolveIntervalMs('1.5')).toBe(DEFAULT_INTERVAL_MS)
+  })
+})
+
+describe('flock health cadence', () => {
+  test('defaults to 5 minutes, through the same parser', () => {
+    expect(DEFAULT_HEALTH_INTERVAL_MS).toBe(300_000)
+    expect(resolveIntervalMs(undefined, DEFAULT_HEALTH_INTERVAL_MS)).toBe(300_000)
+    expect(resolveIntervalMs('0', DEFAULT_HEALTH_INTERVAL_MS)).toBe(300_000)
+    expect(resolveIntervalMs('60000', DEFAULT_HEALTH_INTERVAL_MS)).toBe(60_000)
   })
 })

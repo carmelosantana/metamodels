@@ -3,8 +3,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { flock } from '@metamodels/schema'
 import { loadSealKeyring, seal } from '@metamodels/schema/sealed'
 import { sharedDb, seedOrg, type TestDb } from '../test/db'
-import { saveFlock } from './flocks-service'
-import { buildBreedRegistry, listFlockModels, testFlockConnection, testStoredFlockConnection } from './flock-health'
+import { getFlock, saveFlock } from './flocks-service'
+import { buildBreedRegistry, listFlockModels, probeAllFlocks, testFlockConnection, testStoredFlockConnection } from './flock-health'
 import type { Actor } from '../auth/authorize'
 import { upstreamAuthKeys } from './seal-keys'
 
@@ -256,5 +256,86 @@ describe('testStoredFlockConnection', () => {
     vi.stubGlobal('fetch', fetchMock)
     expect(await testStoredFlockConnection(registry, db, mine, f.id)).toEqual({ ok: false, detail: 'flock not found' })
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// `health_ok` is what the Dashboard and the Flocks page show. It is server-owned: written only by a
+// probe of the stored connection, never by a caller.
+describe('recorded flock health', () => {
+  const answer = (status: number) => vi.fn(async () => new Response('{}', { status }))
+
+  test('Test connection records a passing probe', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false })
+    expect(f.healthOk).toBeNull()
+    vi.stubGlobal('fetch', answer(200))
+    await testStoredFlockConnection(registry, db, actor, f.id)
+    expect((await getFlock(db, actor, f.id)).healthOk).toBe(true)
+  })
+
+  test('Test connection records a failing probe', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
+    await testStoredFlockConnection(registry, db, actor, f.id)
+    expect((await getFlock(db, actor, f.id)).healthOk).toBe(false)
+  })
+
+  test('a credential no held key opens is recorded unhealthy: the data plane cannot use it either', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const foreign = loadSealKeyring({ UPSTREAM_AUTH_KEY: randomBytes(32).toString('base64') })
+    const id = randomUUID()
+    await db.insert(flock).values({
+      id, orgId: actor.orgId, breed: 'ollama', name: 'restored', baseUrl: 'http://o', healthOk: true,
+      upstreamAuthEnc: seal('t', foreign, { orgId: actor.orgId, flockId: id }),
+    })
+    vi.stubGlobal('fetch', answer(200))
+    await testStoredFlockConnection(registry, db, actor, id)
+    expect((await getFlock(db, actor, id)).healthOk).toBe(false)
+  })
+
+  test('probeAllFlocks probes every org\'s flocks with their stored credentials and records each result', async () => {
+    const db = testDb()
+    const a = await actorFor(db)
+    const b = await actorFor(db)
+    const up = await saveFlock(db, a, { breed: 'ollama', name: 'up', baseUrl: 'http://up:11434', tlsTrust: false, upstreamAuth: 'up-tok' })
+    const down = await saveFlock(db, b, { breed: 'comfyui', name: 'down', baseUrl: 'http://down:8188', tlsTrust: false })
+    const fetchMock = vi.fn(async (u: unknown, init?: RequestInit) => {
+      if (String(u).startsWith('http://up:11434')) {
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer up-tok')
+        return new Response('{}', { status: 200 })
+      }
+      throw new Error('ECONNREFUSED')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const res = await probeAllFlocks(registry, db)
+    expect(res.total).toBeGreaterThanOrEqual(2)
+    expect((await getFlock(db, a, up.id)).healthOk).toBe(true)
+    expect((await getFlock(db, b, down.id)).healthOk).toBe(false)
+  })
+
+  test('saving a new address forgets the old result; a rename keeps it', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false })
+    vi.stubGlobal('fetch', answer(200))
+    await testStoredFlockConnection(registry, db, actor, f.id)
+    const renamed = await saveFlock(db, actor, { id: f.id, breed: 'ollama', name: 'renamed', baseUrl: 'http://o:11434', tlsTrust: false })
+    expect(renamed.healthOk).toBe(true)
+    const moved = await saveFlock(db, actor, { id: f.id, breed: 'ollama', name: 'renamed', baseUrl: 'http://elsewhere:11434', tlsTrust: false })
+    expect(moved.healthOk).toBeNull()
+  })
+
+  test('a new credential forgets the old result', async () => {
+    const db = testDb()
+    const actor = await actorFor(db)
+    const f = await saveFlock(db, actor, { breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false })
+    vi.stubGlobal('fetch', answer(200))
+    await testStoredFlockConnection(registry, db, actor, f.id)
+    const rekeyed = await saveFlock(db, actor, { id: f.id, breed: 'ollama', name: 'local', baseUrl: 'http://o:11434', tlsTrust: false, upstreamAuth: 'new-tok' })
+    expect(rekeyed.healthOk).toBeNull()
   })
 })
