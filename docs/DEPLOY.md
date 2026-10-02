@@ -124,7 +124,7 @@ minimal deploy only needs seven secrets.
 ### 1. Generate the secrets
 
 ```bash
-./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.6.1 --email you@example.com
+./scripts/new-stack.sh --domain api.metamodels.cc --tag 0.6.2 --email you@example.com
 ```
 
 It prints a paste-ready `KEY=value` block with six 64-hex-char secrets and an RSA signing key. `--out <path>` also
@@ -176,7 +176,7 @@ Everything else defaults:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TAG` | `0.6.1` | Image tag. The git tag `v0.6.1` publishes images as `0.6.1` — the `v` is stripped |
+| `TAG` | `0.6.2` | Image tag. The git tag `v0.6.2` publishes images as `0.6.2` — the `v` is stripped |
 | `API_DOMAIN` | `api.metamodels.cc` | Public host for the data-plane, used by the Traefik router rule |
 | `OPERATOR_EMAIL` | `admin@metamodels.cc` | First admin's login |
 | `POSTGRES_USER` / `POSTGRES_DB` | `metamodels` | Change both together, or override `DATABASE_URL` outright |
@@ -393,6 +393,32 @@ Do **not** run the overlap procedure in [Rotating the sign-in keys](#rotating-th
 here: its first step moves the old key into `OIDC_PREVIOUS_SIGNING_KEYS`, which would keep
 publishing the *leaked* key for verification for the whole window. A leaked key must stop verifying
 as soon as possible, and losing the in-flight tokens signed with it is the point.
+
+### Upgrading from 0.6.1
+
+0.6.2 records flock health and closes a gap in how upgrades clear old credential values. There is
+no schema migration and no new secret, but **take the new stack file**: the `scheduler` service now
+needs `UPSTREAM_AUTH_KEY`. On an old stack file the scheduler keeps re-validating the license
+but logs that flock health is off, and every flock stays Unknown.
+
+1. **Back up the database** (`pg_dump -Fc`).
+2. **Take the new stack file.** It gives `scheduler` `UPSTREAM_AUTH_KEY`,
+   `UPSTREAM_AUTH_PREVIOUS_KEYS` and `FLOCK_HEALTH_INTERVAL_MS`, and gives `scheduler` and
+   `control-plane` the same `host.docker.internal` mapping as the data plane, so a flock on the
+   host is reachable from all three. Keep your existing environment variables.
+3. **Set `TAG` to `0.6.2`** if your stack pins it, and redeploy.
+
+What changes for operators:
+
+- **Flock health.** The scheduler probes every flock every 5 minutes (`FLOCK_HEALTH_INTERVAL_MS`)
+  with its stored credential, and **Test connection** records its result too. The Dashboard and
+  the Flocks page show Healthy or Down instead of Unknown. Changing a flock's breed, address, TLS
+  setting or credential shows Unknown until the next probe.
+- **`migrate` rewrites the `flock` table on every deploy.** An earlier upgrade or key rotation
+  whose rewrite was interrupted could leave old credential values in the table's data files; the
+  first 0.6.2 deploy clears them.
+- **Key expiry** is exact: a key stops working at its `expires_at`, on the proxy and MCP alike.
+- **The console** no longer preloads the monospace font on every page.
 
 ### Upgrading from 0.6.0
 
