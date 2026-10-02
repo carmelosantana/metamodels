@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { loadSealKeyring, openSealed, seal, type SealBinding } from '@metamodels/schema/sealed'
 import { runMigrations } from '../src/index'
 
@@ -36,18 +36,14 @@ function foldersUpTo(lastIdx: number): string {
 describe.skipIf(!PG_TEST_URL)('the upgrade seal pass, killed part-way on real Postgres (Kanboard #4560)', () => {
   let admin: postgres.Sql
   const opened: { name: string; sql: postgres.Sql }[] = []
-  beforeAll(() => {
-    admin = postgres(PG_TEST_URL!, { max: 1, onnotice: () => {} })
-    // runMigrations' own client logs Postgres's notices (an existing drizzle schema on a re-run).
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-  })
+  beforeAll(() => { admin = postgres(PG_TEST_URL!, { max: 1, onnotice: () => {} }) })
   afterEach(async () => {
     for (const { name, sql } of opened.splice(0)) {
       await sql.end()
       await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`)
     }
   })
-  afterAll(async () => { vi.restoreAllMocks(); await admin?.end() })
+  afterAll(async () => { await admin?.end() })
 
   const oldKey = key()
   const curKey = key()
@@ -165,5 +161,40 @@ describe.skipIf(!PG_TEST_URL)('the upgrade seal pass, killed part-way on real Po
     await expectSealedOnce(db)
     // And a third run finds nothing left to do.
     expect(await runMigrations(db.url, ring)).toMatchObject({ sealed: 0, resealed: 0, vacuum: 'not-needed' })
+  })
+
+  test('killed during the table rewrite, after the seal committed: the re-run still leaves no plaintext on disk', async () => {
+    const db = await legacyDatabase()
+    // Park the pass on its first row update, so the blocker below is taken after the schema migrations
+    // (whose ALTER TABLEs it would otherwise hold up) and before the rewrite.
+    await db.sql.unsafe(`
+      CREATE FUNCTION crash_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_advisory_xact_lock(${CRASH_LOCK}); RETURN NEW; END $$;
+      CREATE TRIGGER crash_gate BEFORE UPDATE ON "flock" FOR EACH ROW EXECUTE FUNCTION crash_gate();`)
+    await db.sql`SELECT pg_advisory_lock(${CRASH_LOCK})`
+    const svc = migrateService(db)
+    await waiting(db, 'advisory')
+    // A reader holding the table: the pass's row locks and updates pass it, VACUUM FULL's exclusive lock cannot.
+    const reader = postgres(db.url, { max: 1, onnotice: () => {} })
+    let release!: () => void
+    const held = reader.begin(async (tx) => {
+      await tx`LOCK TABLE "flock" IN ACCESS SHARE MODE`
+      await new Promise<void>((r) => { release = r })
+    })
+    while (!release) await sleep(10)
+    await db.sql`SELECT pg_advisory_unlock(${CRASH_LOCK})`
+    const pid = await waiting(db, 'relation')
+    const [{ query }] = await db.sql<{ query: string }[]>`SELECT query FROM pg_stat_activity WHERE pid = ${pid}`
+    expect(query).toBe('VACUUM FULL "flock"')
+    await kill(db, svc, pid)
+    release()
+    await held
+    await reader.end()
+    await db.sql.unsafe(`DROP TRIGGER crash_gate ON "flock"; DROP FUNCTION crash_gate();`)
+
+    // The seal committed before the kill, so the re-run has nothing to re-encrypt; the old row
+    // versions holding the plaintext must not outlive it all the same.
+    await runMigrations(db.url, ring)
+    await expectSealedOnce(db)
   })
 })
