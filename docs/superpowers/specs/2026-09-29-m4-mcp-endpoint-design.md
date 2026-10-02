@@ -299,7 +299,11 @@ resource is compared exactly, so no token names them *(amended 2026-09-30, F1)*.
 body, MCP included, is limited to 32 MiB; a larger one is 413 `{ error: 'request body too large' }`.
 A declared `Content-Length` over the limit is refused before authentication, the body unread; any
 other body is counted as the handler reads it, after authentication, so nothing is buffered for an
-anonymous caller *(amended 2026-09-30, F2)*. No SDK: the method set is small.
+anonymous caller *(amended 2026-09-30, F2)*. On the proxy the rate limit and quota run before the
+body is read, so a streamed oversized body spends one of the caller's own slots before its 413; the
+other order would let a key that is already limited make the proxy read up to 32 MiB on every refused
+request. MCP reads its body before limiting, because planning needs it *(amended 2026-10-02,
+Kanboard #4719)*. No SDK: the method set is small.
 
 **Common to both eras.** An `Origin` header, when present, must be the `DATA_PLANE_URL` origin, else
 403 (DNS-rebinding rule). A notification answers 202 with no body. Batches are refused (`-32600`).
