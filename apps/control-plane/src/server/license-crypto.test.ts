@@ -26,10 +26,16 @@ describe('license-crypto', () => {
   })
 
   test('decrypt of a tampered ciphertext throws', () => {
-    const enc = encryptLicenseKey('SECRET-KEY', SECRET)
-    const [iv, tag, ct] = enc.split(':')
-    const tampered = `${iv}:${tag}:${ct.slice(0, -2)}00`
-    expect(() => decryptLicenseKey(tampered, SECRET)).toThrow()
+    // Fresh IVs make the last ciphertext byte random; looping makes any tamper that can leave
+    // the byte unchanged (1 in 256 per run) fail here every time, not as a rare CI flake.
+    for (let i = 0; i < 1024; i++) {
+      const enc = encryptLicenseKey('SECRET-KEY', SECRET)
+      const [iv, tag, ct] = enc.split(':')
+      // XOR flips a bit, so the last byte always changes; writing a fixed `00` did not.
+      const flipped = (parseInt(ct.slice(-2), 16) ^ 0x01).toString(16).padStart(2, '0')
+      const tampered = `${iv}:${tag}:${ct.slice(0, -2)}${flipped}`
+      expect(() => decryptLicenseKey(tampered, SECRET)).toThrow()
+    }
   })
 
   test('licenseLast4 returns the last 4 chars', () => {
