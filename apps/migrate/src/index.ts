@@ -30,10 +30,11 @@ export function describeReseal(r: ResealReport): { info: string[]; warn: string[
       // credential helps.
       : `No key will open it. Its requests fail until a new credential is sent with PUT /api/admin/v1/flocks/${u.id}.`))
   if (typeof r.vacuum === 'object') {
-    // The re-encryption committed; only the rewrite that clears the old row versions did not, and a
-    // re-run will not retry it (it finds nothing left to re-encrypt). So say exactly what to run.
+    // The re-encryption committed; only the rewrite that clears the old row versions did not. Every
+    // pass rewrites the table, so the next deploy retries it; say how to run it now as well.
     warn.push(`metamodels: the flock table rewrite failed (${r.vacuum.failed}). The old row versions ` +
-      `still hold the previous values; run it by hand: psql "$DATABASE_URL" -c '${VACUUM_FLOCK_SQL}'`)
+      `still hold the previous values until it succeeds: the next deploy retries it, or run it by hand: ` +
+      `psql "$DATABASE_URL" -c '${VACUUM_FLOCK_SQL}'`)
   }
   return { info, warn }
 }

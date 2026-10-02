@@ -297,9 +297,10 @@ window:
 2. Redeploy. The `migrate` log reports `re-sealed N under the current key`.
 3. Clear `UPSTREAM_AUTH_PREVIOUS_KEYS` and redeploy again.
 
-If a rotation's rewrite of the `flock` table fails, `migrate` still succeeds but logs a warning
-with the command to run by hand, and a later deploy will not retry it. Run it with `psql`, or any
-SQL client, against `DATABASE_URL`.
+`migrate` rewrites the `flock` table on every deploy, so the old row versions holding a retired
+key's envelopes are cleared even if an earlier rewrite was interrupted. If the rewrite fails,
+`migrate` still succeeds but logs a warning with the command to run by hand; the next deploy
+retries it, or run it now with `psql`, or any SQL client, against `DATABASE_URL`.
 
 If a deploy's `migrate` log warns that a flock's upstream credential cannot be opened, the reason
 in brackets says what to do. `migrate` never modifies a value it cannot open.
@@ -450,7 +451,7 @@ restore**, so take the backup in step 1.
    `sealed N plaintext upstream credential(s)`, and then rewrites the `flock` table
    (`VACUUM FULL`) so the old plaintext row versions are not left in its data files. If that
    rewrite fails, `migrate` still succeeds but logs a warning with the exact command to run by
-   hand. Run it.
+   hand. Run it, or redeploy: every deploy retries the rewrite.
 
 What changes for operators:
 
