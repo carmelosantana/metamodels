@@ -24,6 +24,14 @@ function usable(now: Date): SQL {
   return and(eq(apiKey.status, 'active'), or(isNull(apiKey.expiresAt), gt(apiKey.expiresAt, now)))!
 }
 
+/**
+ * The callers' half of `usable`'s expiry rule, for a key a cache may still hold: expired *at* its
+ * `expires_at`, as `gt(expiresAt, now)` refuses it there (Kanboard #4720). Change one, change both.
+ */
+export function keyExpired(expiresAt: Date | null, now: number = Date.now()): boolean {
+  return expiresAt !== null && expiresAt.getTime() <= now
+}
+
 // Accepts any Drizzle Postgres database (postgres-js in prod, pglite in tests).
 type Db = PgDatabase<any, any, any>
 

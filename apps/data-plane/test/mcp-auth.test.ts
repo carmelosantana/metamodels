@@ -88,6 +88,22 @@ describe('authenticateMcp (M4 §4.2)', () => {
     expect(warn).toHaveBeenLastCalledWith('[auth] 401 on /mcp: the oauth key has expired')
   })
 
+  test('an oauth key at exactly its expires_at is refused by this gate, as the store would refuse it (Kanboard #4720)', async () => {
+    const live = await store().resolveKeyById(oauth.keyId)
+    const token = good()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const cached: ConfigStore = {
+        resolveKeyByHash: async () => null,
+        getPaddockBySlug: async () => null,
+        resolveKeyById: async () => ({ ...live!, expiresAt: new Date(Date.now()) }),
+      }
+      const out = await authenticateMcp(`Bearer ${token}`, 'small', deps(), cached)
+      expect(out.ok).toBe(false)
+      expect(warn).toHaveBeenLastCalledWith('[auth] 401 on /mcp: the oauth key has expired')
+    } finally { vi.useRealTimers() }
+  })
+
   test('an oauth key not scoped to the requested paddock is refused, with a token minted for that paddock', async () => {
     const out = await auth(`Bearer ${good({ aud: mcpResource(DP, 'other') })}`, 'other')
     expect(out.ok).toBe(false)
