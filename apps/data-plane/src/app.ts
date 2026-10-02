@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { RequestCtx } from '@metamodels/connectors'
 import { hashApiKey } from '@metamodels/schema'
 import { BodyTooLarge, bodyTooLarge, limitRequestBody } from './body-limit.js'
+import { keyExpired } from './config/config-store.js'
 import type { ResolvedKey } from './config/types.js'
 import { registerMcpRoutes, type McpDeps } from './mcp/endpoint.js'
 import { createPipeline, type PipelineDeps, type Refusal } from './pipeline.js'
@@ -93,7 +94,7 @@ export function createApp(deps: AppDeps): { app: Hono; drainMeters: () => Promis
     const key = await deps.configStore.resolveKeyByHash(hashApiKey(plaintext))
     if (!key) return { ok: false, res: unauthorizedKey('no key matches the presented hash') }
     // Not redundant with the store's own filter (ruling F9): a cached key can outlive its expires_at by the cache TTL.
-    if (key.expiresAt && key.expiresAt.getTime() < Date.now()) {
+    if (keyExpired(key.expiresAt)) {
       return { ok: false, res: unauthorizedKey('the presented key has expired') }
     }
     return { ok: true, key }

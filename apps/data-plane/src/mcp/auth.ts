@@ -2,7 +2,7 @@ import { MCP_SCOPE, mcpResource, protectedResourceMetadataUrl } from '@metamodel
 import {
   JWKS_COOLDOWN_MS, KeySetUnavailableError, TokenError, type AccessTokenVerifier,
 } from '@metamodels/schema/access-token'
-import type { ConfigStore } from '../config/config-store.js'
+import { keyExpired, type ConfigStore } from '../config/config-store.js'
 import type { ResolvedKey } from '../config/types.js'
 
 export interface McpAuthDeps {
@@ -94,7 +94,7 @@ export async function authenticateMcp(
   const key = await store.resolveKeyById(claims.mm_kid)
   if (!key) return refuse('the token names no active oauth key')
   // Not redundant with the store's own filter (ruling F9): a cached key can outlive its expires_at by the cache TTL.
-  if (key.expiresAt && key.expiresAt.getTime() < Date.now()) return refuse('the oauth key has expired')
+  if (keyExpired(key.expiresAt)) return refuse('the oauth key has expired')
   if (!key.paddockSlugs.includes(slug)) return refuse('the oauth key is not scoped to this paddock')
   if (claims.client_id !== key.oauthClientId) return refuse('the token client is not the client the key was approved for')
   return { ok: true, key }
