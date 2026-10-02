@@ -18,7 +18,7 @@
 - **No migration.** Stored constraint stays `allowedModels: string[]`; the data-plane guard in `packages/connectors/src/ollama/breed.ts` is not touched.
 - The capability that gates reading the model list is `'read'` (from `Capability = 'read' | 'resource.write' | 'user.manage' | 'license.manage'`).
 - Saving a fence parses `fd.get('models')` as a comma-separated string → `allowedModels` (empty ⇒ `null` ⇒ "any model"). The new control must keep populating that exact hidden `models` field.
-- Stack under test on this machine: control-plane host port **3200** (`CONTROL_PLANE_PORT=3200` in `.env`), data-plane **8787**. Real Ollama at `http://192.168.1.140:11434`, model `qwen2.5-coder:0.5b`.
+- Stack under test on this machine: control-plane host port **3200** (`CONTROL_PLANE_PORT=3200` in `.env`), data-plane **8787**. Real Ollama at `http://<ollama-host>:11434`, model `qwen2.5-coder:0.5b`.
 
 ---
 
@@ -541,7 +541,7 @@ with selecting the model's live checkbox (the list is fetched from the real floc
 
 ```bash
 cd /home/carmelo/Projects/metamodels/apps/e2e
-E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://192.168.1.140:11434 OLLAMA_TEST_MODEL=qwen2.5-coder:0.5b pnpm exec playwright test
+E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://<ollama-host>:11434 OLLAMA_TEST_MODEL=qwen2.5-coder:0.5b pnpm exec playwright test
 ```
 
 Expected: **8/8 pass** — step 4 now proves the picker works end to end, and step 6 still proves the fence (built via the picker) is enforced (allowed 200, disallowed 403, `/api/pull` 403, no-key 401, burst 429).
@@ -552,7 +552,7 @@ Expected: **8/8 pass** — step 4 now proves the picker works end to end, and st
 cd /home/carmelo/Projects/metamodels
 docker compose exec -T postgres psql -U metamodels -d metamodels -c "DELETE FROM api_key WHERE name LIKE 'e2e-key-%';"
 cd apps/e2e && rm -f ../../docs/screenshots/*.png
-E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://192.168.1.140:11434 pnpm exec playwright test
+E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://<ollama-host>:11434 pnpm exec playwright test
 ```
 
 Confirm `docs/screenshots/04-fence-policy.png` now shows the checkbox picker, and the key is still masked in `05-*`.
@@ -987,7 +987,7 @@ git commit -m "docs(deploy): Portainer + GHCR release runbook"
 - [ ] `pnpm -w exec tsc -b` → clean
 - [ ] `pnpm test` → root lane green (196+ pass; new connector + helper + server tests added)
 - [ ] `pnpm --filter @metamodels/control-plane exec vitest run --testTimeout=30000` → control-plane lane green
-- [ ] e2e: `cd apps/e2e && E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://192.168.1.140:11434 pnpm exec playwright test` → 8/8
+- [ ] e2e: `cd apps/e2e && E2E_BASE_URL=http://localhost:3200 OLLAMA_TEST_URL=http://<ollama-host>:11434 pnpm exec playwright test` → 8/8
 - [ ] `docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/zizmorcore/zizmor:latest --pedantic .github/workflows/` → clean
 - [ ] `TAG=local docker compose --env-file .env -f docker-compose.deploy.yml config -q` → parses
 
